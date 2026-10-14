@@ -36,3 +36,25 @@ TEST_CASE("be<float>/be<double>/be<uint16_t> round-trip", "[unit]") {
   static_assert(sizeof(be<uint32_t>) == 4);
   static_assert(sizeof(be<double>) == 8);
 }
+
+#include "runtime/guest_memory.h"
+
+using lr::runtime::GuestMemory;
+
+TEST_CASE("GuestMemory reserves 4 GiB and translates guest addresses", "[unit]") {
+  auto r = GuestMemory::reserve(0x1'0000'0000ull);
+  REQUIRE(r.ok());
+  GuestMemory mem = std::move(r.value());
+  CHECK(mem.size() == 0x1'0000'0000ull);
+  REQUIRE(mem.base() != nullptr);
+  *mem.translate<uint32_t>(0x82000000) = 7;
+  CHECK(*mem.translate<uint32_t>(0x82000000) == 7);
+  CHECK(mem.translate<uint8_t>(0x82000000) == mem.base() + 0x82000000);
+  GuestMemory moved = std::move(mem);
+  CHECK(mem.base() == nullptr);  // NOLINT: moved-from is defined as empty
+  CHECK(*moved.translate<uint32_t>(0x82000000) == 7);
+}
+
+TEST_CASE("GuestMemory::reserve rejects zero size", "[unit]") {
+  CHECK_FALSE(GuestMemory::reserve(0).ok());
+}
