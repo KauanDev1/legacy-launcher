@@ -2,6 +2,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <deque>
 #include <filesystem>
 #include <memory>
@@ -104,7 +105,7 @@ class App {
   std::thread browse_thread_;
   std::mutex browse_mutex_;
   std::optional<std::string> browse_result_;
-  bool browse_running_ = false;
+  std::atomic<bool> browse_running_{false};  // cleared by the dialog thread, read by the UI thread
 };
 
 }  // namespace lr::gui
