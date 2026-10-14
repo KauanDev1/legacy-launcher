@@ -1,0 +1,9 @@
+[submodule "thirdparty/Catch2"]
+	path = thirdparty/Catch2
+	url = https://github.com/catchorg/Catch2
+[submodule "thirdparty/imgui"]
+	path = thirdparty/imgui
+	url = https://github.com/ocornut/imgui
+[submodule "thirdparty/XenonRecomp"]
+	path = thirdparty/XenonRecomp
+	url = https://github.com/hedge-dev/XenonRecomp
