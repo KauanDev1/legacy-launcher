@@ -96,10 +96,16 @@ class ExtractStage : public Stage {
     std::error_code ec;
     if (ctx.options.iso.empty()) {
       // `legacyrecomp build` without --iso: an already extracted game stays valid as is.
+      // Only when every output is still on disk; otherwise fail here, before the runner touches state.toml
+      // (mark_started would erase the stored fingerprint).
       if (ctx.state) {
-        if (auto stored = ctx.state->complete_fingerprint(StageId::Extract)) return *stored;
+        if (auto stored = ctx.state->complete_fingerprint(StageId::Extract)) {
+          bool present = true;
+          for (const auto& out : outputs(ctx)) present = present && fs::exists(out, ec);
+          if (present) return *stored;
+        }
       }
-      return Error{ErrorCode::NotFound, "no game extracted yet and no --iso given",
+      return Error{ErrorCode::NotFound, "no usable extracted game and no --iso given",
                    "run `legacyrecomp install --iso <file>` first"};
     }
     auto size = fs::file_size(ctx.options.iso, ec);

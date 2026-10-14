@@ -5,6 +5,7 @@
 #include <fstream>
 
 #include "common/sha256.h"
+#include "pipeline/runner.h"
 #include "pipeline/state.h"
 #include "pipeline/stages/extract_stage.h"
 #include "pipeline/stages/verify_stage.h"
@@ -29,9 +30,10 @@ std::string slurp(const fs::path& p) {
 
 struct Sink : ProgressSink {
   std::vector<float> fractions;
+  std::vector<std::string> messages;
   int cancel_after_calls = -1;
   int calls = 0;
-  void on_progress(const Progress& p) override { fractions.push_back(p.fraction); }
+  void on_progress(const Progress& p) override { fractions.push_back(p.fraction); messages.push_back(p.message); }
   void on_log(std::string_view) override {}
   bool cancelled() const override { return cancel_after_calls >= 0 && ++const_cast<Sink*>(this)->calls > cancel_after_calls; }
 };
@@ -265,8 +267,57 @@ TEST_CASE("extract without an iso reuses the stored fingerprint when complete", 
   CHECK_FALSE(stage->fingerprint(c));  // started but not complete
 
   state.value().mark_complete(StageId::Extract, "fp-123");
+  CHECK_FALSE(stage->fingerprint(c));  // complete, but outputs are gone
+  for (auto& o : stage->outputs(c)) {
+    fs::create_directories(o.parent_path());
+    std::ofstream(o) << "x";
+  }
   auto fp = stage->fingerprint(c);
   REQUIRE(fp);
   CHECK(fp.value() == "fp-123");
   CHECK(state.value().is_complete(StageId::Extract, fp.value()));
+}
+
+TEST_CASE("runner: no-iso extract is cached when state is complete and outputs exist", "[unit]") {
+  Fixture f;
+  f.opts.iso.clear();
+  auto c = f.ctx();
+  auto stage = make_extract_stage();
+  for (auto& o : stage->outputs(c)) {
+    fs::create_directories(o.parent_path());
+    std::ofstream(o) << "x";
+  }
+  auto state = StateStore::load(c.paths.state_file);
+  REQUIRE(state);
+  state.value().mark_complete(StageId::Extract, "fp-9");
+  c.state = &state.value();
+  Stage* ptrs[] = {stage.get()};
+  REQUIRE(run_stages(ptrs, c, state.value()));
+  REQUIRE(f.sink.messages.size() == 1);
+  CHECK(f.sink.messages[0] == "cached");
+}
+
+TEST_CASE("runner: no-iso extract with a missing output fails and keeps the stored fingerprint", "[unit]") {
+  Fixture f;
+  f.opts.iso.clear();
+  auto c = f.ctx();
+  auto stage = make_extract_stage();
+  for (auto& o : stage->outputs(c)) {
+    fs::create_directories(o.parent_path());
+    std::ofstream(o) << "x";
+  }
+  fs::create_directories(c.paths.state_file.parent_path());
+  auto state = StateStore::load(c.paths.state_file);
+  REQUIRE(state);
+  state.value().mark_complete(StageId::Extract, "fp-9");
+  REQUIRE(state.value().save());
+  fs::remove(c.paths.input / "package.xex");
+  c.state = &state.value();
+  Stage* ptrs[] = {stage.get()};
+  auto r = run_stages(ptrs, c, state.value());
+  REQUIRE_FALSE(r);
+  CHECK(r.error().code == ErrorCode::NotFound);
+  auto reloaded = StateStore::load(c.paths.state_file);
+  REQUIRE(reloaded);
+  CHECK(reloaded.value().is_complete(StageId::Extract, "fp-9"));
 }
