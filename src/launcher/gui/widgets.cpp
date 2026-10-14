@@ -4,9 +4,11 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <vector>
 
+#include "imgui_internal.h"
 #include "launcher/gui/theme.h"
 
 namespace lr::gui::widgets {
@@ -94,6 +96,15 @@ void stage_glyph(ImDrawList* dl, ImVec2 c, float r, StageState state) {
   }
 }
 
+// Thin rounded progress bar (track + accent fill).
+void draw_progress_bar(ImDrawList* dl, ImVec2 pos, ImVec2 size, float fraction) {
+  const float r = size.y * 0.5f;
+  dl->AddRectFilled(pos, pos + size, rgb(theme::kRaised), r);
+  const float f = std::clamp(fraction, 0.0f, 1.0f);
+  if (f > 0.0f)
+    dl->AddRectFilled(pos, ImVec2(pos.x + std::max(size.y, size.x * f), pos.y + size.y), rgb(theme::kAccent), r);
+}
+
 // Erases the last UTF-8 code point of `s` (before position `end`), returning the new end.
 size_t prev_char(std::string_view s, size_t end) {
   if (end == 0) return 0;
@@ -177,9 +188,9 @@ bool button(const char* label, ImVec2 size, ButtonKind kind, bool enabled, Butto
 
   ImU32 bg = 0, border = 0, fg = rgb(theme::kText);
   if (!enabled) {
-    bg = rgb(theme::kRaised, 140);
-    border = rgb(theme::kBorder);
-    fg = rgb(theme::kMuted, 170);
+    bg = kind == ButtonKind::Ghost ? 0 : rgb(theme::kRaised, 140);
+    border = kind == ButtonKind::Ghost ? 0 : rgb(theme::kBorder);
+    fg = rgb(theme::kMuted, kind == ButtonKind::Ghost ? 110 : 170);
   } else if (kind == ButtonKind::Primary) {
     bg = rgb(held ? theme::kAccentPressed : hovered ? theme::kAccentHover : theme::kAccent);
     fg = rgb(theme::kOnAccent);
@@ -224,8 +235,8 @@ void tooltip_for_last_item(const char* text_) {
   ImGui::PopStyleVar();
 }
 
-void begin_card(const char* id, ImVec2 size, bool auto_height) {
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(px(20), px(18)));
+void begin_card(const char* id, ImVec2 size, bool auto_height, ImVec2 padding) {
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(px(padding.x), px(padding.y)));
   ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, px(12));
   ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
   ImGui::PushStyleColor(ImGuiCol_ChildBg, rgb(theme::kSurface));
@@ -280,6 +291,79 @@ void status_pill(StatusPill pill, ImVec2 top_left) {
             label);
 }
 
+void logo_mark(ImVec2 p, float size) {
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  const ImVec2 end(p.x + size, p.y + size);
+  const int vtx0 = dl->VtxBuffer.Size;
+  dl->AddRectFilled(p, end, rgb(theme::kAccent), size * 0.26f);
+  ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, vtx0, dl->VtxBuffer.Size, p, end, rgb(theme::kAccent),
+                                                rgb(theme::kAccentPressed));
+  iso_block(dl, ImVec2(p.x + size * 0.5f, p.y + size * 0.53f), size, rgb(0xFFFFFF, 235), rgb(theme::kOnAccent, 215),
+            rgb(theme::kOnAccent, 150));
+}
+
+void iso_block(ImDrawList* dl, ImVec2 c, float size, ImU32 top_col, ImU32 left_col, ImU32 right_col) {
+  const float w = size * 0.27f, h = size * 0.155f, d = size * 0.30f;
+  const ImVec2 top(c.x, c.y - h * 2.0f), l(c.x - w, c.y - h), r(c.x + w, c.y - h), mid(c.x, c.y);
+  const ImVec2 lb(l.x, l.y + d), rb(r.x, r.y + d), mb(mid.x, mid.y + d);
+  const ImVec2 top_face[4] = {top, r, mid, l}, left_face[4] = {l, mid, mb, lb}, right_face[4] = {mid, r, rb, mb};
+  dl->AddConvexPolyFilled(top_face, 4, top_col);
+  dl->AddConvexPolyFilled(left_face, 4, left_col);
+  dl->AddConvexPolyFilled(right_face, 4, right_col);
+}
+
+bool drop_zone(const char* id, ImVec2 size, std::string_view primary, std::string_view secondary, bool has_file,
+               bool clickable, ImU32 secondary_color) {
+  const auto& f = theme::fonts();
+  const ImVec2 pos = ImGui::GetCursorScreenPos();
+  ImGui::BeginDisabled(!clickable);
+  const bool clicked = ImGui::InvisibleButton(id, size);
+  ImGui::EndDisabled();
+  const bool hovered = clickable && ImGui::IsItemHovered();
+  if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  const ImVec2 end = pos + size;
+  const float rounding = px(10);
+  dl->AddRectFilled(pos, end, hovered ? rgb(theme::kAccent, 12) : rgb(theme::kBackground, 110), rounding);
+  dashed_rect(dl, ImVec2(pos.x + 0.5f, pos.y + 0.5f), ImVec2(end.x - 0.5f, end.y - 0.5f),
+              hovered ? rgb(theme::kAccent, 170) : has_file ? rgb(theme::kAccent, 90) : rgb(0x3A404D), rounding,
+              px(1.25f), px(6), px(4));
+
+  ImFont* pf = has_file ? f.heading : f.strong;
+  const float inner_w = size.x - px(24) * 2.0f;
+  const std::string p1 = fit_text(pf, primary, inner_w, !has_file ? false : true);
+  const std::string p2 = fit_text(f.small, secondary, inner_w, true);
+  const ImVec2 s1 = measure(pf, p1), s2 = measure(f.small, p2);
+  const float gap = p2.empty() ? 0.0f : px(6);
+  const float block_h = s1.y + (p2.empty() ? 0.0f : gap + s2.y);
+  const float y = pos.y + (size.y - block_h) * 0.5f;
+  draw_text(dl, pf, ImVec2(pos.x + (size.x - s1.x) * 0.5f, y), rgb(has_file ? theme::kText : 0xC4C9D4), p1);
+  if (!p2.empty()) draw_text(dl, f.small, ImVec2(pos.x + (size.x - s2.x) * 0.5f, y + s1.y + gap), secondary_color, p2);
+  return clicked && clickable;
+}
+
+void gradient_rect(ImVec2 a, ImVec2 b, float rounding, uint32_t tint, float strength) {
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  const int vtx0 = dl->VtxBuffer.Size;
+  dl->AddRectFilled(a, b, rgb(theme::kSurface), rounding);
+  ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, vtx0, dl->VtxBuffer.Size, a,
+                                                ImVec2(a.x + (b.x - a.x) * 0.8f, a.y + (b.y - a.y) * 0.8f),
+                                                mix(theme::kSurface, tint, strength), rgb(theme::kSurface));
+}
+
+void chevron(ImDrawList* dl, ImVec2 c, float size, bool open, ImU32 col) {
+  const float h = size * 0.5f;
+  if (open) {
+    const ImVec2 pts[3] = {ImVec2(c.x - h, c.y - h * 0.5f), ImVec2(c.x, c.y + h * 0.5f),
+                           ImVec2(c.x + h, c.y - h * 0.5f)};
+    dl->AddPolyline(pts, 3, col, ImDrawFlags_None, px(1.75f));
+  } else {
+    const ImVec2 pts[3] = {ImVec2(c.x - h * 0.5f, c.y - h), ImVec2(c.x + h * 0.5f, c.y),
+                           ImVec2(c.x - h * 0.5f, c.y + h)};
+    dl->AddPolyline(pts, 3, col, ImDrawFlags_None, px(1.75f));
+  }
+}
+
 void dashed_rect(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, float rounding, float thickness, float dash,
                  float gap) {
   dl->PathRect(a, b, rounding);
@@ -308,16 +392,6 @@ void dashed_rect(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, float rounding, 
       }
     }
   }
-}
-
-void progress_bar(float fraction, ImVec2 size) {
-  const ImVec2 pos = ImGui::GetCursorScreenPos();
-  ImDrawList* dl = ImGui::GetWindowDrawList();
-  const float r = size.y * 0.5f;
-  dl->AddRectFilled(pos, pos + size, rgb(theme::kRaised), r);
-  const float f = std::clamp(fraction, 0.0f, 1.0f);
-  if (f > 0.0f) dl->AddRectFilled(pos, ImVec2(pos.x + std::max(size.y, size.x * f), pos.y + size.y), rgb(theme::kAccent), r);
-  ImGui::Dummy(size);
 }
 
 void Stepper::row(const StepView& s) {
@@ -368,13 +442,8 @@ void Stepper::row(const StepView& s) {
 
   if (s.state == StageState::Running) {
     y += px(10);
-    const ImVec2 bar_pos(text_x, y);
     const float bar_h = px(6);
-    dl->AddRectFilled(bar_pos, ImVec2(bar_pos.x + text_w, y + bar_h), rgb(theme::kRaised), bar_h * 0.5f);
-    const float frac = std::clamp(s.fraction, 0.0f, 1.0f);
-    if (frac > 0.0f)
-      dl->AddRectFilled(bar_pos, ImVec2(bar_pos.x + std::max(bar_h, text_w * frac), y + bar_h), rgb(theme::kAccent),
-                        bar_h * 0.5f);
+    draw_progress_bar(dl, ImVec2(text_x, y), ImVec2(text_w, bar_h), s.fraction);
     y += bar_h + px(8);
     if (!s.message.empty()) {
       draw_text(dl, f.small, ImVec2(text_x, y), rgb(0xB4BAC8), fit_text(f.small, s.message, text_w, false));
@@ -383,7 +452,7 @@ void Stepper::row(const StepView& s) {
   }
 
   ImGui::SetCursorScreenPos(start);
-  ImGui::Dummy(ImVec2(width, std::max(y, center.y + r) - start.y + px(8)));
+  ImGui::Dummy(ImVec2(width, std::max(y, center.y + r) - start.y + px(12)));
   has_prev_ = true;
   prev_center_ = center;
   prev_state_ = s.state;
@@ -401,7 +470,7 @@ void error_alert(const char* id, const char* title, const std::string& message, 
                     ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding);
   ImGui::PopStyleColor(2);
   text(f.strong, rgb(theme::kError), title);
-  text_wrapped(f.body, rgb(theme::kText), message);
+  text_wrapped(f.small, rgb(theme::kText), message);
   if (!hint.empty()) text_wrapped(f.small, rgb(theme::kMuted), "Dica: " + hint);
   ImGui::EndChild();
   ImGui::PopStyleVar(4);

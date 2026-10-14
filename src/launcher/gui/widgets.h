@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -23,16 +24,34 @@ bool button(const char* label, ImVec2 size, ButtonKind kind, bool enabled = true
 // Tooltip on the last item, also when it is disabled.
 void tooltip_for_last_item(const char* text);
 
-// A rounded surface card (child window) of `size` (scaled px; 0 = fill / auto per ImGui::BeginChild).
-// `auto_height` fits the height to the contents. Always pair with end_card().
-void begin_card(const char* id, ImVec2 size, bool auto_height = false);
+// A rounded surface card (child window) of `size` (already scaled; 0 = fill, per ImGui::BeginChild) with inner
+// `padding` (unscaled). `auto_height` fits the height to the contents. Always pair with end_card().
+void begin_card(const char* id, ImVec2 size, bool auto_height = false, ImVec2 padding = ImVec2(20, 18));
 void end_card();
 // Card heading; `right_note` (muted, optional) is right-aligned on the same line.
 void card_title(const char* title, const char* right_note = nullptr);
 
-// The header status pill (dot + label), right-aligned at `right_x` on the current line.
+// The header status pill (dot + label) drawn at `top_left` (no ImGui item; the caller reserves the space).
 ImVec2 status_pill_size(StatusPill pill);
 void status_pill(StatusPill pill, ImVec2 top_left);
+
+// The app mark: a rounded green tile with an isometric block, `size` (scaled px) square at `top_left`.
+void logo_mark(ImVec2 top_left, float size);
+// Isometric block (the mark's glyph) of nominal `size` centred near `c`, one colour per visible face.
+void iso_block(ImDrawList* dl, ImVec2 c, float size, ImU32 top_col, ImU32 left_col, ImU32 right_col);
+
+// Drop-zone field of `size` (scaled) at the cursor: dashed rounded outline, `primary` text (large) and `secondary`
+// (muted, may be empty) centred. `secondary_color` colours the secondary line. Returns true when clicked
+// (only when `clickable`).
+bool drop_zone(const char* id, ImVec2 size, std::string_view primary, std::string_view secondary, bool has_file,
+               bool clickable, ImU32 secondary_color);
+
+// Rounded rect fading from `tint` (mixed into the surface colour by `strength`) at the top-left corner to the plain
+// surface colour at the bottom-right.
+void gradient_rect(ImVec2 a, ImVec2 b, float rounding, uint32_t tint, float strength);
+
+// Disclosure chevron (right when closed, down when open) centred at `c`.
+void chevron(ImDrawList* dl, ImVec2 c, float size, bool open, ImU32 col);
 
 // Dashed rounded rectangle outline.
 void dashed_rect(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, float rounding, float thickness, float dash, float gap);
@@ -56,9 +75,6 @@ class Stepper {
   ImVec2 prev_center_{};
   StageState prev_state_ = StageState::Pending;
 };
-
-// A thin rounded progress bar of `size` (scaled px) at the cursor.
-void progress_bar(float fraction, ImVec2 size);
 
 // Inline alert card: red border and tint, bold `title`, wrapped `message`, muted "Dica: " `hint` (optional).
 void error_alert(const char* id, const char* title, const std::string& message, const std::string& hint);
