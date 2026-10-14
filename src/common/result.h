@@ -56,6 +56,6 @@ class [[nodiscard]] Result<void> {
   if (!tmp) return ::lr::Error(tmp.error());                 \
   auto var = std::move(tmp.value())
 
-// Declares `var` holding the value of expr, or returns the Error on failure.
+// (Uses __LINE__: __COUNTER__ trips -Wpedantic.) Declares `var` holding the value of expr, or returns the Error on failure.
 #define LR_TRY_ASSIGN(var, expr) \
-  LR_DETAIL_TRY_ASSIGN(LR_DETAIL_CAT(lr_try_assign_, __COUNTER__), var, expr)
+  LR_DETAIL_TRY_ASSIGN(LR_DETAIL_CAT(lr_try_assign_, __LINE__), var, expr)
