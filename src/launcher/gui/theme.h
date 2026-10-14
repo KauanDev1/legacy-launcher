@@ -39,6 +39,7 @@ inline ImVec4 vec(uint32_t hex, float alpha = 1.0f) {
 struct Fonts {
   ImFont* body = nullptr;      // Inter Regular 16
   ImFont* small = nullptr;     // Inter Regular 13.5 (metadata, descriptions)
+  ImFont* label = nullptr;     // Inter SemiBold 13.5 (pill, stage state, section labels)
   ImFont* strong = nullptr;    // Inter SemiBold 16 (labels, buttons)
   ImFont* heading = nullptr;   // Inter SemiBold 18 (card titles, file name, CTA)
   ImFont* title = nullptr;     // Inter Bold 28 (app name)

@@ -139,6 +139,7 @@ void setup(const std::filesystem::path& fonts_dir, float ui_scale, float framebu
   } else {
     g_fonts.body = load(fonts_dir / "Inter-Regular.ttf", 16.0f * s, fb);
     g_fonts.small = load(fonts_dir / "Inter-Regular.ttf", 13.5f * s, fb);
+    g_fonts.label = load(fonts_dir / "Inter-SemiBold.ttf", 13.5f * s, fb);
     g_fonts.strong = load(fonts_dir / "Inter-SemiBold.ttf", 16.0f * s, fb);
     g_fonts.heading = load(fonts_dir / "Inter-SemiBold.ttf", 18.0f * s, fb);
     g_fonts.title = load(fonts_dir / "Inter-Bold.ttf", 28.0f * s, fb);
@@ -150,7 +151,7 @@ void setup(const std::filesystem::path& fonts_dir, float ui_scale, float framebu
     cfg.SizePixels = 13.0f * s * fb;
     fallback = io.Fonts->AddFontDefault(&cfg);
   }
-  for (ImFont** f : {&g_fonts.body, &g_fonts.small, &g_fonts.strong, &g_fonts.heading, &g_fonts.title, &g_fonts.mono})
+  for (ImFont** f : {&g_fonts.body, &g_fonts.small, &g_fonts.label, &g_fonts.strong, &g_fonts.heading, &g_fonts.title, &g_fonts.mono})
     if (!*f) *f = fallback;
   io.FontDefault = g_fonts.body;
   io.FontGlobalScale = 1.0f / fb;

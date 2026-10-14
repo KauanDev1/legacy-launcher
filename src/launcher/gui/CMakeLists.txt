@@ -6,7 +6,7 @@ target_link_libraries(lr_gui_core PUBLIC lr_common lr_pipeline)
 lr_configure_target(lr_gui_core)
 
 if(TARGET imgui)
-  add_executable(legacyrecomp-gui main.cpp app.cpp theme.cpp)
+  add_executable(legacyrecomp-gui main.cpp app.cpp theme.cpp widgets.cpp)
   target_link_libraries(legacyrecomp-gui PRIVATE lr_gui_core lr_common lr_pipeline imgui SDL2::SDL2)
   lr_configure_target(legacyrecomp-gui)
 endif()
