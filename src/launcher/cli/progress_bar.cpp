@@ -67,9 +67,12 @@ void ProgressBar::on_progress(const pipeline::Progress& p) {
   }
   const int pct = static_cast<int>(std::clamp(p.fraction, 0.0f, 1.0f) * 100.0f);
   const int step = pct / 10;
-  if (stage == last_stage_ && step == last_step_) return;
+  // The terminal "done"/"cached" line is always shown once, even when the 100% step was already printed.
+  const bool final_msg = (p.message == "done" || p.message == "cached") && last_msg_ != p.message;
+  if (stage == last_stage_ && step == last_step_ && !final_msg) return;
   last_stage_ = stage;
   last_step_ = step;
+  last_msg_ = p.message;
   out_ << "[" << pipeline::stage_name(p.stage) << "] " << pct << "% " << p.message << "\n";
   out_.flush();
 }

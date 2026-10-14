@@ -36,6 +36,7 @@ class ProgressBar : public pipeline::ProgressSink {
   bool line_open_ = false;  // tty: a progress line is on screen without a trailing newline
   int last_stage_ = -1;
   int last_step_ = -1;
+  std::string last_msg_;
   pipeline::Progress last_{pipeline::StageId::Doctor, 0.0f, ""};
   bool have_last_ = false;
 };

@@ -50,3 +50,12 @@ TEST_CASE("cancelled() reflects the SIGINT flag", "[unit]") {
   CHECK(bar.cancelled());
   ProgressBar::reset_cancel();
 }
+
+TEST_CASE("non-tty bar always shows the final done line", "[unit]") {
+  std::ostringstream os;
+  ProgressBar bar(os, false);
+  bar.on_progress({StageId::Extract, 0.0f, "start"});
+  bar.on_progress({StageId::Extract, 1.0f, "package: a"});
+  bar.on_progress({StageId::Extract, 1.0f, "done"});
+  CHECK(os.str().find("[extract] 100% done") != std::string::npos);
+}
