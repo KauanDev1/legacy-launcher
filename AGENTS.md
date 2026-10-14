@@ -1,0 +1,48 @@
+# AGENTS.md
+
+LegacyRecomp statically recompiles Minecraft: Xbox 360 Edition to a native Linux executable (C++20, CMake, Clang) using hedge-dev's XenonRecomp. The user supplies their own legally obtained game ISO; no game data is ever distributed.
+
+## Build and test
+
+```
+sudo pacman -S --needed clang lld llvm cmake ninja sdl2   # toolchain
+cmake --preset dev                                        # configure (Debug, ASan+UBSan)
+cmake --build --preset dev
+ctest --preset dev -L unit                                # fast tests, no game data needed
+LEGACYRECOMP_ISO=/path/to/game.iso ctest --preset dev -L integration
+```
+
+Binaries land in `build/dev/bin`. Only Clang is supported (CMake refuses other compilers). Our targets get strict flags through `lr_configure_target()` in `cmake/LrWarnings.cmake`; never apply it to submodules.
+
+Include root is `src/`: write `#include "common/result.h"`.
+
+## Module map (dependency direction: top depends on bottom)
+
+```
+launcher (cli, gui)
+   |-> pipeline  (stages: doctor, extract, verify, patch, analyse, recompile, build)
+   |-> runtime   (guest memory, loader, kernel/ imports, threads)
+pipeline -> formats (xdvdfs, stfs, xex2) -> common
+runtime  -> common
+common: Result/Error, log, sha256, paths, fs_util
+thirdparty: XenonRecomp (and its bundled tomlplusplus/fmt/xxHash), Catch2, imgui
+```
+
+Namespaces: `lr`, `lr::formats`, `lr::pipeline`, `lr::runtime`, `lr::kernel`.
+
+## Inviolable rules
+
+- Public APIs return `lr::Result<T>`; no exceptions cross module boundaries (sole exception: `lr::kernel::UnimplementedImport`, thrown and caught inside the runtime).
+- Never commit `*.iso`, `*.xex`, `*.xexp`, `private/`, `work/`, generated `ppc_*` files. Before every commit: `git status --short` must show none of them.
+- Every commit passes `ctest --preset dev -L unit`. Conventional Commits, one commit per task step marked "Commit", ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- External tools are launched with `posix_spawn` and an argv vector, never through a shell.
+
+Also: GPL-3.0; every new source file starts with `// SPDX-License-Identifier: GPL-3.0-or-later`; code, identifiers and commit messages in English, `docs/` prose in Portuguese.
+
+## Docs
+
+Live in `docs/` (design specs and plans under `docs/superpowers/`, ADRs in `docs/adr/`, format notes in `docs/formats/`). Docs change in the same commit as the code they describe.
+
+## Reverse-engineering workflow
+
+See `.claude/skills/xbox360-re/`.
