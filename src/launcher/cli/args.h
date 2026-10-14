@@ -28,4 +28,9 @@ Result<CliArgs> parse_args(std::span<const std::string_view> args);
 
 std::string_view usage_text();
 
+// Data root precedence: --root, then $LEGACYRECOMP_ROOT (empty counts as unset), then the XDG default.
+// Pure: callers pass getenv() results.
+std::filesystem::path resolve_root(const std::optional<std::filesystem::path>& flag, const char* env_root,
+                                   const char* xdg_data_home, const char* home);
+
 }  // namespace lr::cli

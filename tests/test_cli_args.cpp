@@ -71,3 +71,11 @@ TEST_CASE("doctor and inspect parse; unknown command, flags and bad jobs fail", 
   CHECK_FALSE(parse({"install", "--iso"}));
   CHECK_FALSE(parse({}));
 }
+
+TEST_CASE("data root precedence is flag, env, XDG default", "[unit]") {
+  using std::filesystem::path;
+  CHECK(resolve_root(path("/flag"), "/env", "/xdg", "/home/u") == path("/flag"));
+  CHECK(resolve_root(std::nullopt, "/env", "/xdg", "/home/u") == path("/env"));
+  CHECK(resolve_root(std::nullopt, "", "/xdg", "/home/u") == path("/xdg/legacyrecomp"));
+  CHECK(resolve_root(std::nullopt, nullptr, nullptr, "/home/u") == path("/home/u/.local/share/legacyrecomp"));
+}
