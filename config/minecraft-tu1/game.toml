@@ -10,4 +10,4 @@ tu_xexp = "default.xexp"
 [hashes]  # sha256, hex minúsculo
 package_xex = "6d79bb823091890dabbe586e15c0744f707565c980ad998eaf43c808731308d1"
 tu_xexp = "51dc6789fb23a3d5643db2cfdb506f5038f84b15d44e2f9d2ee8f07d3944d20e"
-patched_image = ""  # preenchido na Task 10
+patched_image = "74db32039c999941f6351d5d91ccb51b32d7c5c204134402713fc16ec7f30844"  # XexPatcher(package_xex, tu_xexp): XEX2 sem criptografia nem compressão

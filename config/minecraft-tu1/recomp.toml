@@ -1,7 +1,32 @@
-# Configuração do XenonRecomp para Minecraft: Xbox 360 Edition + TU1.
-# Os endereços das funções auxiliares ainda não foram levantados (ver docs/reverse-engineering/).
-# Os caminhos de [main] são reescritos pela etapa recompile (render_recomp_config).
+# Configuração do XenonRecomp para Minecraft: Xbox 360 Edition + TU1 (imagem work/image/default_tu1.xex,
+# sha256 em game.toml [hashes] patched_image). Chaves conforme thirdparty/XenonRecomp/README.md.
+# Cada endereço tem evidência em docs/reverse-engineering/addresses.md.
+# Os caminhos de [main] são reescritos pela etapa recompile (render_recomp_config) com caminhos absolutos
+# do diretório de dados; patch_file_path/patched_file_path não são usados (a etapa patch aplica o TU1).
 [main]
 file_path = "default_tu1.xex"
 out_directory_path = "generated"
 switch_table_file_path = "switch_tables.toml"
+
+# Funções auxiliares de salvar/restaurar registradores (tools/find_helpers.py, sequência completa).
+savegprlr_14_address = 0x828AEB00
+restgprlr_14_address = 0x828AEB50
+savefpr_14_address = 0x828AF240
+restfpr_14_address = 0x828AF28C
+savevmx_14_address = 0x828AF350
+savevmx_64_address = 0x828AF3E4
+restvmx_14_address = 0x828AF5E8
+restvmx_64_address = 0x828AF67C
+
+# CRT: longjmp chama RtlUnwind; setjmp vem logo depois.
+longjmp_address = 0x828B70F0
+setjmp_address = 0x828B7410
+
+# Palavras que a análise de lacunas do XenonRecomp deve pular (não são código).
+# Funções com ExceptionFlag no .pdata são precedidas por 8 bytes: endereço do handler + dado do handler.
+invalid_instructions = [
+    { data = 0x00000000, size = 4 }, # preenchimento entre funções
+    { data = 0x828B0CD0, size = 8 }, # handler C++ (__CxxFrameHandler) + dado, antes de 4021 funções
+    { data = 0x82B62F1C, size = 8 }, # thunk __imp____C_specific_handler + dado, antes de 91 funções
+    { data = 0x828C5170, size = 8 }, # handler próprio de 0x828C514C
+]

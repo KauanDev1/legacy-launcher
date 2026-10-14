@@ -17,7 +17,7 @@ TEST_CASE("load_game_config reads the repo config", "[unit]") {
   CHECK(cfg.value().package_xex == "default.xex");
   CHECK(cfg.value().tu_xexp == "default.xexp");
   CHECK(cfg.value().hash_package_xex.size() == 64);
-  CHECK(cfg.value().hash_patched_image.empty());
+  CHECK(cfg.value().hash_patched_image.size() == 64);
   CHECK(cfg.value().recomp_toml == dir / "recomp.toml");
 }
 
