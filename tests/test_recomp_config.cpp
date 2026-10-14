@@ -140,3 +140,26 @@ TEST_CASE("parse_function_overrides reads the analyse stage output", "[unit]") {
   CHECK_FALSE(parse_function_overrides("functions = [ { address = 1 } ]"));
   CHECK_FALSE(parse_function_overrides("functions = [ 3"));
 }
+
+TEST_CASE("classify_recomp_line flags every ERROR line", "[unit]") {
+  CHECK(classify_recomp_line("Recompiling functions... 42%") == RecompLine::Progress);
+  CHECK(classify_recomp_line("ERROR: __restgprlr_14 address is unspecified") == RecompLine::Error);
+  CHECK(classify_recomp_line("ERROR: Switch case at 8235C19C is trying to jump outside function: 8235C218") ==
+        RecompLine::Error);
+  CHECK(classify_recomp_line("ERROR: Unable to apply the patch file, patch failed") == RecompLine::Error);
+  CHECK(classify_recomp_line("Unrecognized instruction at 0x82200000: bdzf") == RecompLine::Other);
+  CHECK(classify_recomp_line("  ERROR: indented is not XenonRecomp's format") == RecompLine::Other);
+  CHECK(classify_recomp_line("") == RecompLine::Other);
+}
+
+TEST_CASE("recomp_errors reports the count and quotes the first lines", "[unit]") {
+  const std::vector<std::string> first = {"ERROR: a", "ERROR: b"};
+  auto e = recomp_errors(7, first, "/data/work/logs/recompile.log");
+  CHECK(e.code == ErrorCode::ToolFailed);
+  CHECK(e.message == "XenonRecomp reported 7 errors: ERROR: a");
+  CHECK(e.hint.find("ERROR: b") != std::string::npos);
+  CHECK(e.hint.find("5 more") != std::string::npos);
+  CHECK(e.hint.find("/data/work/logs/recompile.log") != std::string::npos);
+  CHECK(recomp_errors(1, std::span<const std::string>(first.data(), 1), "/l").message ==
+        "XenonRecomp reported 1 error: ERROR: a");
+}

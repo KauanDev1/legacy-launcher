@@ -39,20 +39,33 @@ Result<toml::table> parse_toml(const std::string& text, const char* what) {
 
 }  // namespace
 
-Result<std::vector<FunctionRange>> parse_function_overrides(const std::string& toml_text) {
-  LR_TRY_ASSIGN(tbl, parse_toml(toml_text, "functions.toml"));
+namespace {
+
+Result<std::vector<FunctionRange>> read_functions(const toml::array* arr) {
   std::vector<FunctionRange> out;
-  if (const auto* arr = tbl["functions"].as_array()) {
+  if (arr) {
     for (const auto& e : *arr) {
       const auto* t = e.as_table();
       auto a = t ? (*t)["address"].value<int64_t>() : std::nullopt;
       auto n = t ? (*t)["size"].value<int64_t>() : std::nullopt;
       if (!a || !n || *a <= 0 || *a > 0xFFFFFFFFll || *n <= 0 || *n > 0xFFFFFFFFll)
-        return Error{ErrorCode::InvalidFormat, "functions.toml: entries need integer address and size", ""};
+        return Error{ErrorCode::InvalidFormat, "functions: entries need integer address and size", ""};
       out.push_back({static_cast<uint32_t>(*a), static_cast<uint32_t>(*n), false});
     }
   }
   return out;
+}
+
+}  // namespace
+
+Result<std::vector<FunctionRange>> parse_function_overrides(const std::string& toml_text) {
+  LR_TRY_ASSIGN(tbl, parse_toml(toml_text, "functions.toml"));
+  return read_functions(tbl["functions"].as_array());
+}
+
+Result<std::vector<FunctionRange>> manual_functions(const std::string& recomp_toml_text) {
+  LR_TRY_ASSIGN(tbl, parse_toml(recomp_toml_text, "recomp.toml"));
+  return read_functions(tbl["main"]["functions"].as_array());
 }
 
 Result<std::string> render_recomp_config(const std::string& template_toml, const fs::path& image,
@@ -117,7 +130,25 @@ std::optional<float> parse_recomp_progress(std::string_view line) {
   return static_cast<float>(v / 100.0);
 }
 
+RecompLine classify_recomp_line(std::string_view line) {
+  if (parse_recomp_progress(line)) return RecompLine::Progress;
+  if (line.starts_with("ERROR:")) return RecompLine::Error;
+  return RecompLine::Other;
+}
+
+Error recomp_errors(size_t count, std::span<const std::string> first, const fs::path& log) {
+  std::string msg = "XenonRecomp reported " + std::to_string(count) + " error" + (count == 1 ? "" : "s");
+  if (!first.empty()) msg += ": " + first.front();
+  std::string hint = "fix config/minecraft-tu1/recomp.toml (see docs/reverse-engineering/addresses.md);";
+  for (const auto& l : first) hint += "\n  " + l;
+  if (count > first.size()) hint += "\n  ... (" + std::to_string(count - first.size()) + " more)";
+  hint += "\nfull output: " + log.string();
+  return Error{ErrorCode::ToolFailed, std::move(msg), std::move(hint)};
+}
+
 namespace {
+
+constexpr size_t kQuotedErrors = 5;
 
 Result<std::string> read_text(const fs::path& p) {
   std::ifstream f(p, std::ios::binary);
@@ -164,9 +195,10 @@ class RecompileStage : public Stage {
     fs::create_directories(generated, ec);
     if (ec) return Error{ErrorCode::IoError, "cannot create " + generated.string() + ": " + ec.message(), ""};
 
-    // XenonRecomp keeps going after some config errors (e.g. a missing helper address) and still
-    // exits 0, so its "ERROR:" lines are collected and turned into a failure here.
+    // XenonRecomp keeps going after errors (missing helper address, switch case outside its
+    // function, ...) and still exits 0, so every "ERROR:" line is counted and fails the stage.
     std::vector<std::string> errors;
+    size_t error_count = 0;
     ToolInvocation inv;
     inv.program = ctx.resources / "tools" / "XenonRecomp";
     inv.args = {"recomp.toml", (ctx.resources / "tools" / "ppc_context.h").string()};
@@ -174,18 +206,21 @@ class RecompileStage : public Stage {
     inv.log_file = ctx.paths.logs / "recompile.log";
     inv.cancelled = [&] { return ctx.sink.cancelled(); };
     inv.on_line = [&](std::string_view line) {
-      if (auto f = parse_recomp_progress(line)) {
-        ctx.sink.on_progress({StageId::Recompile, *f, std::string(line)});
-      } else if (line.starts_with("ERROR:") && line.find("address is unspecified") != std::string_view::npos) {
-        errors.emplace_back(line);
+      switch (classify_recomp_line(line)) {
+        case RecompLine::Progress:
+          ctx.sink.on_progress({StageId::Recompile, parse_recomp_progress(line).value_or(0.0f), std::string(line)});
+          break;
+        case RecompLine::Error:
+          if (errors.size() < kQuotedErrors) errors.emplace_back(line);
+          ++error_count;
+          break;
+        case RecompLine::Other:
+          break;
       }
     };
     fs::remove(inv.log_file, ec);  // one run per log
     LR_TRY(run_tool(inv));
-    if (!errors.empty())
-      return Error{ErrorCode::ToolFailed, "XenonRecomp: " + errors.front(),
-                   "fix config/minecraft-tu1/recomp.toml; see docs/reverse-engineering/addresses.md and " +
-                       inv.log_file.string()};
+    if (error_count > 0) return recomp_errors(error_count, errors, inv.log_file);
     for (const auto& out : outputs(ctx))
       if (!fs::exists(out, ec))
         return Error{ErrorCode::ToolFailed, "XenonRecomp did not produce " + out.string(),

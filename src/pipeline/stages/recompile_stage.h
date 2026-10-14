@@ -26,7 +26,18 @@ Result<std::string> render_recomp_config(const std::string& template_toml, const
 // Reads `functions = [{ address, size }, ...]` (the analyse stage's functions.toml).
 Result<std::vector<FunctionRange>> parse_function_overrides(const std::string& toml_text);
 
+// Reads the hand-written `[main] functions` of a recomp.toml.
+Result<std::vector<FunctionRange>> manual_functions(const std::string& recomp_toml_text);
+
 // Parses XenonRecomp's "Recompiling functions... 12.5%" line into [0,1]; nullopt otherwise.
 std::optional<float> parse_recomp_progress(std::string_view line);
+
+// XenonRecomp output line kinds. Every "ERROR:" line is fatal for the stage: XenonRecomp exits 0
+// even when it emitted wrong code (e.g. a switch case jumping outside its function becomes `return;`).
+enum class RecompLine { Progress, Error, Other };
+RecompLine classify_recomp_line(std::string_view line);
+
+// Stage error for `count` ERROR lines; `first` holds the first few, quoted in message and hint.
+Error recomp_errors(size_t count, std::span<const std::string> first, const fs::path& log);
 
 }  // namespace lr::pipeline
