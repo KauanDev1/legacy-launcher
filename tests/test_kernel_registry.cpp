@@ -8,13 +8,12 @@
 
 using namespace lr::kernel;
 
-namespace {
-// The single real implementation in the test target: proves LR_KERNEL_EXPORT defines the symbol and registers it.
+// The single real implementation in the test target (global scope, as the macro requires): proves
+// LR_KERNEL_EXPORT defines the strong symbol and registers the name.
 LR_KERNEL_EXPORT(LrTestExported) {
   (void)base;
   ctx.r3.u32 = 42;
 }
-}  // namespace
 
 TEST_CASE("unimplemented_import throws with the call trail", "[unit]") {
   trace("X");
