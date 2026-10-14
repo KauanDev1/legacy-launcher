@@ -199,3 +199,46 @@ TEST_CASE("verify with no configured hash is an internal error", "[unit]") {
   REQUIRE_FALSE(r);
   CHECK(r.error().code == ErrorCode::Internal);
 }
+
+TEST_CASE("verify fingerprint depends on expected hashes", "[unit]") {
+  VerifyFixture f;
+  auto c = f.ctx();
+  f.game.hash_package_xex = "aa";
+  f.game.hash_tu_xexp = "bb";
+  auto stage = make_verify_stage();
+  auto a = stage->fingerprint(c).value();
+  f.game.hash_tu_xexp = "cc";
+  CHECK(stage->fingerprint(c).value() != a);
+}
+
+TEST_CASE("extract clears stale game/ contents", "[unit]") {
+  Fixture f;
+  testing::StfsBuilder pkg, tu;
+  pkg.add_file("default.xex", bytes("A"));
+  tu.add_file("default.xexp", bytes("B"));
+  f.write_iso(pkg.build(), tu.build());
+  auto c = f.ctx();
+  fs::create_directories(c.paths.game / "old");
+  std::ofstream(c.paths.game / "stale.txt") << "x";
+  std::ofstream(c.paths.game / "old" / "s2") << "x";
+  REQUIRE(make_extract_stage()->execute(c));
+  CHECK_FALSE(fs::exists(c.paths.game / "stale.txt"));
+  CHECK_FALSE(fs::exists(c.paths.game / "old"));
+  CHECK(fs::exists(c.paths.game / ".extracted"));
+}
+
+TEST_CASE("extract validates all paths before writing anything", "[unit]") {
+  Fixture f;
+  testing::StfsBuilder pkg, tu;
+  pkg.add_file("default.xex", bytes("A"));
+  pkg.add_file("good.txt", bytes("g"));
+  pkg.add_file("..", bytes("evil"));
+  tu.add_file("default.xexp", bytes("B"));
+  f.write_iso(pkg.build(), tu.build());
+  auto c = f.ctx();
+  auto r = make_extract_stage()->execute(c);
+  REQUIRE_FALSE(r);
+  CHECK(r.error().code == ErrorCode::InvalidFormat);
+  CHECK_FALSE(fs::exists(c.paths.game / "good.txt"));
+  CHECK_FALSE(fs::exists(c.paths.input / "package.xex"));
+}

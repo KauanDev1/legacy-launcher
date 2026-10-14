@@ -3,6 +3,7 @@
 
 #include <unistd.h>
 
+#include <charconv>
 #include <regex>
 #include <system_error>
 
@@ -27,9 +28,12 @@ bool parse_version(const std::string& text, int& major, int& minor) {
   static const std::regex re(R"((\d+)\.(\d+)(?:\.(\d+))?)");
   std::smatch m;
   if (!std::regex_search(text, m, re)) return false;
-  major = std::stoi(m[1]);
-  minor = std::stoi(m[2]);
-  return true;
+  auto to_int = [](const std::ssub_match& sm, int& out) {
+    const std::string str = sm.str();
+    auto res = std::from_chars(str.data(), str.data() + str.size(), out);
+    return res.ec == std::errc() && res.ptr == str.data() + str.size();
+  };
+  return to_int(m[1], major) && to_int(m[2], minor);
 }
 
 Result<void> check_tool(DoctorProbe& probe, std::string_view name, int want_major, int want_minor) {
@@ -85,8 +89,9 @@ Result<DoctorReport> run_doctor(DoctorProbe& probe, const fs::path& root) {
   LR_TRY(check_tool(probe, "ninja", 0, 0));
   if (!probe.pkg_config_exists("sdl2")) return missing("SDL2 development files (pkg-config sdl2)");
 
-  fs::path probe_path = fs::absolute(root);
   std::error_code ec;
+  fs::path probe_path = fs::absolute(root, ec);
+  if (ec) return Error{ErrorCode::IoError, "cannot resolve " + root.string() + ": " + ec.message(), ""};
   while (!probe_path.empty() && !fs::exists(probe_path, ec) && probe_path != probe_path.parent_path())
     probe_path = probe_path.parent_path();
   LR_TRY_ASSIGN(free, probe.free_bytes(probe_path));

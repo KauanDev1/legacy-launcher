@@ -95,3 +95,15 @@ TEST_CASE("doctor warns on low RAM", "[unit]") {
   REQUIRE(r);
   CHECK(r.value().warnings.size() == 1);
 }
+
+TEST_CASE("doctor survives absurd or foreign version strings", "[unit]") {
+  FakeProbe p;
+  p.tools["clang++"] = "clang version 99999999999999999999.1";
+  auto r = run_doctor(p, "/tmp");
+  REQUIRE_FALSE(r);
+  CHECK(r.error().code == ErrorCode::ToolMissing);
+  p.tools["clang++"] = "Apple clang version 15.0.0";
+  r = run_doctor(p, "/tmp");
+  REQUIRE_FALSE(r);
+  CHECK(r.error().code == ErrorCode::ToolMissing);
+}

@@ -12,7 +12,7 @@ class VerifyStage : public Stage {
   Result<std::string> fingerprint(StageContext& ctx) override {
     LR_TRY_ASSIGN(a, sha256_file(ctx.paths.input / "package.xex"));
     LR_TRY_ASSIGN(b, sha256_file(ctx.paths.input / "tu.xexp"));
-    return a + b;
+    return a + b + "|" + ctx.game.hash_package_xex + "|" + ctx.game.hash_tu_xexp;
   }
   std::vector<fs::path> outputs(StageContext&) const override { return {}; }
   Result<void> execute(StageContext& ctx) override {

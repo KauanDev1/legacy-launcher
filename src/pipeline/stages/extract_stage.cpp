@@ -98,7 +98,9 @@ class ExtractStage : public Stage {
     auto mtime = fs::last_write_time(ctx.options.iso, ec);
     if (ec) return Error{ErrorCode::IoError, "cannot stat " + ctx.options.iso.string() + ": " + ec.message(), ""};
     LR_TRY_ASSIGN(cfg, sha256_file(ctx.game.recomp_toml.parent_path() / "game.toml"));
-    return fs::absolute(ctx.options.iso).string() + "|" + std::to_string(size) + "|" +
+    auto abs_iso = fs::absolute(ctx.options.iso, ec);
+    if (ec) return Error{ErrorCode::IoError, "cannot resolve " + ctx.options.iso.string() + ": " + ec.message(), ""};
+    return abs_iso.string() + "|" + std::to_string(size) + "|" +
            std::to_string(mtime.time_since_epoch().count()) + "|" + cfg;
   }
 
@@ -108,7 +110,7 @@ class ExtractStage : public Stage {
 
   Result<void> execute(StageContext& ctx) override {
     std::error_code ec;
-    fs::remove(ctx.paths.game / ".extracted", ec);
+    // Re-extraction owns game/: clear it so versions never mix. Done after validation below.
 
     // Lifetime chain: FileReader -> XdvdfsImage -> package reader -> StfsPackage (each borrows the previous).
     LR_TRY_ASSIGN(iso, formats::FileReader::open(ctx.options.iso));
@@ -117,6 +119,14 @@ class ExtractStage : public Stage {
     LR_TRY_ASSIGN(pkg, formats::StfsPackage::open(*pkg_reader));
     LR_TRY_ASSIGN(tu_reader, image.open_file(ctx.game.title_update));
     LR_TRY_ASSIGN(tu, formats::StfsPackage::open(*tu_reader));
+
+    for (auto* p : {&pkg, &tu})
+      for (auto& e : p->entries()) LR_TRY(check_entry_path(e.path));
+
+    fs::remove_all(ctx.paths.game, ec);
+    if (ec) return Error{ErrorCode::IoError, "cannot clear " + ctx.paths.game.string() + ": " + ec.message(), ""};
+    fs::create_directories(ctx.paths.game, ec);
+    if (ec) return Error{ErrorCode::IoError, "cannot create " + ctx.paths.game.string() + ": " + ec.message(), ""};
 
     Totals t;
     t.total = sum_files(pkg) + sum_files(tu);
