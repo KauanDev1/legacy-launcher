@@ -55,3 +55,9 @@ Consequência importante: mesmo um arquivo "consecutivo" cruza blocos de hash a 
 
 - Arquivos não consecutivos (e tabelas de arquivos não consecutivas) não são suportados: `open_file` devolve `InvalidFormat` com "non-consecutive STFS files are not supported yet". A tabela de arquivos é lida como blocos consecutivos a partir do primeiro bloco. Se os pacotes reais precisarem disso, será preciso seguir a cadeia das tabelas de hash (tarefa de acompanhamento).
 - Os hashes não são verificados.
+
+## Achados nos pacotes reais (Task 6)
+
+- Pacote do jogo (`000D0000`, `PIRS`, somente leitura, title id `0x584111F7`): 525 entradas, todas consecutivas, nomes e hierarquia coerentes. O `default.xex` (20 619 264 bytes) extraído com `open_file` começa com `XEX2` e tem tamanho igual ao da entrada. O arquivo mais distante termina no bloco 28 788, antes do limite de nível 1 (28 900 = 0xAA²), então nenhum arquivo cruza a tabela de hash de nível 1. Já o `default.xex` (blocos 852 a ~5 886) cruza várias tabelas de nível 0 e foi lido corretamente.
+- Title Update (`000B0000`, `PIRS`, somente leitura): 48 entradas, `default.xexp` com 4 962 304 bytes, tamanho conferido.
+- A suposição de tabela de arquivos consecutiva e de entrada de nome vazio como fim da tabela funcionou nos dois pacotes. Diretórios aparecem com `start_block=0`.

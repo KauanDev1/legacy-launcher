@@ -1,0 +1,13 @@
+# Fontes e hashes do Minecraft: Xbox 360 Edition (TU1). Apenas nomes e hashes; nenhum dado do jogo.
+title_id = 0x584111F7
+
+[sources]
+package = "Content/0000000000000000/584111F7/000D0000/49AAD81B9FCDA45E4A03D71BFCB353F8FADB236C58"
+title_update = "$TitleUpdate/584111F7/tu00000001_00000000"
+package_xex = "default.xex"
+tu_xexp = "default.xexp"
+
+[hashes]  # sha256, hex minúsculo
+package_xex = "6d79bb823091890dabbe586e15c0744f707565c980ad998eaf43c808731308d1"
+tu_xexp = "51dc6789fb23a3d5643db2cfdb506f5038f84b15d44e2f9d2ee8f07d3944d20e"
+patched_image = ""  # preenchido na Task 10

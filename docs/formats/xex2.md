@@ -26,3 +26,9 @@ tipo, disco, total de discos).
 Regras: chaves desconhecidas são ignoradas; em chaves duplicadas, a última vence. Todo offset é
 verificado contra o tamanho do buffer recebido (erro `OutOfRange`); magic incorreto dá
 `InvalidFormat`. `format_version` usa: major = bits 31-28, minor = 27-24, build = 23-8, qfe = 7-0.
+
+## Achados nos XEX reais (Task 6)
+
+- `default.xexp` (patch do TU1): `module_flags=0x50`, sem ponto de entrada, base de imagem, informações de execução nem bibliotecas importadas nos cabeçalhos opcionais lidos (é um patch delta; esses campos vêm do XEX base). `pe_data_offset=0x5000`.
+- `default.xex` do pacote: `module_flags=0x1`, `pe_data_offset=0x6000`.
+- `default.xex` do disco: `module_flags=0x1`, `pe_data_offset=0x2000`.
