@@ -108,3 +108,35 @@ TEST_CASE("xex_patcher_result_name names every XexPatcher result", "[unit]") {
   CHECK(xex_patcher_result_name(8) == "PatchUnsupported");
   CHECK(xex_patcher_result_name(99) == "Unknown");
 }
+
+TEST_CASE("render_recomp_config appends analysed function boundaries", "[unit]") {
+  const std::vector<FunctionRange> extra = {
+      {0x824E7F00, 0x40, false},  // overlaps the hand-written 0x824E7EF0+0x98 entry: skipped
+      {0x82500000, 0x120, false},
+  };
+  auto r = render_recomp_config(kSample, "/i.xex", "/s.toml", "/o", extra);
+  REQUIRE(r);
+  auto t = parse(r.value());
+  const auto* fns = t["main"]["functions"].as_array();
+  REQUIRE(fns);
+  REQUIRE(fns->size() == 2);
+  CHECK((*fns)[0].as_table()->at("address").value<int64_t>() == 0x824E7EF0);
+  CHECK((*fns)[1].as_table()->at("address").value<int64_t>() == 0x82500000);
+  CHECK((*fns)[1].as_table()->at("size").value<int64_t>() == 0x120);
+  CHECK(r.value().find("address = 0x82500000") != std::string::npos);
+
+  auto none = render_recomp_config("[main]\n", "/i.xex", "/s.toml", "/o", extra);
+  REQUIRE(none);
+  CHECK(parse(none.value())["main"]["functions"].as_array()->size() == 2);
+}
+
+TEST_CASE("parse_function_overrides reads the analyse stage output", "[unit]") {
+  auto ok = parse_function_overrides("functions = [\n  { address = 0x82000010, size = 0x20 },\n]\n");
+  REQUIRE(ok);
+  REQUIRE(ok.value().size() == 1);
+  CHECK(ok.value()[0].start == 0x82000010u);
+  CHECK(ok.value()[0].size == 0x20u);
+  CHECK(parse_function_overrides("").value().empty());
+  CHECK_FALSE(parse_function_overrides("functions = [ { address = 1 } ]"));
+  CHECK_FALSE(parse_function_overrides("functions = [ 3"));
+}
