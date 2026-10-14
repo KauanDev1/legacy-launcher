@@ -35,4 +35,6 @@ execute_process(COMMAND git -C "${_lr_src_root}/thirdparty/XenonRecomp" rev-pars
   RESULT_VARIABLE _lr_git_rc ERROR_QUIET)
 if(NOT _lr_git_rc EQUAL 0 OR LR_XENONRECOMP_COMMIT STREQUAL "")
   set(LR_XENONRECOMP_COMMIT "unknown")
+  message(WARNING "Could not read the XenonRecomp submodule commit (git -C thirdparty/XenonRecomp rev-parse HEAD). "
+                  "The analyse/recompile stage caches will not notice a XenonRecomp update; use --force for those stages.")
 endif()
