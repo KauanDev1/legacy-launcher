@@ -14,6 +14,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(cmake/LrWarnings.cmake)
 include(CTest)
 
+# XenonRecomp's bundled fmt would otherwise add its headers/library to `cmake --install`.
+set(FMT_INSTALL OFF CACHE BOOL "Install fmt (bundled by XenonRecomp)" FORCE)
 add_subdirectory(thirdparty/XenonRecomp)
 add_subdirectory(thirdparty/Catch2)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/Catch2/extras")
