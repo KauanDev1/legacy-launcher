@@ -1,0 +1,31 @@
+# --- Game files: NEVER commit (copyrighted) ---------------------------------
+*.iso
+*.xex
+*.xexp
+*.xcp
+*.xzp
+*.god
+*.stfs
+private/
+
+# --- Anything generated from game files -------------------------------------
+out/
+work/
+generated/
+ppc_recomp.*.cpp
+ppc_func_mapping.cpp
+ppc_config.h
+
+# --- Build artifacts --------------------------------------------------------
+build/
+build-*/
+cmake-build-*/
+CMakeUserPresets.json
+compile_commands.json
+.cache/
+
+# --- Editors / OS -----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
