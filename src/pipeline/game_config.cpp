@@ -3,7 +3,7 @@
 
 #include <toml++/toml.hpp>
 
-namespace lr {
+namespace lr::pipeline {
 
 namespace {
 
@@ -69,4 +69,4 @@ Result<GameConfig> load_game_config(const fs::path& dir) {
   return g;
 }
 
-}  // namespace lr
+}  // namespace lr::pipeline

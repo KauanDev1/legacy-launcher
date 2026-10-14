@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-namespace lr {
+namespace lr::pipeline {
 
 namespace fs = std::filesystem;
 
@@ -36,4 +36,4 @@ struct Options {
   unsigned jobs = 0;  // 0 = hardware concurrency
 };
 
-}  // namespace lr
+}  // namespace lr::pipeline

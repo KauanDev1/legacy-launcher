@@ -8,10 +8,13 @@
 #include "common/result.h"
 #include "pipeline/types.h"
 
-namespace lr {
+namespace lr::pipeline {
 
 class StateStore {
  public:
+  // Lenient by design: within a stage table, a missing or mistyped `complete`/`fingerprint`
+  // means "not complete", which forces a safe re-run. Only unparseable TOML or a non-table
+  // `stages` / `stages.<name>` is an error.
   // Missing file -> empty store. Corrupt file -> InvalidFormat.
   static Result<StateStore> load(const fs::path& path);
 
@@ -29,4 +32,4 @@ class StateStore {
   std::map<std::string, Entry, std::less<>> stages_;
 };
 
-}  // namespace lr
+}  // namespace lr::pipeline

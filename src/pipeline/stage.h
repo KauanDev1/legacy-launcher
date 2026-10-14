@@ -9,7 +9,7 @@
 #include "pipeline/game_config.h"
 #include "pipeline/types.h"
 
-namespace lr {
+namespace lr::pipeline {
 
 struct StageContext {
   const Options& options;
@@ -27,4 +27,4 @@ struct Stage {
   virtual Result<void> execute(StageContext& ctx) = 0;
 };
 
-}  // namespace lr
+}  // namespace lr::pipeline

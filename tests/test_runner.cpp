@@ -3,6 +3,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <array>
 #include <vector>
 
@@ -11,15 +12,18 @@
 #include "pipeline/state.h"
 
 using namespace lr;
+using namespace lr::pipeline;
 namespace fs = std::filesystem;
 
 namespace {
 
 struct RecSink : ProgressSink {
   std::vector<Progress> events;
-  std::set<StageId> cancel_before;
-  StageId current = StageId::Doctor;
-  void on_progress(const Progress& p) override { events.push_back(p); }
+  std::optional<StageId> cancel_after;  // cancelled() turns true once this stage reported "done"
+  void on_progress(const Progress& p) override {
+    events.push_back(p);
+    if (cancel_after && p.stage == *cancel_after && p.message == "done") cancelled_now = true;
+  }
   void on_log(std::string_view) override {}
   bool cancelled() const override { return cancelled_now; }
   bool cancelled_now = false;
@@ -118,27 +122,41 @@ TEST_CASE("force re-executes the stage and later ones", "[unit]") {
 }
 
 TEST_CASE("failed or cancelled stage is not marked complete", "[unit]") {
-  Fixture f;
-  f.s2.fail = true;
-  auto r = f.run();
-  REQUIRE_FALSE(r);
-  CHECK(r.error().code == ErrorCode::ToolFailed);
-  CHECK(r.error().message == "boom");
-  CHECK(f.runs() == std::array<int, 3>{1, 1, 0});
-  f.s2.fail = false;
-  REQUIRE(f.run());
-  CHECK(f.runs() == std::array<int, 3>{1, 2, 1});
-
-  Fixture g;
-  REQUIRE(g.run());
-  g.s2.fp = "z";
-  g.sink.cancelled_now = true;
-  auto c = g.run();
-  REQUIRE_FALSE(c);
-  CHECK(c.error().code == ErrorCode::Cancelled);
-  g.sink.cancelled_now = false;
-  REQUIRE(g.run());
-  CHECK(g.runs() == std::array<int, 3>{1, 2, 2});
+  SECTION("failure after previous completion") {
+    Fixture f;
+    REQUIRE(f.run());
+    f.opts.force = {StageId::Extract};
+    f.s2.fail = true;
+    auto r = f.run();
+    REQUIRE_FALSE(r);
+    CHECK(r.error().code == ErrorCode::ToolFailed);
+    CHECK(r.error().message == "boom");
+    CHECK(f.runs() == std::array<int, 3>{1, 2, 1});
+    auto st = StateStore::load(f.dir / "state.toml");
+    REQUIRE(st);
+    CHECK_FALSE(st.value().is_complete(StageId::Extract, "a"));
+    CHECK(st.value().is_complete(StageId::Doctor, "a"));
+    f.opts.force.clear();
+    f.s2.fail = false;
+    REQUIRE(f.run());
+    CHECK(f.runs() == std::array<int, 3>{1, 3, 2});
+  }
+  SECTION("cancel mid-pipeline") {
+    Fixture f;
+    f.sink.cancel_after = StageId::Doctor;
+    auto r = f.run();
+    REQUIRE_FALSE(r);
+    CHECK(r.error().code == ErrorCode::Cancelled);
+    CHECK(f.runs() == std::array<int, 3>{1, 0, 0});
+    auto st = StateStore::load(f.dir / "state.toml");
+    REQUIRE(st);
+    CHECK(st.value().is_complete(StageId::Doctor, "a"));
+    CHECK_FALSE(st.value().is_complete(StageId::Extract, "a"));
+    f.sink.cancel_after.reset();
+    f.sink.cancelled_now = false;
+    REQUIRE(f.run());
+    CHECK(f.runs() == std::array<int, 3>{1, 1, 1});
+  }
 }
 
 TEST_CASE("state survives reload", "[unit]") {

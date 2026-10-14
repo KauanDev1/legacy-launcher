@@ -7,6 +7,7 @@
 #include "pipeline/game_config.h"
 
 using namespace lr;
+using namespace lr::pipeline;
 
 TEST_CASE("load_game_config reads the repo config", "[unit]") {
   const std::filesystem::path dir = std::filesystem::path(LR_SOURCE_DIR) / "config/minecraft-tu1";

@@ -3,7 +3,7 @@
 
 #include <array>
 
-namespace lr {
+namespace lr::pipeline {
 
 namespace {
 constexpr std::array<std::pair<StageId, std::string_view>, 7> kNames{{
@@ -31,4 +31,4 @@ std::optional<StageId> parse_stage(std::string_view name) {
 
 ProgressSink::~ProgressSink() = default;
 
-}  // namespace lr
+}  // namespace lr::pipeline

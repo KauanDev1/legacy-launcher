@@ -7,7 +7,7 @@
 #include "common/result.h"
 #include "pipeline/types.h"
 
-namespace lr {
+namespace lr::pipeline {
 
 struct GameConfig {
   uint32_t title_id = 0;
@@ -19,4 +19,4 @@ struct GameConfig {
 // Reads <dir>/game.toml. Never throws.
 Result<GameConfig> load_game_config(const fs::path& dir);
 
-}  // namespace lr
+}  // namespace lr::pipeline

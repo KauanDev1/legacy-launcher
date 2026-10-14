@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "pipeline/runner.h"
 
-namespace lr {
+namespace lr::pipeline {
 
 Result<void> run_stages(std::span<Stage* const> stages, StageContext& ctx, StateStore& state) {
   bool dirty = false;  // a previous stage was forced or executed
@@ -38,4 +38,4 @@ Result<void> run_stages(std::span<Stage* const> stages, StageContext& ctx, State
   return {};
 }
 
-}  // namespace lr
+}  // namespace lr::pipeline

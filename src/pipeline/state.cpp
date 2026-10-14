@@ -9,7 +9,7 @@
 
 #include "common/fs_util.h"
 
-namespace lr {
+namespace lr::pipeline {
 
 Result<StateStore> StateStore::load(const fs::path& path) {
   StateStore store;
@@ -36,7 +36,8 @@ Result<StateStore> StateStore::load(const fs::path& path) {
   if (const auto* stages = tbl["stages"].as_table()) {
     for (const auto& [key, node] : *stages) {
       const auto* t = node.as_table();
-      if (!t) return Error{ErrorCode::InvalidFormat, path.string() + ": bad stages entry", ""};
+      if (!t) return Error{ErrorCode::InvalidFormat,
+                     path.string() + ": 'stages." + std::string(key.str()) + "' is not a table", ""};
       Entry e;
       e.complete = (*t)["complete"].value_or(false);
       e.fingerprint = (*t)["fingerprint"].value_or(std::string());
@@ -81,4 +82,4 @@ Result<void> StateStore::save() const {
   return atomic_write(path_, std::as_bytes(std::span(s.data(), s.size())));
 }
 
-}  // namespace lr
+}  // namespace lr::pipeline
