@@ -23,6 +23,12 @@ TEST_CASE("be<float>/be<double>/be<uint16_t> round-trip", "[unit]") {
   be<float> f;
   f = 1.5f;
   CHECK(static_cast<float>(f) == 1.5f);
+  uint8_t fb[4];
+  std::memcpy(fb, &f, 4);
+  CHECK(fb[0] == 0x3F);  // 1.5f == 0x3FC00000
+  CHECK(fb[1] == 0xC0);
+  CHECK(fb[2] == 0x00);
+  CHECK(fb[3] == 0x00);
   be<double> d;
   d = -2.25;
   CHECK(static_cast<double>(d) == -2.25);
@@ -33,6 +39,15 @@ TEST_CASE("be<float>/be<double>/be<uint16_t> round-trip", "[unit]") {
   CHECK(static_cast<uint16_t>(s) == 0xABCD);
   be<int32_t> n(-2);
   CHECK(static_cast<int32_t>(n) == -2);
+  uint8_t nb[4];
+  std::memcpy(nb, &n, 4);
+  CHECK(nb[0] == 0xFF);
+  CHECK(nb[3] == 0xFE);
+  be<uint64_t> q(0x0102030405060708ull);
+  uint8_t qb[8];
+  std::memcpy(qb, &q, 8);
+  for (int k = 0; k < 8; ++k) CHECK(qb[k] == k + 1);
+  CHECK(static_cast<uint64_t>(q) == 0x0102030405060708ull);
   static_assert(sizeof(be<uint32_t>) == 4);
   static_assert(sizeof(be<double>) == 8);
 }
@@ -136,10 +151,49 @@ TEST_CASE("install_function_table writes 8-byte slots per 4-byte instruction", "
   auto r = GuestMemory::reserve(0x1'0000'0000ull);
   REQUIRE(r.ok());
   const uint64_t off = 0x82000000ull + 0x32D0000ull;
-  const FuncMapping maps[] = {{0x82000010, reinterpret_cast<void*>(&dummy_func)}};
-  install_function_table(r.value().base(), off, 0x82000000, maps);
-  CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x20) == reinterpret_cast<void*>(&dummy_func));
-  CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x28) == nullptr);
+  void* f = reinterpret_cast<void*>(&dummy_func);
+  const FuncMapping maps[] = {{0x82000010, f}, {0x82000014, f}};
+  REQUIRE(install_function_table(r.value(), off, 0x82000000, 0x1000, maps).ok());
+  CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x20) == f);
+  CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x28) == f);
+  CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x30) == nullptr);
+}
+
+TEST_CASE("install_function_table rejects bad mappings", "[unit]") {
+  auto r = GuestMemory::reserve(0x1'0000'0000ull);
+  REQUIRE(r.ok());
+  void* f = reinterpret_cast<void*>(&dummy_func);
+  const uint64_t off = 0x852D0000ull;
+  auto try_one = [&](uint32_t g) {
+    const FuncMapping m[] = {{g, f}};
+    return install_function_table(r.value(), off, 0x82200000, 0x1000, m);
+  };
+  auto below = try_one(0x821FFFFC);
+  REQUIRE_FALSE(below.ok());
+  CHECK(below.error().code == lr::ErrorCode::InvalidFormat);
+  CHECK(below.error().message.find("0x821FFFFC") != std::string::npos);
+  CHECK_FALSE(try_one(0x82201000).ok());  // == code_end
+  auto mis = try_one(0x82200002);
+  REQUIRE_FALSE(mis.ok());
+  CHECK(mis.error().message.find("aligned") != std::string::npos);
+  // slot beyond guest memory
+  const FuncMapping m[] = {{0x82200000, f}};
+  CHECK_FALSE(install_function_table(r.value(), 0x1'0000'0000ull - 4, 0x82200000, 0x1000, m).ok());
+}
+
+TEST_CASE("install_function_table with real game constants", "[unit]") {
+  constexpr uint32_t kImageBase = 0x82000000, kImageSize = 0x32D0000, kCodeBase = 0x82200000, kCodeSize = 0x96428C;
+  auto r = GuestMemory::reserve(0x1'0000'0000ull + kCodeSize * 2ull);
+  REQUIRE(r.ok());
+  void* a = reinterpret_cast<void*>(&dummy_func);
+  void* b = reinterpret_cast<char*>(a) + 1;
+  const uint64_t off = uint64_t{kImageBase} + kImageSize;
+  const FuncMapping maps[] = {{kCodeBase, a}, {kCodeBase + kCodeSize - 4, b}};
+  REQUIRE(install_function_table(r.value(), off, kCodeBase, kCodeSize, maps).ok());
+  CHECK(*reinterpret_cast<void**>(r.value().base() + 0x852D0000ull) == a);
+  CHECK(*reinterpret_cast<void**>(r.value().base() + off + (kCodeSize - 4) * 2ull) == b);
+  const FuncMapping past[] = {{kCodeBase + kCodeSize, a}};
+  CHECK_FALSE(install_function_table(r.value(), off, kCodeBase, kCodeSize, past).ok());
 }
 
 #include <pthread.h>
