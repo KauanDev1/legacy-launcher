@@ -4,6 +4,7 @@
 #include <map>
 
 #include "pipeline/doctor.h"
+#include "pipeline/stages/stages.h"
 
 using namespace lr;
 using namespace lr::pipeline;
@@ -106,4 +107,23 @@ TEST_CASE("doctor survives absurd or foreign version strings", "[unit]") {
   r = run_doctor(p, "/tmp");
   REQUIRE_FALSE(r);
   CHECK(r.error().code == ErrorCode::ToolMissing);
+}
+
+TEST_CASE("doctor stage fingerprint is stable so a finished install stays cached", "[unit]") {
+  struct NullSink : ProgressSink {
+    void on_progress(const Progress&) override {}
+    void on_log(std::string_view) override {}
+    bool cancelled() const override { return false; }
+  } sink;
+  FakeProbe p;
+  Options opts;
+  GameConfig game;
+  StageContext ctx{opts, DataPaths::from_root("/nonexistent"), "/nonexistent", game, sink};
+  auto stage = make_doctor_stage(p);
+  auto a = stage->fingerprint(ctx);
+  auto b = stage->fingerprint(ctx);
+  REQUIRE(a);
+  REQUIRE(b);
+  CHECK(a.value() == b.value());
+  CHECK(stage->outputs(ctx).empty());
 }

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "pipeline/stages/doctor_stage.h"
 
-#include <chrono>
+#include <string>
+#include <string_view>
 
 #include "pipeline/doctor.h"
 
@@ -12,11 +13,10 @@ class DoctorStage : public Stage {
  public:
   explicit DoctorStage(DoctorProbe& probe) : probe_(probe) {}
   StageId id() const override { return StageId::Doctor; }
-  // Environment can change between runs: never cached.
-  Result<std::string> fingerprint(StageContext&) override {
-    return std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "/" +
-           std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
-  }
+  // Cached after the first success: a doctor that ran on every install would mark every later stage dirty
+  // (run_stages re-executes everything after an executed stage), so nothing would ever be cached. Later stages
+  // still fail with ToolMissing if the toolchain disappears; `--force doctor` (or `legacyrecomp doctor`) re-checks.
+  Result<std::string> fingerprint(StageContext&) override { return std::string(kFingerprint); }
   std::vector<fs::path> outputs(StageContext&) const override { return {}; }
   Result<void> execute(StageContext& ctx) override {
     LR_TRY_ASSIGN(report, run_doctor(probe_, ctx.paths.root));
@@ -25,6 +25,7 @@ class DoctorStage : public Stage {
   }
 
  private:
+  static constexpr std::string_view kFingerprint = "doctor-1";
   DoctorProbe& probe_;
 };
 
