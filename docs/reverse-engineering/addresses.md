@@ -77,3 +77,49 @@ pelo OOM killer (> 8 GiB, sem saída). Correção: pular essas palavras.
 
 (As outras três funções com `ExceptionFlag` são as próprias auxiliares `restgprlr_14`, `restfpr_14` e
 `restvmx_14`, que não têm handler antes delas.)
+
+## Tabelas de salto (`switch`) e funções folha
+
+O `XenonAnalyse` (padrões fixos `lis, addi, rlwinm, lwzx, mtctr, bctr` etc.) **não encontra nenhuma**
+tabela neste executável: o compilador agenda as instruções em outra ordem (`lis, slwi, addi, lwzx`) e
+insere `nop` entre elas. Sem tabela, o XenonRecomp traduz o `bctr` como chamada indireta, o que falha em
+tempo de execução. Por isso a etapa `analyse` roda também `src/pipeline/switch_scan.cpp`:
+
+- Para cada `bctr`, procura para trás a guarda `cmplwi crN, rI, max` + `bgt crN` (ou `bgtlr`), e avalia o
+  código linear entre ela e o `bctr` para cada índice `0..max` (lê a tabela da imagem). Independe da
+  ordem das instruções e dos `nop`; instruções que não tocam a cadeia (FPU, VMX/VMX128, stores) são
+  ignoradas; cópias do índice com `mr` antes da guarda são seguidas.
+- Sem guarda, aceita um índice limitado por máscara (`clrlwi`/`rlwinm ..., 31`/`andi.`) com `2^k` entradas.
+- Resultado na imagem TU1: **222 tabelas** (7 298 rótulos, até 440 casos), todas com rótulos em código.
+
+Funções folha (sem quadro de pilha) não têm entrada no `.pdata`, e a análise do XenonRecomp para no
+`bctr` — os rótulos dos casos caíam "fora da função" (1 329 erros `Switch case ... jump outside function`
+em 46 tabelas). `fit_switch_functions` deriva a extensão delas: início = alvo de `bl` mais próximo (ou a
+primeira palavra não nula após a função anterior do `.pdata`), fim = primeiro alvo de `bl` após o último
+rótulo, senão a próxima função do `.pdata` (descontando os 8 bytes de handler e o preenchimento). Na TU1:
+**38 funções folha**, gravadas em `work/analysis/functions.toml` e mescladas em `[main] functions` pela
+etapa `recompile` (entradas escritas à mão em `recomp.toml` têm prioridade). Verificado: nenhum alvo de
+`bl` cai estritamente dentro dessas faixas; 31 das 38 começam num alvo de `bl`.
+
+Tabelas cujos rótulos saem da própria função do `.pdata` são descartadas (não "consertadas").
+
+### Pendências para revisão humana (Ghidra + XEXLoaderWV)
+
+Listadas também em `work/logs/analyse.log` a cada execução.
+
+| Endereço do `bctr` | Situação | O que verificar |
+|---|---|---|
+| `0x8243C83C` | descartada: índice limitado por `clrlwi ..., 26` (64 entradas), mas parte dos rótulos cai na função seguinte (`0x8243C9B0`) | o número real de casos (a tabela de bytes em `0x8202F558` provavelmente tem menos de 64 entradas válidas); depois, `[[switch]]` manual |
+| `0x826796FC` | guarda `cmpw` com sinal: muito provavelmente chamada virtual num vetor 2D, não `switch` | confirmar que não é tabela |
+| `0x8235B7AC`, `0x82366274`, `0x82366544`, `0x825495A0`, `0x82549798`, `0x82615C18`, `0x8261F07C`, `0x826282C0`, `0x8265827C`, `0x826582B4`, `0x826A6818`, `0x826A6910`, `0x826F92B4`, `0x82787348`, `0x82787370`, `0x82787398`, `0x8294E434`, `0x82A1A6C4`, `0x82AB1528`, `0x82B1AA00`, `0x82B1CA68` | sem guarda nem máscara, com carga indexada de endereço montado por `lis` | separar `switch` sem limite (ex.: `0x8235B7AC` e `0x82A1A6C4`, tabelas de deslocamentos de código) de chamadas por vetor de ponteiros (ex.: `0x82787348`, `0x82B1AA00`); para os `switch`, achar o número de casos e escrever `[[switch]]` manual |
+
+## Resultado do XenonRecomp
+
+Com esta configuração o XenonRecomp termina com código 0: `PPC_IMAGE_BASE 0x82000000`,
+`PPC_IMAGE_SIZE 0x32D0000`, `PPC_CODE_BASE 0x82200000`, `PPC_CODE_SIZE 0x96428C`; 219 arquivos
+(215 `ppc_recomp.*.cpp`, ~162 MB), 55 343 símbolos (459 importações `__imp__*`), 221 `switch`.
+
+Avisos que restam (não fatais, afetam a fase de runtime): 3 279 "Unrecognized instruction" — instruções
+que o XenonRecomp `ddd128b` ainda não implementa (as mais frequentes: `bdzf` 754, `stfsu` 507, `lfsu` 350,
+`vsel128` 253, `lhzu` 219, `sthu` 211, `eqv` 94, `subfze` 65, `bso` 65, `lfsux` 63) — e 20
+"Unexpected float16_4 pack instruction". As funções afetadas ficam incompletas no C++ gerado.
