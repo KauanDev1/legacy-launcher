@@ -217,3 +217,105 @@ TEST_CASE("fit_switch_functions sizes leaf functions and checks .pdata functions
   CHECK(fit.functions[0] == FunctionRange{kBase + 0x50, 0x70, false});
   CHECK(fit.functions[1] == FunctionRange{kBase + 0xC0, 0x130, false});  // trailing padding trimmed
 }
+
+namespace {
+
+// Leaf-function fixture: .pdata A = [0x000, 0x040), C = [0x200, 0x240); leaf code 0x050..0x1F0 (nops);
+// A calls 0x050. One table in the leaf at 0x050 with labels up to 0x0B0 -> derived range [0x050, 0x1F0).
+struct LeafFixture {
+  FakeImage img;
+  std::vector<FunctionRange> pdata = {{kBase, 0x40, false}, {kBase + 0x200, 0x40, false}};
+  LeafFixture() {
+    for (uint32_t a = kBase + 0x50; a < kBase + 0x1F0; a += 4) img.word(a, kNop);
+    img.word(kBase + 0x10, (18u << 26) | 0x40u | 1u);  // bl -> 0x050
+  }
+  std::vector<SwitchTable> tables() const { return {{kBase + 0x60, 3, 0, {kBase + 0x70, kBase + 0xB0}}}; }
+};
+
+}  // namespace
+
+TEST_CASE("fit_switch_functions keeps a clean leaf range", "[unit]") {
+  LeafFixture f;
+  auto fit = fit_switch_functions(f.img.bytes, kBase, kCode, f.pdata, f.tables());
+  CHECK(fit.functions == std::vector<FunctionRange>{{kBase + 0x50, 0x1A0, false}});
+  CHECK(fit.tables.size() == 1);
+  CHECK(fit.dropped.empty());
+  CHECK(fit.dropped_functions.empty());
+}
+
+TEST_CASE("fit_switch_functions rejects ranges entered from outside", "[unit]") {
+  SECTION("a call target strictly inside") {
+    LeafFixture f;
+    // bl -> 0x090, between the cases (the range is [0x050, 0x1F0) and 0x090 < last label 0x0B0).
+    f.img.word(kBase + 0x18, (18u << 26) | (0x78u & 0x03FFFFFC) | 1u);
+    auto fit = fit_switch_functions(f.img.bytes, kBase, kCode, f.pdata, f.tables());
+    CHECK(fit.functions.empty());
+    CHECK(fit.tables.empty());
+    CHECK(fit.dropped == std::vector<uint32_t>{kBase + 0x60});
+    REQUIRE(fit.dropped_functions.size() == 1);
+    CHECK(fit.dropped_functions[0].start == kBase + 0x50);
+  }
+  SECTION("a plain branch from outside into the middle") {
+    LeafFixture f;
+    f.img.word(kBase + 0x20, (18u << 26) | (0x80u & 0x03FFFFFC));  // b 0x0A0, from inside .pdata A
+    auto fit = fit_switch_functions(f.img.bytes, kBase, kCode, f.pdata, f.tables());
+    CHECK(fit.functions.empty());
+    CHECK(fit.dropped == std::vector<uint32_t>{kBase + 0x60});
+  }
+  SECTION("branches inside the range and tail calls to its start are fine") {
+    LeafFixture f;
+    f.img.word(kBase + 0x80, (18u << 26) | (0x20u & 0x03FFFFFC));       // b 0x0A0 from inside
+    f.img.word(kBase + 0x24, (18u << 26) | (0x2Cu & 0x03FFFFFC));       // b 0x050 (tail call to start)
+    auto fit = fit_switch_functions(f.img.bytes, kBase, kCode, f.pdata, f.tables());
+    CHECK(fit.functions.size() == 1);
+  }
+}
+
+TEST_CASE("fit_switch_functions rejects overlapping ranges", "[unit]") {
+  SECTION("overlap with a hand-written function") {
+    LeafFixture f;
+    const std::vector<FunctionRange> manual = {{kBase + 0x100, 0x20, false}};
+    auto fit = fit_switch_functions(f.img.bytes, kBase, kCode, f.pdata, f.tables(), manual);
+    CHECK(fit.functions.empty());
+    CHECK(fit.dropped == std::vector<uint32_t>{kBase + 0x60});
+  }
+  SECTION("two derived ranges that overlap but differ") {
+    LeafFixture f;
+    // A bl to 0x0C0 ends the second table's range at [0x050, 0x0C0); the first table (labels up to
+    // 0x0D0) gets [0x050, 0x1F0). The first is rejected for the call into its middle, the second
+    // only for overlapping the first.
+    auto t = f.tables();
+    t[0].labels = {kBase + 0x70, kBase + 0xD0};                  // first: range runs to the gap end
+    t.push_back({kBase + 0x64, 4, 0, {kBase + 0x70, kBase + 0xA8}});  // second: ends at bl target 0x0C0
+    f.img.word(kBase + 0x1C, (18u << 26) | (0xA4u & 0x03FFFFFC) | 1u);  // bl -> 0x0C0
+    auto fit = fit_switch_functions(f.img.bytes, kBase, kCode, f.pdata, t);
+    CHECK(fit.functions.empty());
+    CHECK(fit.tables.empty());
+    CHECK(fit.dropped.size() == 2);
+    CHECK(fit.dropped_functions.size() == 2);
+  }
+}
+
+TEST_CASE("scan_switch_tables treats ldu/stdu as writing rA", "[unit]") {
+  FakeImage img;
+  const uint32_t stdu_12 = (62u << 26) | (1u << 21) | (12u << 16) | (0x10u & 0xFFFC) | 1u;  // stdu r1, 0x10(r12)
+  img.code(kBase, {cmplwi(6, 11, 1), bgt(6, 0x40), lis(12, 0x8200), addi(12, 12, 0x800), stdu_12, slwi(0, 11, 2),
+                   lwzx(0, 12, 0), mtctr(0), kBctr});
+  img.word(kBase + 0x800, kBase + 0x30);
+  img.word(kBase + 0x804, kBase + 0x34);
+  auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+  CHECK(scan.tables.empty());  // r12 was updated by stdu: the table address is no longer known
+  CHECK(scan.unresolved == std::vector<uint32_t>{kBase + 0x20});
+
+  FakeImage img2;
+  const uint32_t ldu_12 = (58u << 26) | (5u << 21) | (12u << 16) | (0x10u & 0xFFFC) | 1u;  // ldu r5, 0x10(r12)
+  const uint32_t ld_12 = (58u << 26) | (5u << 21) | (12u << 16) | (0x10u & 0xFFFC);        // ld r5, 0x10(r12)
+  for (uint32_t probe : {ldu_12, ld_12}) {
+    img2.code(kBase, {cmplwi(6, 11, 1), bgt(6, 0x40), lis(12, 0x8200), addi(12, 12, 0x800), probe, slwi(0, 11, 2),
+                      lwzx(0, 12, 0), mtctr(0), kBctr});
+    img2.word(kBase + 0x800, kBase + 0x30);
+    img2.word(kBase + 0x804, kBase + 0x34);
+    auto s2 = scan_switch_tables(img2.bytes, kBase, kCode);
+    CHECK(s2.tables.size() == (probe == ld_12 ? 1u : 0u));
+  }
+}

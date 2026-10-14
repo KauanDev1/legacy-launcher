@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <map>
 #include <optional>
 #include <set>
 
@@ -28,28 +29,30 @@ bool is_branch(uint32_t i) {
   return op(i) == 16 || op(i) == 18 || (op(i) == 19 && (xo(i) == 16 || xo(i) == 528));
 }
 
-constexpr int kNoGpr = -1;
-
-// GPR written by an instruction the evaluator does not model: a register number, kNoGpr (writes no
-// GPR: stores, compares, FPU, VMX, CR logic) or nullopt (unknown instruction: give up).
-std::optional<int> gpr_written(uint32_t i) {
+// GPRs written by an instruction the evaluator does not model, as a bit mask (bit n = rN; 0 = writes
+// no GPR: stores, compares, FPU, VMX, CR logic), or nullopt for an unknown instruction (give up).
+std::optional<uint32_t> gpr_written(uint32_t i) {
   const uint32_t o = op(i);
+  const uint32_t D = 1u << rd(i), A = 1u << ra(i);
   switch (o) {
-    case 4: case 5: case 6: case 10: case 11: case 48: case 49: case 50: case 51: case 52: case 53: case 54: case 55:
-    case 59: case 63: case 36: case 38: case 44: case 47: case 62:
-      // VMX/VMX128 (4-6), cmpli/cmpi, FPU loads/arith, stores (update forms below), stmw
-      if (o == 49 || o == 51 || o == 53 || o == 55) return static_cast<int>(ra(i));  // lfsu/lfdu/stfsu/stfdu
-      return kNoGpr;
-    case 37: case 39: case 45:  // stwu/stbu/sthu
-      return static_cast<int>(ra(i));
-    case 7: case 8: case 12: case 13: case 14: case 15: case 32: case 33: case 34: case 35: case 40: case 41:
-    case 42: case 43: case 58:  // mulli, subfic, addic(.), addi(s), loads (+update writes rA too: give up)
-      if (o == 33 || o == 35 || o == 41 || o == 43) return std::nullopt;
-      return static_cast<int>(rd(i));
+    case 4: case 5: case 6: case 10: case 11: case 48: case 50: case 52: case 54:
+    case 59: case 63: case 36: case 38: case 44: case 47:
+      return 0u;  // VMX/VMX128 (4-6), cmpli/cmpi, lfs/lfd/stfs/stfd, FPU arith, stw/stb/sth, stmw
+    case 49: case 51: case 53: case 55:  // lfsu/lfdu/stfsu/stfdu: update rA
+    case 37: case 39: case 45:           // stwu/stbu/sthu
+      return A;
+    case 33: case 35: case 41: case 43:  // lwzu/lbzu/lhzu/lhau: rD and rA
+      return D | A;
+    case 58:  // DS-form: ld (0) / ldu (1) / lwa (2)
+      return (i & 3) == 1 ? D | A : D;
+    case 62:  // DS-form: std (0) / stdu (1)
+      return (i & 3) == 1 ? A : 0u;
+    case 7: case 8: case 12: case 13: case 14: case 15: case 32: case 34: case 40: case 42:
+      return D;  // mulli, subfic, addic(.), addi(s), lwz/lbz/lhz/lha
     case 20: case 21: case 23: case 24: case 25: case 26: case 27: case 28: case 29: case 30:
-      return static_cast<int>(ra(i));  // rlwimi/rlwinm/rlwnm, ori/oris/xori/xoris/andi./andis., rld*
+      return A;  // rlwimi/rlwinm/rlwnm, ori/oris/xori/xoris/andi./andis., rld*
     case 19:
-      return xo(i) == 16 || xo(i) == 528 ? std::nullopt : std::optional<int>(kNoGpr);  // CR logic, isync
+      return xo(i) == 16 || xo(i) == 528 ? std::nullopt : std::optional<uint32_t>(0u);  // CR logic, isync
     case 31: {
       const uint32_t x = xo(i);
       const uint32_t x9 = x & 0x1FF;  // XO-form arithmetic (OE bit stripped)
@@ -58,20 +61,24 @@ std::optional<int> gpr_written(uint32_t i) {
         case 151: case 215: case 407: case 149: case 663: case 727: case 983:  // stores (x-form)
         case 86: case 54: case 278: case 246: case 1014: case 982: case 598:  // cache ops, sync
         case 231: case 103: case 7: case 39: case 71: case 199: case 391: case 455: case 359:  // VMX x-form
-          return kNoGpr;
+          return 0u;
+        case 183: case 247: case 439: case 181:  // stwux/stbux/sthux/stdux
+          return A;
+        case 55: case 119: case 311: case 53:  // lwzux/lbzux/lhzux/ldux
+          return D | A;
         case 28: case 60: case 124: case 284: case 316: case 412: case 444: case 476:  // logical
         case 24: case 536: case 792: case 824: case 922: case 954: case 986: case 26:  // shifts, ext, cntlzw
         case 27: case 539: case 794: case 58:                                         // 64-bit shifts, cntlzd
-          return static_cast<int>(ra(i));
+          return A;
         case 23: case 87: case 279: case 343: case 21: case 341: case 339: case 19: case 535: case 599:
-          return static_cast<int>(rd(i));  // indexed loads, mfspr, mfcr
+          return D;  // indexed loads, mfspr, mfcr
         default:
           break;
       }
       switch (x9) {
         case 8: case 10: case 40: case 104: case 136: case 138: case 200: case 202: case 232: case 234: case 266:
         case 11: case 75: case 235: case 459: case 491: case 9: case 73: case 233: case 457: case 489:
-          return static_cast<int>(rd(i));  // subf/add/neg/adde/subfe/mul/div families
+          return D;  // subf/add/neg/adde/subfe/mul/div families
         default:
           return std::nullopt;
       }
@@ -136,7 +143,9 @@ std::optional<uint32_t> evaluate(const Memory& mem, std::span<const uint32_t> wi
   auto clobber = [&](uint32_t i) -> bool {
     auto w = gpr_written(i);
     if (!w) return false;
-    return *w == kNoGpr || set(static_cast<uint32_t>(*w), std::nullopt);
+    for (uint32_t n = 0; n < 32; ++n)
+      if ((*w & (1u << n)) && !set(n, std::nullopt)) return false;
+    return true;
   };
 
   for (uint32_t i : window) {
@@ -169,11 +178,6 @@ std::optional<uint32_t> evaluate(const Memory& mem, std::span<const uint32_t> wi
         if (!set(rd(i), load(addr, size))) return std::nullopt;
         break;
       }
-      case 36: case 38: case 44: case 52: case 54: case 62:  // stw/stb/sth/stfs/stfd/std: no register writes
-        break;
-      case 37: case 39: case 45: case 53: case 55:  // update forms write rA
-        if (!set(ra(i), std::nullopt)) return std::nullopt;
-        break;
       case 31:
         switch (xo(i)) {
           case 444:  // or (mr)
@@ -410,22 +414,34 @@ std::vector<FunctionRange> parse_pdata(std::span<const uint8_t> image, uint32_t 
 
 SwitchFit fit_switch_functions(std::span<const uint8_t> image, uint32_t image_base,
                                std::span<const std::pair<uint32_t, uint32_t>> code,
-                               std::span<const FunctionRange> pdata, std::vector<SwitchTable> tables) {
+                               std::span<const FunctionRange> pdata, std::vector<SwitchTable> tables,
+                               std::span<const FunctionRange> manual) {
   const Memory mem(image, image_base);
+  // Every relative b/bl/bc in code: target -> (source, is_call).
+  std::multimap<uint32_t, std::pair<uint32_t, bool>> branches;
   std::set<uint32_t> bl_targets;
   for (auto [start, size] : code) {
     for (uint32_t a = (start + 3) & ~3u; a + 4 <= start + size; a += 4) {
       auto w = mem.read(a, 4);
       if (!w) break;
-      if (op(*w) == 18 && (*w & 3) == 1) {  // bl (relative, link)
-        int32_t li = static_cast<int32_t>(*w & 0x03FFFFFC);
-        if (li & 0x02000000) li -= 0x04000000;
-        bl_targets.insert(a + static_cast<uint32_t>(li));
+      const uint32_t i = *w;
+      if ((op(i) != 18 && op(i) != 16) || (i & 2)) continue;  // only relative b/bc forms
+      int32_t disp;
+      if (op(i) == 18) {
+        disp = static_cast<int32_t>(i & 0x03FFFFFC);
+        if (disp & 0x02000000) disp -= 0x04000000;
+      } else {
+        disp = static_cast<int16_t>(i & 0xFFFC);
       }
+      const uint32_t target = a + static_cast<uint32_t>(disp);
+      const bool call = (i & 1) != 0;
+      branches.emplace(target, std::make_pair(a, call));
+      if (call && op(i) == 18) bl_targets.insert(target);
     }
   }
 
   SwitchFit out;
+  std::vector<std::pair<SwitchTable, FunctionRange>> leaf;  // tables waiting for range validation
   for (auto& t : tables) {
     const uint32_t lo = *std::min_element(t.labels.begin(), t.labels.end());
     const uint32_t hi = *std::max_element(t.labels.begin(), t.labels.end());
@@ -455,10 +471,40 @@ SwitchFit fit_switch_functions(std::span<const uint8_t> image, uint32_t image_ba
       out.dropped.push_back(t.base);
       continue;
     }
-    FunctionRange f{start, end - start, false};
-    if (std::find(out.functions.begin(), out.functions.end(), f) == out.functions.end()) out.functions.push_back(f);
-    out.tables.push_back(std::move(t));
+    leaf.emplace_back(std::move(t), FunctionRange{start, end - start, false});
   }
+
+  // Validate each distinct derived range: it must not overlap another derived range or a
+  // hand-written one, and nothing outside it may call or branch into its middle (that would mean
+  // it swallowed another function or a shared tail).
+  std::vector<FunctionRange> ranges;
+  for (const auto& [t, f] : leaf)
+    if (std::find(ranges.begin(), ranges.end(), f) == ranges.end()) ranges.push_back(f);
+  auto overlaps = [](const FunctionRange& a, const FunctionRange& b) {
+    return uint64_t{a.start} < uint64_t{b.start} + b.size && uint64_t{b.start} < uint64_t{a.start} + a.size;
+  };
+  std::vector<FunctionRange> bad;
+  for (const auto& f : ranges) {
+    bool ok = true;
+    for (const auto& g : ranges) ok = ok && (g == f || !overlaps(f, g));
+    for (const auto& m : manual) ok = ok && !overlaps(f, m);
+    const uint64_t end = uint64_t{f.start} + f.size;
+    for (auto it = branches.upper_bound(f.start); ok && it != branches.end() && it->first < end; ++it) {
+      const auto [src, call] = it->second;
+      ok = !call && src >= f.start && src < end;
+    }
+    if (ok)
+      out.functions.push_back(f);
+    else
+      bad.push_back(f);
+  }
+  for (auto& [t, f] : leaf) {
+    if (std::find(bad.begin(), bad.end(), f) != bad.end())
+      out.dropped.push_back(t.base);
+    else
+      out.tables.push_back(std::move(t));
+  }
+  out.dropped_functions = std::move(bad);
   return out;
 }
 

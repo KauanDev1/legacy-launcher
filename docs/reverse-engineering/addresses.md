@@ -98,10 +98,17 @@ em 46 tabelas). `fit_switch_functions` deriva a extensão delas: início = alvo 
 primeira palavra não nula após a função anterior do `.pdata`), fim = primeiro alvo de `bl` após o último
 rótulo, senão a próxima função do `.pdata` (descontando os 8 bytes de handler e o preenchimento). Na TU1:
 **38 funções folha**, gravadas em `work/analysis/functions.toml` e mescladas em `[main] functions` pela
-etapa `recompile` (entradas escritas à mão em `recomp.toml` têm prioridade). Verificado: nenhum alvo de
-`bl` cai estritamente dentro dessas faixas; 31 das 38 começam num alvo de `bl`.
+etapa `recompile` (entradas escritas à mão em `recomp.toml` têm prioridade); 31 das 38 começam num alvo de
+`bl`.
 
-Tabelas cujos rótulos saem da própria função do `.pdata` são descartadas (não "consertadas").
+Verificações de segurança (`fit_switch_functions`): uma faixa derivada é rejeitada — e suas tabelas
+descartadas — se sobrepõe outra faixa derivada ou uma entrada `functions` escrita à mão, se alguma chamada
+(`bl`/`bcl`) cai estritamente dentro dela, ou se algum desvio vindo de fora dela cai no seu interior (sinal
+de que engoliu outra função ou um final compartilhado). Na TU1: **0 faixas rejeitadas**. Tabelas cujos
+rótulos saem da própria função do `.pdata` também são descartadas (não "consertadas").
+
+Contagem final na TU1: 222 tabelas encontradas, **221 mantidas**, 1 descartada (`0x8243C83C`), 38 funções
+folha, 0 faixas rejeitadas.
 
 ### Pendências para revisão humana (Ghidra + XEXLoaderWV)
 
@@ -115,7 +122,9 @@ Listadas também em `work/logs/analyse.log` a cada execução.
 
 ## Resultado do XenonRecomp
 
-Com esta configuração o XenonRecomp termina com código 0: `PPC_IMAGE_BASE 0x82000000`,
+Com esta configuração o XenonRecomp termina com código 0 e **nenhuma linha `ERROR:`** (a etapa `recompile`
+falha se houver qualquer uma, porque o XenonRecomp sai com 0 mesmo quando gera código errado, p.ex. um caso
+de `switch` fora da função vira `return;`): `PPC_IMAGE_BASE 0x82000000`,
 `PPC_IMAGE_SIZE 0x32D0000`, `PPC_CODE_BASE 0x82200000`, `PPC_CODE_SIZE 0x96428C`; 219 arquivos
 (215 `ppc_recomp.*.cpp`, ~162 MB), 55 343 símbolos (459 importações `__imp__*`), 221 `switch`.
 

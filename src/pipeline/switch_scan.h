@@ -51,7 +51,8 @@ std::vector<FunctionRange> parse_pdata(std::span<const uint8_t> image, uint32_t 
 struct SwitchFit {
   std::vector<SwitchTable> tables;       // tables whose labels stay inside their function
   std::vector<FunctionRange> functions;  // `functions` overrides for leaf functions (no .pdata)
-  std::vector<uint32_t> dropped;         // tables whose labels leave their function
+  std::vector<uint32_t> dropped;         // tables dropped: labels leave their function, or its range was rejected
+  std::vector<FunctionRange> dropped_functions;  // derived ranges rejected by the safety checks
 };
 
 // XenonRecomp only knows function extents from .pdata and from its own analysis, which stops at
@@ -60,9 +61,13 @@ struct SwitchFit {
 // `bl` target (or the first non-padding word after the previous .pdata function), end = the
 // first `bl` target after the last label, else the next .pdata function (minus its handler
 // words and padding). Tables inside a .pdata function must keep all labels inside it.
+// A derived range is rejected (and its tables dropped) if it overlaps another derived range or one
+// of `manual` (hand-written `functions` in recomp.toml), or if any call (`bl`/`bcl`) targets its
+// interior, or any branch from outside it lands in its interior.
 SwitchFit fit_switch_functions(std::span<const uint8_t> image, uint32_t image_base,
                                std::span<const std::pair<uint32_t, uint32_t>> code,
-                               std::span<const FunctionRange> pdata, std::vector<SwitchTable> tables);
+                               std::span<const FunctionRange> pdata, std::vector<SwitchTable> tables,
+                               std::span<const FunctionRange> manual = {});
 
 // Serialises tables in XenonAnalyse's format ([[switch]] base/r/default/labels).
 std::string format_switch_tables(std::span<const SwitchTable> tables);
