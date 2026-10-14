@@ -110,7 +110,7 @@ TEST_CASE("install_fault_handlers reports a guest fault (forked child)", "[unit]
   if (pid == 0) {
     ::dup2(fds[1], 2);
     ::close(fds[0]);
-    install_fault_handlers(r.value());
+    if (!install_fault_handlers(r.value()).ok()) ::_exit(99);
     // Make the page inaccessible, then touch it: SIGSEGV at a known guest address.
     ::mprotect(r.value().base() + 0x82000000ull, 4096, PROT_NONE);
     *r.value().translate<volatile uint32_t>(0x82000010) = 1;
@@ -140,4 +140,53 @@ TEST_CASE("install_function_table writes 8-byte slots per 4-byte instruction", "
   install_function_table(r.value().base(), off, 0x82000000, maps);
   CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x20) == reinterpret_cast<void*>(&dummy_func));
   CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x28) == nullptr);
+}
+
+#include <pthread.h>
+
+namespace {
+volatile int g_limit = 1 << 30;  // opaque to the optimizer; effectively unbounded
+[[gnu::noinline]] int recurse(volatile char* p, int depth) {
+  volatile char pad[512];
+  pad[0] = static_cast<char>(depth);
+  if (p != nullptr) pad[1] = p[0];
+  if (depth >= g_limit) return 0;
+  return recurse(pad, depth + 1) + pad[0];
+}
+void* overflow_thread(void*) {
+  if (!install_thread_altstack().ok() || !install_thread_altstack().ok()) ::_exit(99);  // idempotent
+  recurse(nullptr, 0);
+  return nullptr;
+}
+}  // namespace
+
+TEST_CASE("fault in a second thread with its own altstack is reported (forked child)", "[unit]") {
+  auto r = GuestMemory::reserve(0x1'0000'0000ull);
+  REQUIRE(r.ok());
+  int fds[2];
+  REQUIRE(::pipe(fds) == 0);
+  pid_t pid = ::fork();
+  REQUIRE(pid >= 0);
+  if (pid == 0) {
+    ::dup2(fds[1], 2);
+    ::close(fds[0]);
+    if (!install_fault_handlers(r.value()).ok()) ::_exit(99);
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 256 * 1024);
+    pthread_t t;
+    if (pthread_create(&t, &attr, overflow_thread, nullptr) != 0) ::_exit(98);
+    pthread_join(t, nullptr);
+    ::_exit(0);
+  }
+  ::close(fds[1]);
+  char buf[256] = {};
+  ssize_t n = ::read(fds[0], buf, sizeof buf - 1);
+  ::close(fds[0]);
+  int status = 0;
+  REQUIRE(::waitpid(pid, &status, 0) == pid);
+  REQUIRE(WIFEXITED(status));
+  CHECK(WEXITSTATUS(status) == 4);
+  REQUIRE(n > 0);
+  CHECK(std::string(buf).find("SIGSEGV at host 0x") == 0);
 }

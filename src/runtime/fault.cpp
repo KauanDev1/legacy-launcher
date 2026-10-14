@@ -4,7 +4,10 @@
 #include <signal.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <cstdlib>
+#include <cstring>
+#include <string>
 
 namespace lr::runtime {
 
@@ -106,26 +109,56 @@ std::string describe_fault(int signo, const uint8_t* base, uint64_t size, const 
   return std::string(buf, n);
 }
 
-void install_fault_handlers(const GuestMemory& mem) {
-  g_installed = {mem.base(), mem.size()};
+namespace {
 
-  static char* alt_stack = nullptr;  // intentionally leaked: lives for the process
-  if (alt_stack == nullptr) {
-    const size_t sz = 64 * 1024;
-    alt_stack = static_cast<char*>(std::malloc(sz));
-    if (alt_stack != nullptr) {
-      stack_t ss{};
-      ss.ss_sp = alt_stack;
-      ss.ss_size = sz;
-      ::sigaltstack(&ss, nullptr);
-    }
+Error io_error(const char* what) {
+  return Error{ErrorCode::IoError, std::string(what) + ": " + std::strerror(errno), ""};
+}
+
+constexpr size_t kAltStackSize = 64 * 1024;
+
+// Owns the calling thread's alt stack; unregisters and frees it at thread exit.
+struct ThreadAltStack {
+  char* mem = nullptr;
+  ~ThreadAltStack() {
+    if (mem == nullptr) return;
+    stack_t ss{};
+    ss.ss_flags = SS_DISABLE;
+    ::sigaltstack(&ss, nullptr);
+    std::free(mem);
   }
+};
+thread_local ThreadAltStack t_altstack;
 
+}  // namespace
+
+Result<void> install_thread_altstack() {
+  if (t_altstack.mem != nullptr) return {};
+  char* mem = static_cast<char*>(std::malloc(kAltStackSize));
+  if (mem == nullptr) return Error{ErrorCode::InsufficientResources, "cannot allocate alternate signal stack", ""};
+  stack_t ss{};
+  ss.ss_sp = mem;
+  ss.ss_size = kAltStackSize;
+  if (::sigaltstack(&ss, nullptr) != 0) {
+    Error e = io_error("sigaltstack failed");
+    std::free(mem);
+    return e;
+  }
+  t_altstack.mem = mem;
+  return {};
+}
+
+Result<void> install_fault_handlers(const GuestMemory& mem) {
+  LR_TRY(install_thread_altstack());
+  g_installed = {mem.base(), mem.size()};
   struct sigaction sa{};
   sa.sa_sigaction = handler;
   sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
-  ::sigemptyset(&sa.sa_mask);
-  for (int s : {SIGSEGV, SIGBUS, SIGILL}) ::sigaction(s, &sa, nullptr);
+  if (::sigemptyset(&sa.sa_mask) != 0) return io_error("sigemptyset failed");
+  for (int s : {SIGSEGV, SIGBUS, SIGILL}) {
+    if (::sigaction(s, &sa, nullptr) != 0) return io_error("sigaction failed");
+  }
+  return {};
 }
 
 }  // namespace lr::runtime

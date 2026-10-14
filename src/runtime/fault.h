@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 
+#include "common/result.h"
 #include "runtime/guest_memory.h"
 
 namespace lr::runtime {
@@ -23,6 +24,12 @@ std::string describe_fault(int signo, const uint8_t* base, uint64_t size, const 
 // Installs SIGSEGV/SIGBUS/SIGILL handlers (SA_SIGINFO|SA_ONSTACK, own sigaltstack) that print
 // the decoded fault to stderr with write(2) and _exit(4). `mem` must outlive the process's
 // guest execution; its base/size are captured. Process-global: call once.
-void install_fault_handlers(const GuestMemory& mem);
+// Also calls install_thread_altstack() for the calling thread. Returns IoError on failure.
+Result<void> install_fault_handlers(const GuestMemory& mem);
+
+// sigaltstack is per-thread: EVERY guest thread must call this at start, otherwise a stack
+// overflow on that thread kills the process without a report. Idempotent per thread; the
+// stack is freed (and unregistered) at thread exit.
+Result<void> install_thread_altstack();
 
 }  // namespace lr::runtime
