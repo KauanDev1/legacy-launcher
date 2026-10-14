@@ -127,7 +127,7 @@ int main(int argc, char** argv) {
       if (ev.type == SDL_QUIT) running = false;
       if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_CLOSE) running = false;
       if (ev.type == SDL_DROPFILE) {
-        app.set_iso(ev.drop.file);
+        if (!app.installing()) app.set_iso(ev.drop.file);  // the running install keeps its ISO
         SDL_free(ev.drop.file);
       }
       pending_frames = 3;

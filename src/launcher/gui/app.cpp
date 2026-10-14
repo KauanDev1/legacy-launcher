@@ -162,7 +162,7 @@ void App::handle_finished(const std::optional<Error>& error) {
         if (!cancelled) scroll_to_stage_ = static_cast<int>(&row - stages_.data());
         row.state = cancelled ? StageState::Pending : StageState::Error;
         row.cancelled = cancelled;
-        row.message = cancelled ? "cancelada" : "falhou";
+        row.message.clear();  // the state label says "Cancelada" / "Falhou"
       }
     if (cancelled) {
       install_status_ = "Instalação cancelada; as etapas concluídas ficam em cache.";
