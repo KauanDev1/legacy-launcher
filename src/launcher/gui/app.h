@@ -34,6 +34,9 @@ class App {
   void set_iso(const std::string& path);
   void start_install();
   bool installing() const { return worker_.joinable() && !install_done_; }
+  // True while something on screen moves (install running, progress easing, text cursor): the main loop then
+  // renders every vsync instead of sleeping until input.
+  bool animating() const;
 
  private:
   enum class StageState { Pending, Running, Done, Cached, Error };

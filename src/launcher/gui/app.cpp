@@ -82,6 +82,8 @@ void App::refresh_from_disk() {
                  ::access((p.bin / "legacyrecomp-game").c_str(), X_OK) == 0;
 }
 
+bool App::animating() const { return installing() || ImGui::GetIO().WantTextInput; }
+
 void App::set_iso(const std::string& path) { std::snprintf(iso_buf_.data(), iso_buf_.size(), "%s", path.c_str()); }
 
 void App::add_log(std::string line) {
