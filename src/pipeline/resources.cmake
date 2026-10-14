@@ -8,6 +8,7 @@
 #   runtime/include/simde/            SIMD Everywhere headers (ppc_context.h includes <x86/avx.h>)
 #   runtime/lib/                      liblr_runtime_core.a (sanitizer-free staged variant, see src/runtime),
 #                                     libXenonUtils.a, libdisasm.a
+# and the GUI launcher's fonts (assets/fonts: Inter, JetBrains Mono and their OFL licence texts) under fonts/.
 # ppc_context.h itself is not staged under runtime/: XenonRecomp copies it into work/generated.
 set(LR_RESOURCES_DIR "${CMAKE_BINARY_DIR}/share/legacyrecomp" CACHE INTERNAL "Staged resources dir (build tree)")
 set(_lr_src_root "${CMAKE_SOURCE_DIR}")
@@ -19,6 +20,16 @@ foreach(_cfg game.toml recomp.toml)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_lr_src_root}/config/minecraft-tu1/${_cfg}" "${_dst}"
     DEPENDS "${_lr_src_root}/config/minecraft-tu1/${_cfg}"
     COMMENT "Staging config/minecraft-tu1/${_cfg}")
+  list(APPEND _lr_staged "${_dst}")
+endforeach()
+
+foreach(_font Inter-Regular.ttf Inter-SemiBold.ttf Inter-Bold.ttf JetBrainsMono-Regular.ttf
+              LICENSE-Inter.txt LICENSE-JetBrainsMono.txt)
+  set(_dst "${LR_RESOURCES_DIR}/fonts/${_font}")
+  add_custom_command(OUTPUT "${_dst}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_lr_src_root}/assets/fonts/${_font}" "${_dst}"
+    DEPENDS "${_lr_src_root}/assets/fonts/${_font}"
+    COMMENT "Staging fonts/${_font}")
   list(APPEND _lr_staged "${_dst}")
 endforeach()
 

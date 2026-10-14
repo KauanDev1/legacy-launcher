@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Provenance of the fonts in this directory (used by legacyrecomp-gui). Both families are licensed under the
+# SIL Open Font License 1.1 (LICENSE-Inter.txt, LICENSE-JetBrainsMono.txt), which allows redistribution.
+# The archive hashes were cross-checked against Arch Linux's inter-font (sha256) and ttf-jetbrains-mono (b2sum)
+# PKGBUILDs on 2026-10-14.
+
+[inter]
+version = "4.1"
+url = "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip"
+archive_sha256 = "9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e"
+files = [
+  { archive = "extras/ttf/Inter-Regular.ttf", file = "Inter-Regular.ttf", sha256 = "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82" },
+  { archive = "extras/ttf/Inter-SemiBold.ttf", file = "Inter-SemiBold.ttf", sha256 = "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3" },
+  { archive = "extras/ttf/Inter-Bold.ttf", file = "Inter-Bold.ttf", sha256 = "288316099b1e0a47a4716d159098005eef7c0066921f34e3200393dbdb01947f" },
+  { archive = "LICENSE.txt", file = "LICENSE-Inter.txt", sha256 = "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a" },
+]
+
+[jetbrains-mono]
+version = "2.304"
+url = "https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip"
+archive_sha256 = "6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf"
+files = [
+  { archive = "fonts/ttf/JetBrainsMono-Regular.ttf", file = "JetBrainsMono-Regular.ttf", sha256 = "a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f" },
+  { archive = "OFL.txt", file = "LICENSE-JetBrainsMono.txt", sha256 = "30f0c136e3c88e422d0791acd97238870f9054a9729bc34cf2ff0d4ed8cac4ad" },
+]
