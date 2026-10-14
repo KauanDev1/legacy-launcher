@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "pipeline/pipeline.h"
 #include "support/elf_builder.h"
 
 extern char** environ;
@@ -107,6 +108,25 @@ TEST_CASE("fake game usage and load errors exit 2", "[unit]") {
   std::ofstream(junk, std::ios::binary) << std::string(64, 'x');
   CHECK(run_game(td.path, {"--headless", "--image", junk.string()}).code == 2);
   CHECK(run_game(td.path, {"--headless", "--image", write_image(td.path, 0x82000104)}).code == 2);  // no function at entry
+}
+
+TEST_CASE("launch runs <root>/bin/legacyrecomp-game on the patched image and returns its exit code", "[unit]") {
+  TempDir td;
+  fs::create_directories(td.path / "bin");
+  fs::create_directories(td.path / "work" / "image");
+  fs::copy_file(LR_FAKE_GAME_PATH, td.path / "bin" / "legacyrecomp-game");
+  fs::copy_file(write_image(td.path, 0x82000100), td.path / "work" / "image" / "default_tu1.xex");
+  lr::pipeline::Options opts;
+  opts.root = td.path;
+  const std::vector<std::string> extra = {"--headless"};
+  auto r = lr::pipeline::launch(opts, extra);
+  REQUIRE(r);
+  CHECK(r.value() == 3);  // FakeMissing is unimplemented
+
+  const std::vector<std::string> bogus = {"--bogus"};
+  auto u = lr::pipeline::launch(opts, bogus);  // extra args reach the game
+  REQUIRE(u);
+  CHECK(u.value() == 2);
 }
 #else
 TEST_CASE("fake game tests need SDL2 (target lr_fake_game not built)", "[unit]") { SKIP("SDL2 not found"); }
