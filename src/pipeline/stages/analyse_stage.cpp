@@ -112,6 +112,7 @@ class AnalyseStage : public Stage {
     inv.cancelled = [&] { return ctx.sink.cancelled(); };
     inv.on_line = [&](std::string_view line) { ctx.sink.on_log(line); };
     ctx.sink.on_progress({StageId::Analyse, 0.05f, "XenonAnalyse: scanning for jump tables"});
+    fs::remove(inv.log_file, ec);  // one run per log
     LR_TRY(run_tool(inv));
     std::string xenon;
     {

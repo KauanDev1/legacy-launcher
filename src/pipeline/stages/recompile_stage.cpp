@@ -180,6 +180,7 @@ class RecompileStage : public Stage {
         errors.emplace_back(line);
       }
     };
+    fs::remove(inv.log_file, ec);  // one run per log
     LR_TRY(run_tool(inv));
     if (!errors.empty())
       return Error{ErrorCode::ToolFailed, "XenonRecomp: " + errors.front(),
