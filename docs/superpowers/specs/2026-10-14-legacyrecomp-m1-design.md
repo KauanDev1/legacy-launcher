@@ -216,8 +216,8 @@ thread de trabalho; a UI lê os eventos de uma fila protegida por mutex.
 
 ## 11. Fora do escopo do M1
 
-Recompilação de shaders, GPU/Vulkan, áudio, input, saves, rede, Windows/macOS e
-empacotamento (AppImage/Flatpak).
+Recompilação de shaders, GPU/Vulkan, áudio, input, saves, rede, Windows/macOS e Flatpak.
+(O AppImage entrou no M1 por decisão de 2026-10-14 — ver §14.)
 
 ## 12. Riscos e incógnitas
 
@@ -234,3 +234,22 @@ empacotamento (AppImage/Flatpak).
 
 M2 kernel HLE (threads, arquivos, sincronização) → M3 GPU (Vulkan + XenosRecomp) →
 M4 áudio, input e saves → M5 jogável (menu e mundo).
+
+## 14. Adendo (2026-10-14): distribuição em AppImage
+
+Decisão do usuário: o LegacyRecomp é distribuído como **AppImage autossuficiente** e isso entra no M1
+(Task 17 do plano).
+
+- O AppImage leva o launcher (CLI + GUI), os recursos de `share/legacyrecomp/` **e o toolchain** usado
+  para compilar o jogo na máquina do usuário: o usuário só baixa, aponta a ISO e joga, sem instalar
+  pacotes.
+- Toolchain embutido: **Zig** (`zig c++`, que traz clang, libc++ e headers/objetos da glibc e
+  compila mirando uma glibc antiga, ex. 2.31, para rodar em qualquer distro) + `cmake` + `ninja`
+  estáticos + headers e `.so` do SDL2. Plano B, se o Zig não compilar o código gerado com as flags
+  necessárias: LLVM oficial + sysroot mínimo de uma distro antiga.
+- Dentro do AppImage (`$APPDIR` definido) o `doctor` e a etapa `build` usam o toolchain embutido; fora
+  dele, continuam usando o do sistema.
+- Critério de aceite adicional: `packaging/appimage/build.sh` gera `LegacyRecomp-x86_64.AppImage`;
+  numa pasta de dados limpa, `./LegacyRecomp-x86_64.AppImage install --iso <ISO>` e `run -- --headless`
+  produzem o mesmo resultado do M1 (código 3 em `NtAllocateVirtualMemory`) **com o PATH sem
+  clang/cmake/ninja**.

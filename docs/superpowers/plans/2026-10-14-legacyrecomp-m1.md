@@ -462,3 +462,25 @@ Runner rules: a stage is skipped iff `is_complete(id, fingerprint)` and every `o
   5. `ctest --preset dev -L unit` passes; `git ls-files | grep -Ei '\.(iso|xex|xexp)$|^work/|ppc_recomp'` prints nothing;
   6. docs/README/AGENTS.md/CLAUDE.md/skill exist and match reality.
 - [ ] **Step 5: Commit** — `docs: add architecture, pipeline, ADRs, roadmap, coverage and README`.
+
+---
+
+### Task 17: AppImage with bundled toolchain (added 2026-10-14, spec §14)
+
+**Files:**
+- Create: `packaging/appimage/build.sh`, `packaging/appimage/AppRun`, `packaging/appimage/legacyrecomp.desktop`, `packaging/appimage/legacyrecomp.png` (simple generated icon, no game art), `packaging/appimage/toolchain.lock` (pinned URLs + SHA-256 of zig, cmake, ninja, appimagetool), `docs/packaging.md`
+- Modify: `src/pipeline/doctor.{h,cpp}` (bundled-toolchain mode), `src/pipeline/stages/build_stage.cpp` (compiler/cmake/ninja paths from resources when bundled), `src/runtime/template/CMakeLists.txt` (if zig needs flag changes), `.gitignore` (`packaging/appimage/out/`, downloaded toolchains)
+
+**Interfaces:**
+- Consumes: install layout `bin/` + `share/legacyrecomp/` (Task 13), `find_resources()`, DoctorProbe, build stage.
+- Produces:
+  - `struct Toolchain { fs::path cc, cxx, cmake, ninja; std::vector<std::string> extra_cxx_flags; std::optional<fs::path> sdl2_prefix; };` `Result<Toolchain> lr::pipeline::resolve_toolchain(const fs::path& resources)` — if `<resources>/toolchain/` exists (bundled mode) use `toolchain/zig/zig` via wrapper scripts `toolchain/bin/{cc,c++}` (`zig cc|c++ -target x86_64-linux-gnu.2.31`), `toolchain/bin/{cmake,ninja}`, SDL2 from `toolchain/sdl2/`; otherwise system `clang`/`clang++`/`cmake`/`ninja` via `find_program`.
+  - Doctor and build stage both use `resolve_toolchain`; in bundled mode the doctor skips the pacman hint and checks the bundled files instead.
+  - `packaging/appimage/build.sh [--out DIR]`: configures the `release` preset, `cmake --install` into `AppDir/usr`, downloads+verifies the pinned toolchain into `AppDir/usr/share/legacyrecomp/toolchain/`, bundles SDL2 (headers + `.so` for the game link + runtime), copies launcher runtime deps, runs appimagetool → `LegacyRecomp-x86_64.AppImage`. Re-runnable; caches downloads in `packaging/appimage/cache/` (git-ignored).
+  - `AppRun`: dispatches `legacyrecomp` (CLI) when args are given, else `legacyrecomp-gui`.
+
+- [ ] **Step 1 (spike, throwaway):** with the pinned zig, compile the real generated code + runtime from an existing data root (`work/generated`) using the template and `CMAKE_C/CXX_COMPILER` = zig wrappers. Record in `docs/packaging.md` whether `-march=sandybridge -ffp-model=strict -fexceptions` and simde work, build time, and the glibc floor. If zig fails, switch to plan B (LLVM release + minimal sysroot) and record why.
+- [ ] **Step 2: Failing tests** `[unit]`: `resolve_toolchain` on a temp resources dir with a fake `toolchain/` tree → bundled paths; without it → system lookup (fake via PATH override); doctor in bundled mode with a missing bundled file → `ToolMissing` with a hint mentioning a corrupted AppImage.
+- [ ] **Step 3:** implement `resolve_toolchain`, wire doctor + build stage; run → PASS; commit.
+- [ ] **Step 4:** `build.sh`, `AppRun`, desktop file, icon, lock file; commit.
+- [ ] **Step 5: Acceptance (manual, real ISO):** build the AppImage; in a shell with `PATH=/usr/bin:/bin` minus clang/cmake/ninja (e.g. a temp PATH dir containing only symlinks to coreutils/sh) and a fresh `--root` on disk (not /tmp), run `./LegacyRecomp-x86_64.AppImage install --iso <ISO>` → exit 0 and `run -- --headless` → exit 3 at `NtAllocateVirtualMemory`. Record size of the AppImage and timings in `docs/packaging.md`; commit.
