@@ -36,6 +36,7 @@ class XdvdfsImage {
   XdvdfsImage(IReader* reader, uint64_t partition, uint32_t root_sector, uint32_t root_size)
       : reader_(reader), partition_(partition), root_sector_(root_sector), root_size_(root_size) {}
   Result<std::vector<XdvdfsEntry>> read_dir(uint32_t sector, uint32_t size) const;
+  Result<std::vector<XdvdfsEntry>> read_dir_impl(uint32_t sector, uint32_t size) const;
   Result<XdvdfsEntry> find(std::string_view path) const;
 
   IReader* reader_;

@@ -7,6 +7,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <new>
 #include <string>
 
 namespace lr::formats {
@@ -76,11 +77,17 @@ Result<void> SubReader::read(uint64_t offset, std::span<std::byte> dst) {
 
 Result<std::vector<std::byte>> read_all(IReader& reader) {
   uint64_t n = reader.size();
-  if (n > (uint64_t{1} << 32))
+  constexpr uint64_t kMaxReadAll = uint64_t{1} << 32;  // exclusive: at most 4 GiB - 1
+  if (n >= kMaxReadAll)
     return Error{ErrorCode::InsufficientResources, "refusing to read " + std::to_string(n) + " bytes into memory", ""};
-  std::vector<std::byte> out(static_cast<size_t>(n));
-  LR_TRY(reader.read(0, out));
-  return out;
+  try {
+    std::vector<std::byte> out(static_cast<size_t>(n));
+    LR_TRY(reader.read(0, out));
+    return out;
+  } catch (const std::bad_alloc&) {
+    return Error{ErrorCode::InsufficientResources,
+                 "out of memory allocating " + std::to_string(n) + " bytes for read_all", ""};
+  }
 }
 
 }  // namespace lr::formats

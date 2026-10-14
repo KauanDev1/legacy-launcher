@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstring>
+#include <new>
 
 namespace lr::formats {
 
@@ -44,6 +45,16 @@ Result<XdvdfsImage> XdvdfsImage::open(IReader& reader) {
 }
 
 Result<std::vector<XdvdfsEntry>> XdvdfsImage::read_dir(uint32_t sector, uint32_t size) const {
+  try {
+    return read_dir_impl(sector, size);
+  } catch (const std::bad_alloc&) {
+    return Error{ErrorCode::InsufficientResources,
+                 "out of memory while reading directory (" + std::to_string(size) + " bytes)",
+                 "the disc image is corrupt or the system is low on memory"};
+  }
+}
+
+Result<std::vector<XdvdfsEntry>> XdvdfsImage::read_dir_impl(uint32_t sector, uint32_t size) const {
   std::vector<XdvdfsEntry> out;
   if (size == 0) return out;
   if (size > kMaxDirSize) return invalid("directory size " + std::to_string(size) + " is implausible");

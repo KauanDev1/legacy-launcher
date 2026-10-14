@@ -131,3 +131,79 @@ TEST_CASE("readers", "[unit]") {
   std::filesystem::remove(path);
   CHECK(FileReader::open(path).error().code == ErrorCode::NotFound);
 }
+
+namespace {
+void poke32(BuiltImage& img, size_t at, uint32_t v) {
+  for (int i = 0; i < 4; ++i) img.data[at + i] = std::byte((v >> (8 * i)) & 0xFF);
+}
+size_t root_at(const BuiltImage& img) { return static_cast<size_t>(img.root_sector) * kSector; }
+void check_list_error(BuiltImage& img, ErrorCode code) {
+  auto rd = img.reader();
+  auto x = XdvdfsImage::open(*rd);
+  REQUIRE(x.ok());
+  auto l = x.value().list("/");
+  REQUIRE_FALSE(l.ok());
+  CHECK(l.error().code == code);
+}
+}  // namespace
+
+TEST_CASE("xdvdfs child offset beyond directory size", "[unit]") {
+  auto img = sample();
+  size_t second = root_at(img) + 28;
+  img.data[second + 2] = std::byte{0xFF};  // right = 0x7FFF units -> far past 2048 bytes
+  img.data[second + 3] = std::byte{0x7F};
+  check_list_error(img, ErrorCode::InvalidFormat);
+}
+
+TEST_CASE("xdvdfs name_len overruns directory", "[unit]") {
+  auto img = sample();
+  poke32(img, 32 * kSector + 0x18, 48);  // second entry header fits (42) but name ends at 49
+  check_list_error(img, ErrorCode::InvalidFormat);
+}
+
+TEST_CASE("xdvdfs directory size above cap", "[unit]") {
+  auto img = sample();
+  poke32(img, 32 * kSector + 0x18, 65u << 20);
+  check_list_error(img, ErrorCode::InvalidFormat);
+}
+
+TEST_CASE("xdvdfs directory extent past image end", "[unit]") {
+  auto img = sample();
+  poke32(img, 32 * kSector + 0x18, 64 * 1024);  // under the cap, but beyond the image
+  check_list_error(img, ErrorCode::OutOfRange);
+}
+
+TEST_CASE("xdvdfs open_file extending past image end", "[unit]") {
+  auto img = sample();
+  poke32(img, root_at(img) + 8, 0x10000000);  // Default.xex size
+  auto rd = img.reader();
+  auto x = XdvdfsImage::open(*rd);
+  REQUIRE(x.ok());
+  auto f = x.value().open_file("Default.xex");
+  REQUIRE_FALSE(f.ok());
+  CHECK(f.error().code == ErrorCode::OutOfRange);
+}
+
+TEST_CASE("xdvdfs tree with left pointers", "[unit]") {
+  XdvdfsBuilder b;
+  b.add("m", bytes_of("M")).add("a", bytes_of("A")).add("z", bytes_of("Z"));
+  auto img = b.build();
+  // Entries are 16 bytes each at offsets 0, 16, 32 (units 0, 4, 8). Make "m" the root with
+  // left="a" and right="z"; "a" must not chain to "z".
+  size_t r = root_at(img);
+  img.data[r + 0] = std::byte{4};
+  img.data[r + 2] = std::byte{8};
+  img.data[r + 16 + 2] = std::byte{0};
+  auto rd = img.reader();
+  auto x = XdvdfsImage::open(*rd);
+  REQUIRE(x.ok());
+  auto l = x.value().list("/");
+  REQUIRE(l.ok());
+  REQUIRE(l.value().size() == 3);
+  CHECK(l.value()[0].name == "a");
+  CHECK(l.value()[1].name == "m");
+  CHECK(l.value()[2].name == "z");
+  auto f = x.value().open_file("A");
+  REQUIRE(f.ok());
+  CHECK(read_all(*f.value()).value() == bytes_of("A"));
+}
