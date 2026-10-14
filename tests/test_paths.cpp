@@ -54,3 +54,12 @@ TEST_CASE("resources_dir", "[unit]") {
   CHECK(d.error().code == lr::ErrorCode::NotFound);
   fs::remove_all(dir);
 }
+
+TEST_CASE("data root precedence is flag, env, XDG default", "[unit]") {
+  using std::filesystem::path;
+  CHECK(lr::resolve_data_root(path("/flag"), "/env", "/xdg", "/home/u") == path("/flag"));
+  CHECK(lr::resolve_data_root(std::nullopt, "/env", "/xdg", "/home/u") == path("/env"));
+  CHECK(lr::resolve_data_root(std::nullopt, "", "/xdg", "/home/u") == path("/xdg/legacyrecomp"));
+  CHECK(lr::resolve_data_root(std::nullopt, nullptr, nullptr, "/home/u") == path("/home/u/.local/share/legacyrecomp"));
+}
+

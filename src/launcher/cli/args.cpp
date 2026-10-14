@@ -119,11 +119,4 @@ Result<CliArgs> parse_args(std::span<const std::string_view> args) {
   return out;
 }
 
-std::filesystem::path resolve_root(const std::optional<std::filesystem::path>& flag, const char* env_root,
-                                   const char* xdg_data_home, const char* home) {
-  if (flag) return *flag;
-  if (env_root && *env_root) return env_root;
-  return default_data_root(xdg_data_home, home);
-}
-
 }  // namespace lr::cli

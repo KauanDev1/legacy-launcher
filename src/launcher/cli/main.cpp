@@ -299,7 +299,7 @@ int main(int argc, char** argv) {
   if (a.command == "inspect") return run_inspect(a.passthrough);
 
   const fs::path root =
-      lr::cli::resolve_root(a.root, std::getenv("LEGACYRECOMP_ROOT"), std::getenv("XDG_DATA_HOME"), std::getenv("HOME"));
+      lr::resolve_data_root(a.root, std::getenv("LEGACYRECOMP_ROOT"), std::getenv("XDG_DATA_HOME"), std::getenv("HOME"));
   if (a.command == "doctor") return run_doctor_cmd(root);
   if (a.command == "run") return run_game(a, root);
   return run_install(a, root);  // install, build

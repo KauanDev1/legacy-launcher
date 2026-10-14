@@ -42,3 +42,14 @@ Result<fs::path> resources_dir(const fs::path& exe_path, const char* env_overrid
 }
 
 }  // namespace lr
+
+namespace lr {
+
+std::filesystem::path resolve_data_root(const std::optional<std::filesystem::path>& flag, const char* env_root,
+                                        const char* xdg_data_home, const char* home) {
+  if (flag) return *flag;
+  if (env_root && *env_root) return env_root;
+  return default_data_root(xdg_data_home, home);
+}
+
+}  // namespace lr
