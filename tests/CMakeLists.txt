@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 include(Catch)
-add_executable(lr_tests test_result.cpp test_sha256.cpp test_paths.cpp test_xdvdfs.cpp test_stfs.cpp test_xex2.cpp test_integration_formats.cpp test_runner.cpp test_game_config.cpp test_process.cpp test_doctor.cpp test_extract_verify.cpp test_recomp_config.cpp test_integration_pipeline.cpp test_switch_scan.cpp test_runtime_core.cpp test_loader.cpp test_kernel_registry.cpp test_import_stubs.cpp test_guest_thread.cpp test_fake_game.cpp test_build_stage.cpp test_integration_e2e.cpp test_cli_args.cpp test_progress_bar.cpp)
+add_executable(lr_tests test_result.cpp test_sha256.cpp test_paths.cpp test_xdvdfs.cpp test_stfs.cpp test_xex2.cpp test_integration_formats.cpp test_runner.cpp test_game_config.cpp test_process.cpp test_doctor.cpp test_extract_verify.cpp test_recomp_config.cpp test_integration_pipeline.cpp test_switch_scan.cpp test_runtime_core.cpp test_loader.cpp test_kernel_registry.cpp test_import_stubs.cpp test_guest_thread.cpp test_fake_game.cpp test_build_stage.cpp test_integration_e2e.cpp test_cli_args.cpp test_progress_bar.cpp test_queue_sink.cpp)
 target_include_directories(lr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/support)
-target_link_libraries(lr_tests PRIVATE lr_common lr_formats lr_pipeline lr_cli lr_runtime_core XenonUtils tomlplusplus::tomlplusplus Catch2::Catch2WithMain)
+target_link_libraries(lr_tests PRIVATE lr_common lr_formats lr_pipeline lr_cli lr_gui_core lr_runtime_core XenonUtils tomlplusplus::tomlplusplus Catch2::Catch2WithMain)
 lr_configure_target(lr_tests)
 catch_discover_tests(lr_tests ADD_TAGS_AS_LABELS PROPERTIES TIMEOUT 3600)
 target_compile_definitions(lr_tests PRIVATE LR_SOURCE_DIR="${CMAKE_SOURCE_DIR}" LR_RESOURCES_DIR="${LR_RESOURCES_DIR}")
