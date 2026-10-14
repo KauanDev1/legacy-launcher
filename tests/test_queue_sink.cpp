@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
+#include <chrono>
 #include <string>
 #include <thread>
 #include <vector>
@@ -19,7 +20,9 @@ TEST_CASE("QueueSink keeps per-producer order across concurrent posts and drains
   std::thread a(produce, 'a'), b(produce, 'b');
 
   std::vector<QueueSink::Event> all;
-  while (all.size() < 2 * kPerThread) {
+  // A lost event must fail the test, not hang it.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (all.size() < 2 * kPerThread && std::chrono::steady_clock::now() < deadline) {
     auto part = sink.drain();
     all.insert(all.end(), part.begin(), part.end());
     std::this_thread::yield();
