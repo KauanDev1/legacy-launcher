@@ -5,6 +5,10 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <thread>
+#include <csignal>
+#include <cerrno>
+#include <unistd.h>
 
 #include "pipeline/process.h"
 
@@ -96,4 +100,70 @@ TEST_CASE("capture_output returns stdout", "[unit]") {
 TEST_CASE("find_program searches PATH", "[unit]") {
   CHECK(find_program("sh").has_value());
   CHECK_FALSE(find_program("definitely-not-a-program-xyz").has_value());
+}
+
+namespace {
+bool pid_gone(pid_t pid) {
+  for (int i = 0; i < 20; ++i) {
+    if (::kill(pid, 0) != 0 && errno == ESRCH) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  return false;
+}
+pid_t read_pid(const fs::path& p) {
+  std::ifstream f(p);
+  long v = 0;
+  f >> v;
+  return static_cast<pid_t>(v);
+}
+}  // namespace
+
+TEST_CASE("run_tool cancellation kills grandchildren and returns promptly", "[unit]") {
+  fs::path pidf = tmp_log("gc.pid");
+  auto t0 = std::chrono::steady_clock::now();
+  ToolInvocation inv;
+  inv.program = "/bin/sh";
+  inv.args = {"-c", "sleep 30 & echo $! > " + pidf.string() + "; wait"};
+  inv.cancelled = [&] { return std::chrono::steady_clock::now() - t0 > std::chrono::milliseconds(200); };
+  auto r = run_tool(inv);
+  REQUIRE_FALSE(r.ok());
+  CHECK(r.error().code == ErrorCode::Cancelled);
+  CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::seconds(4));
+  pid_t gc = read_pid(pidf);
+  REQUIRE(gc > 0);
+  CHECK(pid_gone(gc));
+}
+
+TEST_CASE("run_tool escalates to SIGKILL for a child ignoring SIGTERM", "[unit]") {
+  auto t0 = std::chrono::steady_clock::now();
+  ToolInvocation inv;
+  inv.program = "/bin/sh";
+  inv.args = {"-c", "trap '' TERM; while :; do sleep 1; done"};
+  inv.cancelled = [&] { return std::chrono::steady_clock::now() - t0 > std::chrono::milliseconds(200); };
+  auto r = run_tool(inv);
+  REQUIRE_FALSE(r.ok());
+  CHECK(r.error().code == ErrorCode::Cancelled);
+  auto dt = std::chrono::steady_clock::now() - t0;
+  CHECK(dt > std::chrono::seconds(3));
+  CHECK(dt < std::chrono::seconds(5));
+}
+
+TEST_CASE("run_tool children get default SIGPIPE; bad cwd is IoError", "[unit]") {
+  std::vector<std::string> lines;
+  ToolInvocation inv;
+  inv.program = "/bin/sh";
+  inv.args = {"-c", "while read k v; do [ \"$k\" = SigIgn: ] && echo $v; done < /proc/$$/status; exit 0"};
+  inv.on_line = [&](std::string_view l) { lines.emplace_back(l); };
+  REQUIRE(run_tool(inv).ok());
+  REQUIRE(!lines.empty());
+  // SIGPIPE is signal 13 -> bit 12 (0x1000)
+  CHECK((std::stoul(lines.back(), nullptr, 16) & 0x1000UL) == 0);
+
+  ToolInvocation bad;
+  bad.program = "/bin/true";
+  bad.cwd = "/nonexistent-dir-xyz";
+  auto r = run_tool(bad);
+  REQUIRE_FALSE(r.ok());
+  CHECK(r.error().code == ErrorCode::IoError);
+  CHECK(r.error().message.find("/nonexistent-dir-xyz") != std::string::npos);
 }

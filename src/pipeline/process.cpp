@@ -54,17 +54,47 @@ Result<Child> spawn_child(const fs::path& program, const std::vector<std::string
   int fds[2];
   if (::pipe2(fds, O_CLOEXEC) != 0) return io_error("pipe");
 
-  posix_spawn_file_actions_t fa;
-  posix_spawn_file_actions_init(&fa);
-  posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
-  posix_spawn_file_actions_adddup2(&fa, fds[1], 1);  // dup2 clears CLOEXEC on the new fd
-  if (merge_stderr)
-    posix_spawn_file_actions_adddup2(&fa, fds[1], 2);
-  else
-    posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
-  if (!cwd.empty()) posix_spawn_file_actions_addchdir_np(&fa, cwd.c_str());
-
+  if (!cwd.empty()) {
+    std::error_code ec;
+    if (!fs::is_directory(cwd, ec)) {
+      ::close(fds[0]);
+      ::close(fds[1]);
+      return Error{ErrorCode::IoError, "working directory does not exist: " + cwd.string(), ""};
+    }
+  }
   std::string exe_s = exe.string();
+  if (::access(exe_s.c_str(), X_OK) != 0) {
+    int e = errno;
+    ::close(fds[0]);
+    ::close(fds[1]);
+    return Error{ErrorCode::ToolMissing, "cannot execute " + exe_s + ": " + std::strerror(e), ""};
+  }
+
+  posix_spawn_file_actions_t fa;
+  posix_spawnattr_t attr;
+  posix_spawn_file_actions_init(&fa);
+  posix_spawnattr_init(&attr);
+  int rc = 0;
+  auto chk = [&](int r) {
+    if (rc == 0) rc = r;
+  };
+  chk(posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0));
+  chk(posix_spawn_file_actions_adddup2(&fa, fds[1], 1));  // dup2 clears CLOEXEC on the new fd
+  if (merge_stderr)
+    chk(posix_spawn_file_actions_adddup2(&fa, fds[1], 2));
+  else
+    chk(posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0));
+  if (!cwd.empty()) chk(posix_spawn_file_actions_addchdir_np(&fa, cwd.c_str()));
+  // Own process group (so cancel can signal the whole tree); restore default SIGPIPE and an empty mask.
+  sigset_t def, mask;
+  sigemptyset(&def);
+  sigaddset(&def, SIGPIPE);
+  sigemptyset(&mask);
+  chk(posix_spawnattr_setpgroup(&attr, 0));
+  chk(posix_spawnattr_setsigdefault(&attr, &def));
+  chk(posix_spawnattr_setsigmask(&attr, &mask));
+  chk(posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK));
+
   std::string argv0 = exe.filename().string();
   std::vector<char*> argv;
   argv.push_back(argv0.data());
@@ -73,13 +103,13 @@ Result<Child> spawn_child(const fs::path& program, const std::vector<std::string
   argv.push_back(nullptr);
 
   pid_t pid = -1;
-  int rc = ::posix_spawn(&pid, exe_s.c_str(), &fa, nullptr, argv.data(), environ);
+  if (rc == 0) rc = ::posix_spawn(&pid, exe_s.c_str(), &fa, &attr, argv.data(), environ);
   posix_spawn_file_actions_destroy(&fa);
+  posix_spawnattr_destroy(&attr);
   ::close(fds[1]);
   if (rc != 0) {
     ::close(fds[0]);
-    ErrorCode code = (rc == ENOENT || rc == EACCES) ? ErrorCode::ToolMissing : ErrorCode::IoError;
-    return Error{code, "cannot start " + exe_s + ": " + std::strerror(rc), ""};
+    return Error{ErrorCode::IoError, "cannot start " + exe_s + ": " + std::strerror(rc), ""};
   }
   return Child{pid, fds[0]};
 }
@@ -142,36 +172,38 @@ Result<void> run_tool(const ToolInvocation& inv) {
   };
 
   bool cancelled = false;
-  bool eof = false;
-  std::optional<Clock::time_point> term_at;
   bool killed = false;
+  std::optional<Clock::time_point> term_at, kill_at;
+  std::optional<Error> io_err;
   char chunk[4096];
-  while (!eof) {
+  for (;;) {
     if (!cancelled && inv.cancelled && inv.cancelled()) {
       cancelled = true;
       term_at = Clock::now();
-      ::kill(child.pid, SIGTERM);
+      ::kill(-child.pid, SIGTERM);
     }
     if (cancelled && !killed && Clock::now() - *term_at >= std::chrono::seconds(3)) {
-      ::kill(child.pid, SIGKILL);
+      ::kill(-child.pid, SIGKILL);
       killed = true;
+      kill_at = Clock::now();
     }
+    // After SIGKILL + grace, stop reading even without EOF (a stray holder of the pipe must not block us).
+    if (killed && Clock::now() - *kill_at >= std::chrono::milliseconds(500)) break;
     pollfd pfd{child.read_fd, POLLIN, 0};
     int pr = ::poll(&pfd, 1, 100);
     if (pr < 0) {
       if (errno == EINTR) continue;
+      io_err = io_error("poll");
       break;
     }
     if (pr == 0) continue;
     ssize_t n = ::read(child.read_fd, chunk, sizeof chunk);
     if (n < 0) {
       if (errno == EINTR) continue;
+      io_err = io_error("read");
       break;
     }
-    if (n == 0) {
-      eof = true;
-      break;
-    }
+    if (n == 0) break;
     buf.append(chunk, static_cast<size_t>(n));
     size_t nl;
     while ((nl = buf.find('\n')) != std::string::npos) {
@@ -181,10 +213,10 @@ Result<void> run_tool(const ToolInvocation& inv) {
   }
   if (!buf.empty()) emit(std::move(buf));
   ::close(child.read_fd);
-  // A grandchild may hold the pipe open; if we were cancelled make sure the child is gone before waiting.
-  if (cancelled && !killed) ::kill(child.pid, SIGKILL);
+  if (cancelled || io_err) ::kill(-child.pid, SIGKILL);  // never leave the tree behind
   int st = wait_status(child.pid);
 
+  if (io_err) return *io_err;
   if (cancelled) return Error{ErrorCode::Cancelled, inv.program.string() + " cancelled", ""};
   if (WIFEXITED(st) && WEXITSTATUS(st) == 0) return {};
   Error e = exit_error(inv.program, st);
@@ -202,7 +234,14 @@ Result<std::string> capture_output(const fs::path& program, const std::vector<st
   for (;;) {
     ssize_t n = ::read(child.read_fd, chunk, sizeof chunk);
     if (n < 0 && errno == EINTR) continue;
-    if (n <= 0) break;
+    if (n < 0) {
+      Error e = io_error("read");
+      ::close(child.read_fd);
+      ::kill(-child.pid, SIGKILL);
+      wait_status(child.pid);
+      return e;
+    }
+    if (n == 0) break;
     out.append(chunk, static_cast<size_t>(n));
   }
   ::close(child.read_fd);

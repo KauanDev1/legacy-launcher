@@ -22,6 +22,9 @@ struct ToolInvocation {
 };
 
 // Runs the tool with stdout+stderr merged; stdin is /dev/null. Cancellation: SIGTERM, SIGKILL after 3 s.
+// Each tool runs in its own process group: cancel signals the whole group (SIGTERM, SIGKILL after 3 s, then
+// we stop reading after a 500 ms grace and reap). Tools therefore do NOT receive the terminal's SIGINT; the
+// caller's SIGINT handler must set the `cancelled` flag. Children get default SIGPIPE and an empty signal mask.
 // SIGPIPE is set to SIG_IGN process-wide on first use (writes to a dead pipe return EPIPE instead).
 Result<void> run_tool(const ToolInvocation& inv);
 
