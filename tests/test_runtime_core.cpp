@@ -127,3 +127,17 @@ TEST_CASE("install_fault_handlers reports a guest fault (forked child)", "[unit]
   REQUIRE(n > 0);
   CHECK(std::string(buf).find("SIGSEGV at guest 0x82000010") == 0);
 }
+
+#include "runtime/func_table.h"
+
+static void dummy_func() {}
+
+TEST_CASE("install_function_table writes 8-byte slots per 4-byte instruction", "[unit]") {
+  auto r = GuestMemory::reserve(0x1'0000'0000ull);
+  REQUIRE(r.ok());
+  const uint64_t off = 0x82000000ull + 0x32D0000ull;
+  const FuncMapping maps[] = {{0x82000010, reinterpret_cast<void*>(&dummy_func)}};
+  install_function_table(r.value().base(), off, 0x82000000, maps);
+  CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x20) == reinterpret_cast<void*>(&dummy_func));
+  CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x28) == nullptr);
+}
