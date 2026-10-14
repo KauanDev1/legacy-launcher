@@ -32,6 +32,12 @@ std::string abbreviate_home(const std::filesystem::path& path, const char* home)
 // within half a percent). Moving backwards (a new run) snaps immediately.
 float approach_progress(float displayed, float target, float dt_seconds, float rate = 10.0f);
 
+// UI scale on top of the window's logical coordinates. `env_override` (LEGACYRECOMP_UI_SCALE) wins when it parses
+// as a number in [0.5, 4]. Otherwise the display scale (`dpi` / 96; 1 when dpi <= 0) divided by the framebuffer
+// scale (drawable / window size: backends with logical coordinates already scale by it), rounded to quarter
+// steps and clamped to [1, 3].
+float ui_scale(float dpi, float framebuffer_scale, const char* env_override);
+
 // Colour class of a log line: "[ERROR]"/"error:"/"FAILED:" lines are errors, "[WARN]"/"warning:" warnings.
 enum class LogTone { Normal, Warning, Error };
 LogTone classify_log_line(std::string_view line);

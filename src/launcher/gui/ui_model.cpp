@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 
 namespace lr::gui {
 
@@ -52,6 +53,17 @@ float approach_progress(float displayed, float target, float dt_seconds, float r
   if (target <= displayed) return target;
   const float next = displayed + (target - displayed) * (1.0f - std::exp(-rate * std::max(dt_seconds, 0.0f)));
   return target - next < 0.005f ? target : next;
+}
+
+float ui_scale(float dpi, float framebuffer_scale, const char* env_override) {
+  if (env_override && *env_override) {
+    char* end = nullptr;
+    const float v = std::strtof(env_override, &end);
+    if (end && *end == '\0' && v >= 0.5f && v <= 4.0f) return v;
+  }
+  const float display = dpi > 0.0f ? dpi / 96.0f : 1.0f;
+  const float s = display / std::max(framebuffer_scale, 1.0f);
+  return std::clamp(std::round(s * 4.0f) / 4.0f, 1.0f, 3.0f);
 }
 
 LogTone classify_log_line(std::string_view line) {

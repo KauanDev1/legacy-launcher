@@ -65,3 +65,26 @@ TEST_CASE("classify_log_line tints errors and warnings", "[unit]") {
   CHECK(classify_log_line("clang -Werror=foo -c x.cpp") == LogTone::Normal);
   CHECK(classify_log_line("[3/10] Building x") == LogTone::Normal);
 }
+
+TEST_CASE("ui_scale divides the display scale by the framebuffer scale", "[unit]") {
+  using Catch::Approx;
+  CHECK(ui_scale(96.0f, 1.0f, nullptr) == Approx(1.0f));
+  CHECK(ui_scale(192.0f, 2.0f, nullptr) == Approx(1.0f));  // logical coordinates: fb already scales
+  CHECK(ui_scale(144.0f, 1.0f, nullptr) == Approx(1.5f));
+  CHECK(ui_scale(192.0f, 1.0f, nullptr) == Approx(2.0f));
+  CHECK(ui_scale(96.0f, 2.0f, nullptr) == Approx(1.0f));  // never below 1
+  CHECK(ui_scale(0.0f, 1.0f, nullptr) == Approx(1.0f));   // DPI unknown
+  CHECK(ui_scale(110.0f, 1.0f, nullptr) == Approx(1.25f));  // quarter steps
+  CHECK(ui_scale(1000.0f, 1.0f, nullptr) == Approx(3.0f));
+}
+
+TEST_CASE("ui_scale honours a valid LEGACYRECOMP_UI_SCALE override", "[unit]") {
+  using Catch::Approx;
+  CHECK(ui_scale(192.0f, 1.0f, "1.25") == Approx(1.25f));
+  CHECK(ui_scale(96.0f, 2.0f, "0.75") == Approx(0.75f));
+  CHECK(ui_scale(144.0f, 1.0f, "") == Approx(1.5f));
+  CHECK(ui_scale(144.0f, 1.0f, "abc") == Approx(1.5f));
+  CHECK(ui_scale(144.0f, 1.0f, "1.5x") == Approx(1.5f));
+  CHECK(ui_scale(144.0f, 1.0f, "0") == Approx(1.5f));
+  CHECK(ui_scale(144.0f, 1.0f, "9") == Approx(1.5f));
+}

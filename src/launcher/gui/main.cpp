@@ -2,7 +2,6 @@
 #include <SDL.h>
 
 #include <algorithm>
-#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -16,6 +15,7 @@
 #include "imgui.h"
 #include "launcher/gui/app.h"
 #include "launcher/gui/theme.h"
+#include "launcher/gui/ui_model.h"
 #include "pipeline/pipeline.h"
 
 namespace {
@@ -26,7 +26,8 @@ void usage() {
       "  --root        data root (default: $LEGACYRECOMP_ROOT, then $XDG_DATA_HOME/legacyrecomp)\n"
       "  --iso         prefill the ISO field\n"
       "  --install     start the install immediately\n"
-      "  --screenshot  save the window to a BMP once and exit (after the install, if started)\n",
+      "  --screenshot  save the window to a BMP once and exit (after the install, if started)\n"
+      "environment: LEGACYRECOMP_UI_SCALE=<0.5..4> overrides the UI scale (default: from the display DPI)\n",
       stderr);
 }
 
@@ -40,14 +41,13 @@ bool save_screenshot(SDL_Renderer* r, const char* path) {
   return ok;
 }
 
-// Display content scale from the display DPI (96 dpi = 1.0), rounded to quarter steps and clamped to [1, 3].
-float display_scale() {
+// Horizontal DPI of the first display, 0 when unknown.
+float display_dpi() {
   float ddpi = 0, hdpi = 0, vdpi = 0;
-  if (SDL_GetDisplayDPI(0, &ddpi, &hdpi, &vdpi) != 0 || hdpi <= 0.0f) return 1.0f;
-  return std::clamp(std::round(hdpi / 96.0f * 4.0f) / 4.0f, 1.0f, 3.0f);
+  return SDL_GetDisplayDPI(0, &ddpi, &hdpi, &vdpi) == 0 ? hdpi : 0.0f;
 }
 
-// `w`x`h` scaled by `scale`, but never larger than the display's usable area.
+// `w`x`h` (window coordinates) scaled by `scale`, but never larger than the display's usable area.
 SDL_Point scaled_size(int w, int h, float scale) {
   SDL_Point p{static_cast<int>(static_cast<float>(w) * scale), static_cast<int>(static_cast<float>(h) * scale)};
   SDL_Rect usable;
@@ -80,8 +80,8 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
     return 1;
   }
-  const float ui_scale = display_scale();
-  const SDL_Point initial = scaled_size(1100, 720, ui_scale);
+  // Created at the unscaled size first: the UI scale depends on the renderer's framebuffer scale.
+  const SDL_Point initial = scaled_size(1100, 720, 1.0f);
   SDL_Window* window = SDL_CreateWindow("LegacyRecomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, initial.x,
                                         initial.y, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   SDL_Renderer* renderer =
@@ -93,6 +93,21 @@ int main(int argc, char** argv) {
     SDL_Quit();
     return 1;
   }
+  // Window sizes are in window coordinates. Where those are logical (Wayland, sdl2-compat on SDL3) the
+  // framebuffer scale already carries the display scale, so ui_scale only adds what it does not cover.
+  float fb_scale = 1.0f;
+  {
+    int win_w = 0, win_h = 0, out_w = 0, out_h = 0;
+    SDL_GetWindowSize(window, &win_w, &win_h);
+    SDL_GetRendererOutputSize(renderer, &out_w, &out_h);
+    if (win_w > 0 && out_w > 0) fb_scale = static_cast<float>(out_w) / static_cast<float>(win_w);
+  }
+  const float ui_scale = lr::gui::ui_scale(display_dpi(), fb_scale, std::getenv("LEGACYRECOMP_UI_SCALE"));
+  if (ui_scale != 1.0f) {
+    const SDL_Point size = scaled_size(1100, 720, ui_scale);
+    SDL_SetWindowSize(window, size.x, size.y);
+    SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+  }
   const SDL_Point minimum = scaled_size(900, 600, ui_scale);
   SDL_SetWindowMinimumSize(window, minimum.x, minimum.y);
 
@@ -102,10 +117,6 @@ int main(int argc, char** argv) {
   ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
   ImGui_ImplSDLRenderer2_Init(renderer);
   {
-    int win_w = 0, win_h = 0, out_w = 0, out_h = 0;
-    SDL_GetWindowSize(window, &win_w, &win_h);
-    SDL_GetRendererOutputSize(renderer, &out_w, &out_h);
-    const float fb_scale = win_w > 0 && out_w > 0 ? static_cast<float>(out_w) / static_cast<float>(win_w) : 1.0f;
     auto resources = lr::pipeline::find_resources();
     if (!resources) std::fprintf(stderr, "warning: resources not found (%s); using the default font\n",
                                  resources.error().message.c_str());
