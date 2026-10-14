@@ -60,8 +60,18 @@ int print_coverage() {
   return 0;
 }
 
+// The PPCContext is built here, in the TU compiled with the game's real generated ppc_config.h, so its layout
+// always matches the recompiled code; the prebuilt runtime never touches it.
+void guest_body(uint8_t* base, void* user) {
+  auto* fn = reinterpret_cast<PPCFunc*>(user);
+  PPCContext ctx{};
+  ctx.r1.u64 = kGuestStackBase + kGuestStackSize - kGuestStackTopSlack;
+  ctx.r13.u64 = kGuestPcrAddress;
+  fn(ctx, base);
+}
+
 // Runs the guest on a helper thread and keeps the SDL window alive on the main thread.
-int run_with_window(GuestMemory& mem, uint32_t entry, GuestEntryFn* fn) {
+int run_with_window(GuestMemory& mem, PPCFunc* fn) {
   if (SDL_Init(SDL_INIT_VIDEO) != 0) {
     std::fprintf(stderr, "error: SDL_Init failed: %s (use --headless to run without a window)\n", SDL_GetError());
     return kExitUsage;
@@ -75,7 +85,7 @@ int run_with_window(GuestMemory& mem, uint32_t entry, GuestEntryFn* fn) {
   std::atomic<bool> done{false};
   std::atomic<int> rc{0};
   std::thread runner([&] {
-    rc = run_guest(mem, entry, fn);
+    rc = run_guest(mem, guest_body, reinterpret_cast<void*>(fn));
     done = true;
   });
   bool closed = false;
@@ -137,7 +147,7 @@ int main(int argc, char** argv) {
   }
 
   std::vector<FuncMapping> maps;
-  GuestEntryFn* entry_fn = nullptr;
+  PPCFunc* entry_fn = nullptr;
   for (const PPCFuncMapping* m = PPCFuncMappings; m->host != nullptr; ++m) {
     maps.push_back({static_cast<uint32_t>(m->guest), reinterpret_cast<void*>(m->host)});
     if (m->guest == img.value().entry) entry_fn = m->host;
@@ -155,6 +165,7 @@ int main(int argc, char** argv) {
     return kExitUsage;
   }
 
-  if (opt.headless) return run_guest(mem.value(), img.value().entry, entry_fn);
-  return run_with_window(mem.value(), img.value().entry, entry_fn);
+  init_guest_pcr(mem.value());
+  if (opt.headless) return run_guest(mem.value(), guest_body, reinterpret_cast<void*>(entry_fn));
+  return run_with_window(mem.value(), entry_fn);
 }
