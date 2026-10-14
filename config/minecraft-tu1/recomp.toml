@@ -1,0 +1,7 @@
+# Configuração do XenonRecomp para Minecraft: Xbox 360 Edition + TU1.
+# Os endereços das funções auxiliares ainda não foram levantados (ver docs/reverse-engineering/).
+# Os caminhos de [main] são reescritos pela etapa recompile (render_recomp_config).
+[main]
+file_path = "default_tu1.xex"
+out_directory_path = "generated"
+switch_table_file_path = "switch_tables.toml"
