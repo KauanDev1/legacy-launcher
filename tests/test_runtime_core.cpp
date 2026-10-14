@@ -101,6 +101,11 @@ TEST_CASE("describe_fault formats guest and host faults", "[unit]") {
   auto out = describe_fault(SIGSEGV, base, size, reinterpret_cast<const void*>(uintptr_t{0x1234}));
   CHECK(out == "SIGSEGV at host 0x1234 (outside guest memory)");
   CHECK(describe_fault(99, base, size, nullptr).find("signal 99") == 0);
+  const auto ill = describe_fault(SIGILL, base, size, reinterpret_cast<const void*>(uintptr_t{0x1234}));
+  CHECK(ill.find("SIGILL at host 0x1234 (outside guest memory)\nhint: ") == 0);
+  CHECK(ill.find("AVX") != std::string::npos);
+  CHECK(describe_fault(SIGSEGV, base, size, reinterpret_cast<const void*>(uintptr_t{0x1234})).find("hint") ==
+        std::string::npos);
 }
 
 TEST_CASE("format_fault truncates safely", "[unit]") {

@@ -13,6 +13,8 @@ namespace lr::runtime {
 
 namespace {
 
+constexpr size_t kFaultBufSize = 256;
+
 struct Out {
   char* p;
   size_t cap;  // usable chars (excluding NUL)
@@ -63,7 +65,7 @@ struct Installed {
 Installed g_installed;
 
 void handler(int signo, siginfo_t* info, void*) {
-  char buf[160];
+  char buf[kFaultBufSize];
   size_t n = format_fault(buf, sizeof buf - 1, signo, g_installed.base, g_installed.size, info ? info->si_addr : nullptr);
   buf[n++] = '\n';
   ssize_t ignored = ::write(2, buf, n);
@@ -98,13 +100,17 @@ size_t format_fault(char* buf, size_t n, int signo, const uint8_t* base, uint64_
     o.str(" at host ");
     o.hex(reinterpret_cast<uintptr_t>(host), 1);
     o.str(" (outside guest memory)");
+    // For SIGILL si_addr is the faulting host PC: an instruction the host CPU lacks, most likely AVX
+    // (the game template compiles with -march=sandybridge).
+    if (signo == SIGILL)
+      o.str("\nhint: illegal host instruction; the game is built with -march=sandybridge and needs a CPU with AVX");
   }
   buf[o.len] = '\0';
   return o.len;
 }
 
 std::string describe_fault(int signo, const uint8_t* base, uint64_t size, const void* host_addr) {
-  char buf[160];
+  char buf[kFaultBufSize];
   size_t n = format_fault(buf, sizeof buf, signo, base, size, host_addr);
   return std::string(buf, n);
 }
