@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 // Exercises src/runtime/main.cpp end to end through `lr_fake_game`: main.cpp + a tiny hand-written "generated"
 // set (tests/support/fake_generated) + import stubs rendered by render_import_stubs. The guest image is a
 // synthetic ELF built in memory (XenonUtils parses it like an XEX).

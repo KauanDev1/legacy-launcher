@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 include(${CMAKE_CURRENT_SOURCE_DIR}/resources.cmake)
 
 add_library(lr_pipeline STATIC state.cpp runner.cpp game_config.cpp types.cpp process.cpp doctor.cpp

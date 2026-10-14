@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 // Hand-written stand-ins for recompiled guest functions.
 #include "ppc_recomp_shared.h"
 

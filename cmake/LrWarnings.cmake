@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 # Strict flags for LegacyRecomp's own targets. Never call this on submodule targets.
 function(lr_configure_target target)
   target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 #include <toml++/toml.hpp>
 
 #include <catch2/catch_test_macros.hpp>

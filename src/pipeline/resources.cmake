@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 # Stages the runtime resources into ${CMAKE_BINARY_DIR}/share/legacyrecomp (same layout as an install
 # prefix's share/legacyrecomp): tools/{XenonAnalyse,XenonRecomp,ppc_context.h}, config/minecraft-tu1/*, and the
 # game template inputs under runtime/:

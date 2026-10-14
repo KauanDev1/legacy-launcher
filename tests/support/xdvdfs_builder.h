@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 // Test helper: builds an in-memory XDVDFS image at an XGD2 partition offset.
 #pragma once
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 """Finds the XenonRecomp register save/restore helpers in a loaded Xbox 360 image.
 
 Input is the image dumped by `legacyrecomp inspect --dump-image <xex> <out.bin>` (byte 0 = base

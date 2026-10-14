@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 // Test tool: gen_import_stubs <ppc_recomp_shared.h> <out.cpp> — what the game template does with the real header.
 #include <cstdio>
 #include <fstream>

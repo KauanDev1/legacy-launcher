@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 #include "launcher/cli/progress_bar.h"
 
 #include <signal.h>

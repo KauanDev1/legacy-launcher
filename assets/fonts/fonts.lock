@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 # Provenance of the fonts in this directory (used by legacyrecomp-gui). Both families are licensed under the
 # SIL Open Font License 1.1 (LICENSE-Inter.txt, LICENSE-JetBrainsMono.txt), which allows redistribution.
 # The archive hashes were cross-checked against Arch Linux's inter-font (sha256) and ttf-jetbrains-mono (b2sum)

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 include(Catch)
 add_executable(lr_tests test_result.cpp test_sha256.cpp test_paths.cpp test_xdvdfs.cpp test_stfs.cpp test_xex2.cpp test_integration_formats.cpp test_runner.cpp test_game_config.cpp test_process.cpp test_doctor.cpp test_extract_verify.cpp test_recomp_config.cpp test_integration_pipeline.cpp test_switch_scan.cpp test_runtime_core.cpp test_loader.cpp test_kernel_registry.cpp test_import_stubs.cpp test_guest_thread.cpp test_fake_game.cpp test_build_stage.cpp test_integration_e2e.cpp test_cli_args.cpp test_progress_bar.cpp test_queue_sink.cpp test_gui_model.cpp)
 target_include_directories(lr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/support)

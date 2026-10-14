@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 // End to end on the real game: pipeline::run (doctor..build) into a data root, then launch the recompiled game
 // headless. M1 acceptance: the guest runs until the first unimplemented kernel import (exit 3), and a second run
 // executes no stage at all.

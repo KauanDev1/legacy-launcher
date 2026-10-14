@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- SPDX-License-Identifier: MIT -->
 # XEX2 (cabeçalho)
 
 `src/formats/xex2.{h,cpp}` lê apenas o cabeçalho de um executável Xbox 360 para inspeção e

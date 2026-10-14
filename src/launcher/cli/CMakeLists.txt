@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 add_library(lr_cli STATIC args.cpp progress_bar.cpp)
 target_include_directories(lr_cli PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 target_link_libraries(lr_cli PUBLIC lr_common lr_pipeline)

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 #include "pipeline/stages/extract_stage.h"
 
 #include <algorithm>

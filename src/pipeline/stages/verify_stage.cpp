@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 #include "pipeline/stages/verify_stage.h"
 
 #include "common/sha256.h"

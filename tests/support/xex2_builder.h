@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 // Test helper: builds an in-memory XEX2 header with optional headers.
 #pragma once
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 // Tiny stand-in for XenonRecomp's generated ppc_config.h (same macro shape, small constants).
 #pragma once
 #ifndef PPC_CONFIG_H_INCLUDED

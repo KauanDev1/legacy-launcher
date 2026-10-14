@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 // Test helper: builds an in-memory STFS package with consecutive files. Hash-table blocks are left
 // zeroed (the reader never looks at them); block placement uses its own level-0/1 formula so it is
 // independent of StfsPackage::block_to_offset.

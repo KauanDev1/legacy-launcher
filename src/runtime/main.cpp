@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 // Game entry point. NOT part of a prebuilt library: the game template compiles this file together with the
 // generated ppc_config.h / ppc_recomp_*.cpp / ppc_func_mapping.cpp and the generated import stubs, and links
 // lr_runtime_core with --whole-archive so strong LR_KERNEL_EXPORT definitions beat the weak stubs.

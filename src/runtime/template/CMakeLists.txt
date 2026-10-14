@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 # Game template: builds legacyrecomp-game from the XenonRecomp output and the prebuilt runtime.
 # Configured by the pipeline's build stage (src/pipeline/stages/build_stage.cpp), never by the main project:
 #   cmake -S <resources>/runtime/template -B <root>/work/build -G Ninja -DCMAKE_BUILD_TYPE=Release
