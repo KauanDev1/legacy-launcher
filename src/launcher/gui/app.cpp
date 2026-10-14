@@ -71,7 +71,7 @@ void App::refresh_from_disk() {
     return;
   }
   for (auto& row : stages_) {
-    if (row.state == StageState::Running) continue;
+    if (row.state != StageState::Pending) continue;
     if (store.value().complete_fingerprint(row.id)) {
       row.state = StageState::Cached;
       row.fraction = 1.0f;
@@ -218,6 +218,8 @@ void App::play() {
 }
 
 void App::draw_stage_table() {
+  ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.2f, 0.55f, 0.85f, 1));
+  struct PopColor { ~PopColor() { ImGui::PopStyleColor(); } } pop_color;
   if (!ImGui::BeginTable("stages", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) return;
   ImGui::TableSetupColumn("Etapa", ImGuiTableColumnFlags_WidthStretch, 3.0f);
   ImGui::TableSetupColumn("Estado", ImGuiTableColumnFlags_WidthStretch, 2.0f);
