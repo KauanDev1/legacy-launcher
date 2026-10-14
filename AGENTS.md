@@ -12,6 +12,8 @@ ctest --preset dev -L unit                                # fast tests, no game 
 LEGACYRECOMP_ISO=/path/to/game.iso ctest --preset dev -L integration
 ```
 
+Requirements: x86-64 CPU with AVX (the game is compiled with `-march=sandybridge`; `doctor` checks it), Clang ≥ 18, CMake ≥ 3.25, Ninja, SDL2, 8 GiB free disk.
+
 Binaries land in `build/dev/bin`. Only Clang is supported (CMake refuses other compilers). Our targets get strict flags through `lr_configure_target()` in `cmake/LrWarnings.cmake`; never apply it to submodules.
 
 Include root is `src/`: write `#include "common/result.h"`.

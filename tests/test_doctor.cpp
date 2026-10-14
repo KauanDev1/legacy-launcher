@@ -33,6 +33,8 @@ struct FakeProbe : DoctorProbe {
   }
   uint64_t total_ram() override { return ram; }
   bool pkg_config_exists(std::string_view) override { return sdl2; }
+  bool avx = true;
+  bool cpu_supports_avx() override { return avx; }
 };
 
 }  // namespace
@@ -107,6 +109,16 @@ TEST_CASE("doctor survives absurd or foreign version strings", "[unit]") {
   r = run_doctor(p, "/tmp");
   REQUIRE_FALSE(r);
   CHECK(r.error().code == ErrorCode::ToolMissing);
+}
+
+TEST_CASE("doctor fails on a CPU without AVX", "[unit]") {
+  FakeProbe p;
+  p.avx = false;
+  auto r = run_doctor(p, "/tmp");
+  REQUIRE_FALSE(r);
+  CHECK(r.error().code == ErrorCode::InsufficientResources);
+  CHECK(r.error().message == "CPU without AVX support");
+  CHECK(r.error().hint.find("-march=sandybridge") != std::string::npos);
 }
 
 TEST_CASE("doctor stage fingerprint is stable so a finished install stays cached", "[unit]") {

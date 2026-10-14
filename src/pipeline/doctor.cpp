@@ -83,7 +83,22 @@ bool SystemDoctorProbe::pkg_config_exists(std::string_view package) {
   return capture_output(*pc, {"--exists", std::string(package)}).ok();
 }
 
+bool SystemDoctorProbe::cpu_supports_avx() {
+#if defined(__x86_64__)
+  __builtin_cpu_init();
+  return __builtin_cpu_supports("avx");
+#else
+  return true;  // the template only adds -march=sandybridge on x86_64
+#endif
+}
+
 Result<DoctorReport> run_doctor(DoctorProbe& probe, const fs::path& root) {
+  // Checked first: no toolchain install can fix it. InsufficientResources (a property of the machine, like RAM/disk).
+  if (!probe.cpu_supports_avx())
+    return Error{ErrorCode::InsufficientResources, "CPU without AVX support",
+                 "the recompiled game is built for x86-64 with AVX (-march=sandybridge, as UnleashedRecomp does) and "
+                 "would crash with SIGILL on this CPU; an Intel Sandy Bridge / AMD Bulldozer (2011) or newer CPU is "
+                 "required"};
   LR_TRY(check_tool(probe, "clang++", 18, 0));
   LR_TRY(check_tool(probe, "cmake", 3, 25));
   LR_TRY(check_tool(probe, "ninja", 0, 0));

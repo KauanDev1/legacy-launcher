@@ -49,7 +49,9 @@ target_include_directories(legacyrecomp-game PRIVATE "${LR_GENERATED}" "${_rt}/i
 #                           respects the FP environment the code changes (rounding mode / flush-to-zero via MXCSR).
 #  -fexceptions             default, kept explicit: lr::kernel::UnimplementedImport unwinds through generated frames.
 #  -march=sandybridge       x86-64 baseline UnleashedRecomp targets; lets simde map ppc_context.h's VMX helpers to
-#                           real SSE4.1/AVX instructions instead of scalar fallbacks (the CPU must support AVX).
+#                           real SSE4.1/AVX instructions instead of scalar fallbacks. REQUIREMENT: the host CPU
+#                           must support AVX (2011+); the doctor stage refuses CPUs without it, and the runtime's
+#                           fault handler adds a hint when a SIGILL happens in host code.
 #  -Wno-*                   XenonRecomp output trips these by design; the template never uses -Werror.
 target_compile_options(legacyrecomp-game PRIVATE
   -O2 -fno-strict-aliasing -ffp-model=strict -fexceptions

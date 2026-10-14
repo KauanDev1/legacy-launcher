@@ -19,6 +19,8 @@ struct DoctorProbe {
   virtual Result<uint64_t> free_bytes(const std::filesystem::path& path) = 0;
   virtual uint64_t total_ram() = 0;
   virtual bool pkg_config_exists(std::string_view package) = 0;
+  // The game is compiled with -march=sandybridge (src/runtime/template/CMakeLists.txt): the host CPU needs AVX.
+  virtual bool cpu_supports_avx() = 0;
 };
 
 // Probe backed by the real system (PATH lookup, statvfs, sysconf, pkg-config).
@@ -28,14 +30,15 @@ struct SystemDoctorProbe : DoctorProbe {
   Result<uint64_t> free_bytes(const std::filesystem::path& path) override;
   uint64_t total_ram() override;
   bool pkg_config_exists(std::string_view package) override;
+  bool cpu_supports_avx() override;  // __builtin_cpu_supports("avx") on x86-64; true elsewhere
 };
 
 struct DoctorReport {
   std::vector<std::string> warnings;
 };
 
-// Requires clang++ >= 18, cmake >= 3.25, ninja, pkg-config sdl2 and 8 GiB free at root (or its
-// nearest existing parent). Less than 8 GiB of RAM only produces a warning.
+// Requires a CPU with AVX (InsufficientResources), clang++ >= 18, cmake >= 3.25, ninja, pkg-config sdl2 and 8 GiB
+// free at root (or its nearest existing parent). Less than 8 GiB of RAM only produces a warning.
 Result<DoctorReport> run_doctor(DoctorProbe& probe, const std::filesystem::path& root);
 
 }  // namespace lr::pipeline
