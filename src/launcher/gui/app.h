@@ -9,8 +9,10 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "launcher/gui/queue_sink.h"
+#include "launcher/gui/ui_model.h"
 #include "pipeline/types.h"
 
 namespace lr::gui {
@@ -39,13 +41,18 @@ class App {
   bool animating() const;
 
  private:
-  enum class StageState { Pending, Running, Done, Cached, Error };
   struct StageRow {
     explicit StageRow(pipeline::StageId i) : id(i) {}
     pipeline::StageId id;
     StageState state = StageState::Pending;
     float fraction = 0.0f;
+    float shown = 0.0f;  // eased fraction drawn on screen
     std::string message;
+    bool cancelled = false;
+  };
+  struct LogLine {
+    std::string text;
+    LogTone tone = LogTone::Normal;
   };
 
   void pump_events();
@@ -54,18 +61,30 @@ class App {
   void refresh_from_disk();
   void browse();
   void play();
-  void join_finished_threads();
   void add_log(std::string line);
-  void draw_stage_table();
+  bool has_iso() const { return iso_buf_[0] != 0; }
+
+  // Layout (one call per region of the window).
+  void draw_header();
+  void draw_image_card(bool compact);
+  void draw_install_card(float height);
+  void draw_play_card(float height);
+  void draw_log_panel(float height);
 
   Settings settings_;
   std::array<char, 1024> iso_buf_{};
   std::vector<StageRow> stages_;
-  std::deque<std::string> log_;
+  std::deque<LogLine> log_;
   bool log_scroll_ = false;
+  bool log_open_ = false;      // the "Registro" panel; opens by itself when an install fails
+  bool editing_path_ = false;  // the ISO path is being typed instead of browsed/dropped
+  bool focus_path_ = false;
+  int scroll_to_stage_ = -1;  // stepper row to bring into view (it just started or failed)
   bool build_ready_ = false;  // build stage complete and bin/legacyrecomp-game present
-  std::optional<Error> last_error_;
-  std::string status_;
+  std::optional<Error> install_error_;
+  std::optional<Error> game_error_;
+  std::string install_status_;
+  std::string game_status_;
   std::string browse_program_;  // zenity / kdialog, empty if neither is installed
 
   // Install worker. The Options live inside the thread's closure for the whole run (stages hold them by reference).

@@ -55,6 +55,7 @@ LegacyRecomp/
 │   ├── XenonRecomp/       #   (inclui XenonAnalyse e XenonUtils)
 │   ├── XenosRecomp/       #   (reservado; usado a partir do M3)
 │   ├── SDL/ imgui/ fmt/ tomlplusplus/ Catch2/
+├── assets/fonts/          # Inter + JetBrains Mono (OFL) da GUI, com fonts.lock
 ├── config/minecraft-tu1/
 │   ├── recomp.toml        # config do XenonRecomp (endereços achados por RE)
 │   └── hashes.toml        # SHA-256 esperados de cada arquivo de entrada/intermediário
@@ -149,6 +150,16 @@ legacyrecomp run     [--root DIR] [-- args do jogo]
 Uma janela ImGui com: seleção da ISO (diálogo de arquivo do SDL), botão Instalar, lista de
 etapas com status/progresso, painel de log rolável, botões Cancelar e Jogar. O pipeline roda numa
 thread de trabalho; a UI lê os eventos de uma fila protegida por mutex.
+
+Visual (Task 15b): tema escuro neutro com destaque verde, fontes Inter (interface) e JetBrains Mono
+(registro), ambas SIL OFL 1.1, versionadas em `assets/fonts/` (origem e SHA-256 em
+`assets/fonts/fonts.lock`) e instaladas em `share/legacyrecomp/fonts/`; sem elas a GUI usa a fonte
+padrão do ImGui. Layout: cabeçalho com selo de estado; à esquerda, o cartão "Imagem do jogo"
+(área de soltar a ISO, Procurar…, digitar caminho, pasta de dados) e o cartão Jogar; à direita, o
+cartão "Instalação" com as etapas em lista vertical (ícones desenhados, barra de progresso na
+etapa em andamento, alerta de erro inline); embaixo, o painel "Registro" recolhível, que abre
+sozinho quando a instalação falha. Tamanhos escalam com o DPI da tela; o código fica em
+`launcher/gui/{theme,widgets,ui_model}` (`ui_model` é puro e testado).
 
 ## 6. Runtime (esqueleto do M1)
 
