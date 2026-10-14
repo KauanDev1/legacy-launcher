@@ -20,6 +20,18 @@ add_subdirectory(thirdparty/XenonRecomp)
 add_subdirectory(thirdparty/Catch2)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/Catch2/extras")
 
+# Dear ImGui (SDL2 + SDL_Renderer2 backends) for the GUI launcher. Built without our strict flags (submodule).
+find_package(SDL2 QUIET)
+if(TARGET SDL2::SDL2)
+  set(LR_IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/imgui)
+  add_library(imgui STATIC
+    ${LR_IMGUI_DIR}/imgui.cpp ${LR_IMGUI_DIR}/imgui_draw.cpp ${LR_IMGUI_DIR}/imgui_tables.cpp
+    ${LR_IMGUI_DIR}/imgui_widgets.cpp
+    ${LR_IMGUI_DIR}/backends/imgui_impl_sdl2.cpp ${LR_IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp)
+  target_include_directories(imgui SYSTEM PUBLIC ${LR_IMGUI_DIR} ${LR_IMGUI_DIR}/backends)
+  target_link_libraries(imgui PUBLIC SDL2::SDL2)
+endif()
+
 add_subdirectory(src)
 add_subdirectory(tests)
 
