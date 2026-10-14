@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <unistd.h>
+
 #include <cstdint>
+#include <cstdlib>
+#include <iostream>
+#include <span>
 #include <cstdio>
 #include <fstream>
 #include <cstring>
@@ -8,6 +13,7 @@
 #include <string_view>
 #include <vector>
 
+#include "common/paths.h"
 #include "common/result.h"
 #include "common/sha256.h"
 #include "formats/reader.h"
@@ -15,11 +21,17 @@
 #include "formats/xdvdfs.h"
 #include "formats/xex2.h"
 
+#include "launcher/cli/args.h"
+#include "launcher/cli/progress_bar.h"
+#include "pipeline/doctor.h"
+#include "pipeline/pipeline.h"
+
 #include <image.h>
 
 namespace {
 
 using lr::Result;
+namespace fs = std::filesystem;
 using namespace lr::formats;
 
 constexpr int kMaxTreeDepth = 4;
@@ -202,32 +214,93 @@ Result<void> inspect_image(const std::string& xex_path, const char* dump_path) {
   return {};
 }
 
+int report_error(const lr::Error& e) {
+  std::fprintf(stderr, "error: %s\n", e.message.c_str());
+  if (!e.hint.empty()) std::fprintf(stderr, "hint: %s\n", e.hint.c_str());
+  return 1;
+}
+
+int run_inspect(const std::vector<std::string>& a) {
+  Result<void> r = lr::Error{lr::ErrorCode::InvalidFormat, "bad inspect arguments", "run `legacyrecomp --help` for usage"};
+  if (a.size() == 2 && a[0] == "--iso") r = inspect(a[1]);
+  else if (a.size() == 2 && a[0] == "--sections") r = inspect_image(a[1], nullptr);
+  else if (a.size() == 3 && a[0] == "--dump-image") r = inspect_image(a[1], a[2].c_str());
+  else {
+    report_error(r.error());
+    return 2;
+  }
+  return r ? 0 : report_error(r.error());
+}
+
+int run_doctor_cmd(const fs::path& root) {
+  lr::pipeline::SystemDoctorProbe probe;
+  auto report = lr::pipeline::run_doctor(probe, root);
+  if (!report) return report_error(report.error());
+  for (const auto& w : report.value().warnings) std::printf("warning: %s\n", w.c_str());
+  std::printf("doctor: all checks passed (data root: %s)\n", root.c_str());
+  return 0;
+}
+
+int run_install(const lr::cli::CliArgs& args, const fs::path& root) {
+  lr::pipeline::Options opts;
+  if (args.iso) opts.iso = *args.iso;
+  opts.root = root;
+  opts.force = args.force;
+  opts.jobs = args.jobs;
+
+  // Tools run in their own process group and never see the terminal's Ctrl+C; the handler sets the flag that
+  // ProgressBar::cancelled() reports, and the pipeline stops (killing the running tool) at its next check.
+  lr::cli::ProgressBar::install_sigint_handler();
+  lr::cli::ProgressBar bar(std::cout, ::isatty(STDOUT_FILENO) != 0);
+  auto r = lr::pipeline::run(opts, bar);
+  bar.finish();
+  if (!r) {
+    if (r.error().code == lr::ErrorCode::Cancelled) {
+      std::fprintf(stderr, "cancelled; finished stages stay cached, run the command again to continue\n");
+      return 130;
+    }
+    return report_error(r.error());
+  }
+  std::printf("done. Start the game with: legacyrecomp run\n");
+  return 0;
+}
+
+int run_game(const lr::cli::CliArgs& args, const fs::path& root) {
+  lr::pipeline::Options opts;
+  opts.root = root;
+  auto r = lr::pipeline::launch(opts, args.passthrough);
+  if (!r) return report_error(r.error());
+  if (r.value() == 3)
+    std::fprintf(stderr, "M1: game stopped at the first unimplemented kernel import (expected at this milestone).\n");
+  return r.value();
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-  Result<void> r = lr::Error{lr::ErrorCode::Internal, "", ""};
-  bool matched = false;
-  if (argc == 4 && std::strcmp(argv[1], "inspect") == 0 && std::strcmp(argv[2], "--iso") == 0) {
-    r = inspect(argv[3]);
-    matched = true;
-  } else if (argc == 4 && std::strcmp(argv[1], "inspect") == 0 && std::strcmp(argv[2], "--sections") == 0) {
-    r = inspect_image(argv[3], nullptr);
-    matched = true;
-  } else if (argc == 5 && std::strcmp(argv[1], "inspect") == 0 && std::strcmp(argv[2], "--dump-image") == 0) {
-    r = inspect_image(argv[3], argv[4]);
-    matched = true;
-  }
-  if (matched) {
-    if (!r) {
-      std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
-      std::fprintf(stderr, "hint: %s\n", r.error().hint.c_str());
-      return 1;
+  std::vector<std::string_view> args(argv + 1, argv + argc);
+  for (auto a : args) {
+    if (a == "--") break;
+    if (a == "--help" || a == "-h") {
+      std::fputs(std::string(lr::cli::usage_text()).c_str(), stdout);
+      return 0;
     }
-    return 0;
   }
-  std::fprintf(stderr,
-               "usage: legacyrecomp inspect --iso <path>\n"
-               "       legacyrecomp inspect --sections <xex>\n"
-               "       legacyrecomp inspect --dump-image <xex> <out.bin>\n");
-  return 2;
+  if (args.empty()) {
+    std::fputs(std::string(lr::cli::usage_text()).c_str(), stderr);
+    return 2;
+  }
+  auto parsed = lr::cli::parse_args(args);
+  if (!parsed) {
+    report_error(parsed.error());
+    return 2;
+  }
+  const lr::cli::CliArgs& a = parsed.value();
+  if (a.command == "inspect") return run_inspect(a.passthrough);
+
+  const fs::path root =
+      lr::cli::resolve_root(a.root, std::getenv("LEGACYRECOMP_ROOT"), std::getenv("XDG_DATA_HOME"), std::getenv("HOME"));
+  if (a.command == "doctor") return run_doctor_cmd(root);
+  if (a.command == "run") return run_game(a, root);
+  return run_install(a, root);  // install, build
 }
