@@ -148,7 +148,7 @@ void App::handle_progress(const pipeline::Progress& p) {
       }
       row.state = StageState::Running;
       row.fraction = p.fraction;
-      row.message = p.message == "start" ? "Iniciando…" : p.message;
+      row.message = stage_message(row.id, p.message);
     }
   }
 }

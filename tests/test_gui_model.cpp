@@ -88,3 +88,29 @@ TEST_CASE("ui_scale honours a valid LEGACYRECOMP_UI_SCALE override", "[unit]") {
   CHECK(ui_scale(144.0f, 1.0f, "0") == Approx(1.5f));
   CHECK(ui_scale(144.0f, 1.0f, "9") == Approx(1.5f));
 }
+
+TEST_CASE("stage_message translates the pipeline's progress messages", "[unit]") {
+  CHECK(stage_message(StageId::Doctor, "start") == "Iniciando…");
+  CHECK(stage_message(StageId::Extract, "package: Data/a.arc") == "Extraindo o pacote: Data/a.arc");
+  CHECK(stage_message(StageId::Extract, "title update: default.xexp") ==
+        "Extraindo a atualização: default.xexp");
+  CHECK(stage_message(StageId::Patch, "applying title update") == "Aplicando a atualização do título");
+  CHECK(stage_message(StageId::Patch, "writing patched image") == "Gravando o executável atualizado");
+  CHECK(stage_message(StageId::Analyse, "XenonAnalyse: scanning for jump tables") ==
+        "XenonAnalyse: procurando tabelas de salto");
+  CHECK(stage_message(StageId::Analyse, "scanning for jump tables (LegacyRecomp)") ==
+        "Procurando tabelas de salto (LegacyRecomp)");
+  CHECK(stage_message(StageId::Recompile, "Recompiling functions... 42%") == "Recompilando funções… 42%");
+  CHECK(stage_message(StageId::Recompile, "[x] Recompiling functions... 7.5%") == "Recompilando funções… 7.5%");
+  CHECK(stage_message(StageId::Build, "wrote 812 import stubs") == "812 stubs de importação gerados");
+  CHECK(stage_message(StageId::Build, "configuring the game build") == "Configurando a compilação do jogo");
+  CHECK(stage_message(StageId::Build, "compiling with 16 jobs") == "Compilando com 16 processos");
+  CHECK(stage_message(StageId::Build, "[12/345]") == "Compilando [12/345]");
+}
+
+TEST_CASE("stage_message never passes unknown English through", "[unit]") {
+  CHECK(stage_message(StageId::Verify, "hashing default.xex") == "Em andamento…");
+  CHECK(stage_message(StageId::Build, "something new") == "Em andamento…");
+  CHECK(stage_message(StageId::Build, "") == "Em andamento…");
+  CHECK(stage_message(StageId::Build, "wrote x import stubs") == "Em andamento…");
+}

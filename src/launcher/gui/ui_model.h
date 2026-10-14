@@ -12,12 +12,17 @@ namespace lr::gui {
 
 enum class StageState { Pending, Running, Done, Cached, Error };
 
-// Portuguese display text of a pipeline stage: Title Case name and a one-line description.
+// Portuguese display text of a pipeline stage: name (sentence case) and a one-line description.
 struct StageText {
   std::string_view title;
   std::string_view description;
 };
 StageText stage_text(pipeline::StageId id);
+
+// Portuguese version of a running stage's progress message (Progress::message, English, from the pipeline).
+// Known messages are translated (file names and counters kept); anything else becomes "Em andamento…", so the
+// stepper never shows raw English. The log keeps the raw lines.
+std::string stage_message(pipeline::StageId id, std::string_view raw);
 
 // The header's status pill. Precedence: an install in progress, then an error, then a complete build.
 enum class StatusPill { NotInstalled, Installing, Ready, Error };
