@@ -2,3 +2,4 @@
 add_subdirectory(common)
 add_subdirectory(formats)
 add_subdirectory(launcher/cli)
+add_subdirectory(pipeline)
