@@ -23,4 +23,10 @@ Result<std::string> build_fingerprint(const fs::path& generated, const fs::path&
 // Generated translation units are 1-3 MB of C++ each; one clang -O2 process peaks at ~0.3-1 GiB on them.
 unsigned build_jobs(unsigned requested, unsigned hardware_threads, uint64_t total_ram_bytes);
 
+// CMake refuses to reuse a build dir configured from another source dir ("does not match the source used to generate
+// cache") and never recovers. If <build_dir>/CMakeCache.txt exists and its CMAKE_HOME_DIRECTORY is not
+// `template_dir` (e.g. the launcher moved or was installed elsewhere), or the cache is unreadable / has no such
+// entry, removes `build_dir` and returns true. No cache -> false, nothing touched. IoError if removal fails.
+Result<bool> reset_stale_build_dir(const fs::path& build_dir, const fs::path& template_dir);
+
 }  // namespace lr::pipeline

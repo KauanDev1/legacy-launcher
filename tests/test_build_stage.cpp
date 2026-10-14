@@ -93,6 +93,35 @@ TEST_CASE("build_fingerprint fails without generated sources or runtime", "[unit
   CHECK(e.error().code == ErrorCode::NotFound);
 }
 
+TEST_CASE("reset_stale_build_dir wipes a build dir configured from another template", "[unit]") {
+  TempDir t;
+  const fs::path tmpl = t.path / "share" / "runtime" / "template", build = t.path / "work" / "build";
+  fs::create_directories(tmpl);
+
+  auto none = reset_stale_build_dir(build, tmpl);  // never configured
+  REQUIRE(none);
+  CHECK_FALSE(none.value());
+
+  write(build / "CMakeCache.txt", "# cache\nCMAKE_HOME_DIRECTORY:INTERNAL=" + tmpl.string() + "\nFOO:BOOL=ON\n");
+  write(build / "build.ninja", "x");
+  auto same = reset_stale_build_dir(build, tmpl / ".");
+  REQUIRE(same);
+  CHECK_FALSE(same.value());
+  CHECK(fs::exists(build / "build.ninja"));
+
+  write(build / "CMakeCache.txt", "CMAKE_HOME_DIRECTORY:INTERNAL=/old/prefix/share/legacyrecomp/runtime/template\n");
+  auto moved = reset_stale_build_dir(build, tmpl);
+  REQUIRE(moved);
+  CHECK(moved.value());
+  CHECK_FALSE(fs::exists(build));
+
+  write(build / "CMakeCache.txt", "garbage without the key\n");
+  auto corrupt = reset_stale_build_dir(build, tmpl);
+  REQUIRE(corrupt);
+  CHECK(corrupt.value());
+  CHECK_FALSE(fs::exists(build));
+}
+
 TEST_CASE("default_stages lists every stage in order", "[unit]") {
   SystemDoctorProbe probe;
   auto stages = default_stages(probe);

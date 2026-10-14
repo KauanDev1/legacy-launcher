@@ -85,6 +85,28 @@ Result<std::string> build_fingerprint(const fs::path& generated, const fs::path&
   return to_hex(sha.finish());
 }
 
+Result<bool> reset_stale_build_dir(const fs::path& build_dir, const fs::path& template_dir) {
+  std::error_code ec;
+  const fs::path cache = build_dir / "CMakeCache.txt";
+  if (!fs::exists(cache, ec) && !ec) return false;
+  bool stale = true;
+  if (std::ifstream f(cache, std::ios::binary); f) {
+    constexpr std::string_view kKey = "CMAKE_HOME_DIRECTORY:INTERNAL=";
+    for (std::string line; std::getline(f, line);) {
+      if (!line.starts_with(kKey)) continue;
+      const fs::path home = fs::path(line.substr(kKey.size())).lexically_normal();
+      std::error_code eq;
+      stale = home != template_dir.lexically_normal() && !fs::equivalent(home, template_dir, eq);
+      break;
+    }
+  }
+  if (!stale) return false;
+  fs::remove_all(build_dir, ec);
+  if (ec)
+    return Error{ErrorCode::IoError, "cannot remove stale build dir " + build_dir.string() + ": " + ec.message(), ""};
+  return true;
+}
+
 unsigned build_jobs(unsigned requested, unsigned hardware_threads, uint64_t total_ram_bytes) {
   if (requested) return requested;
   constexpr uint64_t kPerJob = 2ull << 30;
@@ -126,15 +148,21 @@ class BuildStage : public Stage {
       return Error{ErrorCode::InvalidFormat, "no kernel imports found in " + (p.generated / "ppc_recomp_shared.h").string(),
                    "rerun the recompile stage (--force recompile)"};
     const std::string stubs = render_import_stubs(names);
-    LR_TRY(atomic_write(p.generated / kStubsFile, std::as_bytes(std::span<const char>(stubs.data(), stubs.size()))));
+    auto current = read_text(p.generated / kStubsFile);
+    if (!current || current.value() != stubs)  // unchanged file keeps its mtime: no recompile / 48 MB relink
+      LR_TRY(atomic_write(p.generated / kStubsFile, std::as_bytes(std::span<const char>(stubs.data(), stubs.size()))));
     ctx.sink.on_progress({StageId::Build, 0.0f, "wrote " + std::to_string(names.size()) + " import stubs"});
 
-    // 2. Configure the template, 3. build it (incremental: work/build is kept between runs).
+    // 2. Configure the template, 3. build it (incremental: work/build is kept between runs, unless it was
+    // configured from another resources dir).
     const fs::path log = p.logs / "build.log";
     fs::remove(log, ec);  // one run per log
+    const fs::path template_dir = resources / "runtime" / "template";
+    LR_TRY_ASSIGN(reset, reset_stale_build_dir(p.build, template_dir));
+    if (reset) ctx.sink.on_log("removed " + p.build.string() + ": it was configured from another template directory");
     ToolInvocation configure;
     configure.program = "cmake";
-    configure.args = {"-S", (resources / "runtime" / "template").string(), "-B", p.build.string(), "-G", "Ninja",
+    configure.args = {"-S", template_dir.string(), "-B", p.build.string(), "-G", "Ninja",
                       "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_CXX_COMPILER=clang++",
                       "-DLR_RESOURCES=" + resources.string(), "-DLR_GENERATED=" + p.generated.string()};
     configure.log_file = log;
