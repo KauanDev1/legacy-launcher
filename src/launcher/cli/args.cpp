@@ -110,7 +110,12 @@ Result<CliArgs> parse_args(std::span<const std::string_view> args) {
   }
 
   if (cmd == "install" && !out.iso) return usage_error("install needs --iso <file>");
-  if (cmd == "build") out.force.insert(StageId::Recompile);
+  if (cmd == "build") {
+    // Forcing doctor or extract re-extracts from the ISO.
+    if (!out.iso && (out.force.count(StageId::Doctor) || out.force.count(StageId::Extract)))
+      return usage_error("--force doctor/extract needs --iso <file>", "use `legacyrecomp install --iso <file> --force extract`");
+    out.force.insert(StageId::Recompile);
+  }
   return out;
 }
 

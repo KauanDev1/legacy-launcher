@@ -79,3 +79,10 @@ TEST_CASE("data root precedence is flag, env, XDG default", "[unit]") {
   CHECK(resolve_root(std::nullopt, "", "/xdg", "/home/u") == path("/xdg/legacyrecomp"));
   CHECK(resolve_root(std::nullopt, nullptr, nullptr, "/home/u") == path("/home/u/.local/share/legacyrecomp"));
 }
+
+TEST_CASE("build --force extract or doctor without --iso is a usage error", "[unit]") {
+  CHECK_FALSE(parse({"build", "--force", "extract"}));
+  CHECK_FALSE(parse({"build", "--force", "doctor"}));
+  CHECK(parse({"build", "--force", "extract", "--iso", "g.iso"}));
+  CHECK(parse({"build", "--force", "patch"}));
+}
