@@ -120,6 +120,21 @@ Listadas também em `work/logs/analyse.log` a cada execução.
 | `0x826796FC` | guarda `cmpw` com sinal: muito provavelmente chamada virtual num vetor 2D, não `switch` | confirmar que não é tabela |
 | `0x8235B7AC`, `0x82366274`, `0x82366544`, `0x825495A0`, `0x82549798`, `0x82615C18`, `0x8261F07C`, `0x826282C0`, `0x8265827C`, `0x826582B4`, `0x826A6818`, `0x826A6910`, `0x826F92B4`, `0x82787348`, `0x82787370`, `0x82787398`, `0x8294E434`, `0x82A1A6C4`, `0x82AB1528`, `0x82B1AA00`, `0x82B1CA68` | sem guarda nem máscara, com carga indexada de endereço montado por `lis` | separar `switch` sem limite (ex.: `0x8235B7AC` e `0x82A1A6C4`, tabelas de deslocamentos de código) de chamadas por vetor de ponteiros (ex.: `0x82787348`, `0x82B1AA00`); para os `switch`, achar o número de casos e escrever `[[switch]]` manual |
 
+## Desvios condicionais para fora da função
+
+O XenonRecomp só traduz um desvio para fora da função quando é incondicional (`b` vira chamada + `return`);
+um desvio condicional (`bc`, `bdz`, ...) para fora vira `goto loc_X` sem rótulo, e o C++ gerado **não compila**
+(a etapa `recompile` não vê isso: só o `build` pega). Na TU1 o primeiro build completo (`ninja -k 0`, todos os
+215 arquivos) deu **um único** erro desse tipo:
+
+| Função | `.pdata` | Corrigida | Evidência |
+|---|---|---|---|
+| `0x82814AE8` | tamanho `0x29C` (até `0x82814D84`, exclusivo) | `0x2A0` em `[main] functions` | `switch` em cadeia de `bdz` (`mtctr` + 7 `bdz`) em `0x82814B3C`–`0x82814B54`; os dois últimos casos (`0x82814B50`, `0x82814B54`) saltam para `0x82814D84`, a palavra nula de preenchimento logo após o `b` final da função e antes de `0x82814D88` (`mflr r12`, início da próxima). É o alvo "inalcançável" que o compilador gera para casos impossíveis. |
+
+Com a função estendida em 4 bytes o XenonRecomp emite o rótulo `loc_82814D84` (a palavra nula não gera
+código, e cair nela retorna da função; no hardware seria instrução ilegal). Confirmado pelo build: 0 erros.
+Pendência para revisão humana: confirmar no Ghidra que os casos 6 e 7 são de fato impossíveis.
+
 ## Resultado do XenonRecomp
 
 Com esta configuração o XenonRecomp termina com código 0 e **nenhuma linha `ERROR:`** (a etapa `recompile`

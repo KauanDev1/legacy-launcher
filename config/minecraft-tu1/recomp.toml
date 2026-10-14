@@ -30,3 +30,9 @@ invalid_instructions = [
     { data = 0x82B62F1C, size = 8 }, # thunk __imp____C_specific_handler + dado, antes de 91 funções
     { data = 0x828C5170, size = 8 }, # handler próprio de 0x828C514C
 ]
+
+# Fronteiras de função corrigidas à mão (evidência em docs/reverse-engineering/addresses.md,
+# "Desvios condicionais para fora da função"). Têm prioridade sobre o .pdata e sobre work/analysis/functions.toml.
+functions = [
+    { address = 0x82814AE8, size = 0x2A0 }, # .pdata: 0x29C; bdz em 0x82814B50/0x82814B54 saltam para 0x82814D84
+]
