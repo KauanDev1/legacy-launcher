@@ -176,6 +176,13 @@ TEST_CASE("install_function_table rejects bad mappings", "[unit]") {
   auto mis = try_one(0x82200002);
   REQUIRE_FALSE(mis.ok());
   CHECK(mis.error().message.find("aligned") != std::string::npos);
+  // wrapping / boundary table offsets must be rejected, not wrapped
+  for (uint64_t bad : {UINT64_MAX - 7, UINT64_MAX, r.value().size()}) {
+    const FuncMapping w[] = {{0x82200010, f}};
+    auto wr = install_function_table(r.value(), bad, 0x82200000, 0x1000, w);
+    REQUIRE_FALSE(wr.ok());
+    CHECK(wr.error().code == lr::ErrorCode::InvalidFormat);
+  }
   // slot beyond guest memory
   const FuncMapping m[] = {{0x82200000, f}};
   CHECK_FALSE(install_function_table(r.value(), 0x1'0000'0000ull - 4, 0x82200000, 0x1000, m).ok());

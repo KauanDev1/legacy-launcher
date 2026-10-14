@@ -18,11 +18,13 @@ Result<void> install_function_table(const GuestMemory& mem, uint64_t table_offse
       return Error{ErrorCode::InvalidFormat, where + " is outside the code range", ""};
     }
     if (m.guest % 4 != 0) return Error{ErrorCode::InvalidFormat, where + " is not 4-byte aligned", ""};
-    const uint64_t slot = table_offset + static_cast<uint64_t>(m.guest - code_base) * 2;
-    if (slot > mem.size() || mem.size() - slot < sizeof(void*)) {
+    // Bound before adding so a huge table_offset cannot wrap uint64.
+    const uint64_t delta = static_cast<uint64_t>(m.guest - code_base) * 2;
+    if (table_offset > mem.size() || delta > mem.size() - table_offset ||
+        mem.size() - table_offset - delta < sizeof(void*)) {
       return Error{ErrorCode::InvalidFormat, where + " maps to a table slot outside guest memory", ""};
     }
-    std::memcpy(mem.base() + slot, &m.host, sizeof(void*));
+    std::memcpy(mem.base() + table_offset + delta, &m.host, sizeof(void*));
   }
   return {};
 }
