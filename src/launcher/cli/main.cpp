@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -12,6 +14,8 @@
 #include "formats/stfs.h"
 #include "formats/xdvdfs.h"
 #include "formats/xex2.h"
+
+#include <image.h>
 
 namespace {
 
@@ -158,11 +162,62 @@ Result<void> inspect(const std::string& iso_path) {
   return {};
 }
 
+Result<std::vector<uint8_t>> load_bytes(const std::string& path) {
+  std::ifstream f(path, std::ios::binary | std::ios::ate);
+  if (!f) return lr::Error{lr::ErrorCode::IoError, "cannot open " + path, ""};
+  auto size = f.tellg();
+  if (size < 0) return lr::Error{lr::ErrorCode::IoError, "cannot stat " + path, ""};
+  std::vector<uint8_t> data(static_cast<size_t>(size));
+  f.seekg(0);
+  f.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
+  if (!f) return lr::Error{lr::ErrorCode::IoError, "cannot read " + path, ""};
+  return data;
+}
+
+// Loads an XEX the way XenonRecomp/XenonAnalyse do (XenonUtils Image::ParseImage: decrypt,
+// decompress, map PE sections, replace import thunks) and prints its layout. With `dump_path`,
+// also writes the loaded image (byte 0 = base address) so byte patterns can be scanned.
+Result<void> inspect_image(const std::string& xex_path, const char* dump_path) {
+  LR_TRY_ASSIGN(bytes, load_bytes(xex_path));
+  if (bytes.size() < 0x18 || bytes[0] != 'X' || bytes[1] != 'E' || bytes[2] != 'X' || bytes[3] != '2')
+    return lr::Error{lr::ErrorCode::InvalidFormat, xex_path + " is not an XEX2 file", ""};
+  Image image = Image::ParseImage(bytes.data(), bytes.size());
+  if (!image.data || image.size == 0)
+    return lr::Error{lr::ErrorCode::InvalidFormat, "XenonUtils could not load " + xex_path,
+                     "encrypted/compressed variants other than retail AES + basic/LZX are unsupported"};
+  std::printf("base=0x%08zX size=0x%08X entry=0x%08zX\n", image.base, image.size, image.entry_point);
+  for (const auto& sec : image.sections) {
+    std::printf("section name=%-8.8s base=0x%08zX size=0x%08X flags=%s\n", sec.name.c_str(), sec.base, sec.size,
+                (sec.flags & SectionFlags_Code) ? "code" : "data");
+  }
+  for (const auto& sym : image.symbols)
+    std::printf("import name=%s address=0x%08zX size=0x%zX\n", sym.name.c_str(), sym.address, sym.size);
+  if (dump_path) {
+    std::ofstream out(dump_path, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(image.data.get()), static_cast<std::streamsize>(image.size));
+    out.close();
+    if (!out) return lr::Error{lr::ErrorCode::IoError, std::string("cannot write ") + dump_path, ""};
+    std::printf("dumped 0x%X bytes to %s\n", image.size, dump_path);
+  }
+  return {};
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+  Result<void> r = lr::Error{lr::ErrorCode::Internal, "", ""};
+  bool matched = false;
   if (argc == 4 && std::strcmp(argv[1], "inspect") == 0 && std::strcmp(argv[2], "--iso") == 0) {
-    auto r = inspect(argv[3]);
+    r = inspect(argv[3]);
+    matched = true;
+  } else if (argc == 4 && std::strcmp(argv[1], "inspect") == 0 && std::strcmp(argv[2], "--sections") == 0) {
+    r = inspect_image(argv[3], nullptr);
+    matched = true;
+  } else if (argc == 5 && std::strcmp(argv[1], "inspect") == 0 && std::strcmp(argv[2], "--dump-image") == 0) {
+    r = inspect_image(argv[3], argv[4]);
+    matched = true;
+  }
+  if (matched) {
     if (!r) {
       std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
       std::fprintf(stderr, "hint: %s\n", r.error().hint.c_str());
@@ -170,6 +225,9 @@ int main(int argc, char** argv) {
     }
     return 0;
   }
-  std::fprintf(stderr, "usage: legacyrecomp inspect --iso <path>\n");
+  std::fprintf(stderr,
+               "usage: legacyrecomp inspect --iso <path>\n"
+               "       legacyrecomp inspect --sections <xex>\n"
+               "       legacyrecomp inspect --dump-image <xex> <out.bin>\n");
   return 2;
 }
