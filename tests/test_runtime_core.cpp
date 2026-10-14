@@ -58,3 +58,72 @@ TEST_CASE("GuestMemory reserves 4 GiB and translates guest addresses", "[unit]")
 TEST_CASE("GuestMemory::reserve rejects zero size", "[unit]") {
   CHECK_FALSE(GuestMemory::reserve(0).ok());
 }
+
+#include <sys/mman.h>
+
+#include <csignal>
+#include <string>
+
+#include "runtime/fault.h"
+
+using namespace lr::runtime;
+
+TEST_CASE("guest_address_of maps host pointers into guest space", "[unit]") {
+  alignas(16) static uint8_t fake[16];  // never dereferenced beyond the array
+  const uint8_t* base = fake;
+  CHECK(guest_address_of(base, 16, base + 4) == std::optional<uint32_t>(4));
+  CHECK(guest_address_of(base, 16, base) == std::optional<uint32_t>(0));
+  CHECK_FALSE(guest_address_of(base, 16, base + 16).has_value());
+  CHECK_FALSE(guest_address_of(base, 16, nullptr).has_value());
+}
+
+TEST_CASE("describe_fault formats guest and host faults", "[unit]") {
+  const uint8_t* base = reinterpret_cast<const uint8_t*>(uintptr_t{0x7000'0000'0000});
+  const uint64_t size = 0x1'0000'0000ull;
+  CHECK(describe_fault(SIGSEGV, base, size, base + 0x82001234) == "SIGSEGV at guest 0x82001234");
+  CHECK(describe_fault(SIGBUS, base, size, base + 0x10) == "SIGBUS at guest 0x00000010");
+  CHECK(describe_fault(SIGILL, base, size, base + 1) == "SIGILL at guest 0x00000001");
+  auto out = describe_fault(SIGSEGV, base, size, reinterpret_cast<const void*>(uintptr_t{0x1234}));
+  CHECK(out == "SIGSEGV at host 0x1234 (outside guest memory)");
+  CHECK(describe_fault(99, base, size, nullptr).find("signal 99") == 0);
+}
+
+TEST_CASE("format_fault truncates safely", "[unit]") {
+  const uint8_t* base = reinterpret_cast<const uint8_t*>(uintptr_t{0x7000'0000'0000});
+  char buf[8];
+  size_t n = format_fault(buf, sizeof buf, SIGSEGV, base, 0x1'0000'0000ull, base + 0x10);
+  CHECK(n == 7);
+  CHECK(std::string(buf) == "SIGSEGV");
+  CHECK(format_fault(buf, 0, SIGSEGV, base, 1, base) == 0);
+}
+
+#include <sys/wait.h>
+#include <unistd.h>
+
+TEST_CASE("install_fault_handlers reports a guest fault (forked child)", "[unit]") {
+  auto r = GuestMemory::reserve(0x1'0000'0000ull);
+  REQUIRE(r.ok());
+  int fds[2];
+  REQUIRE(::pipe(fds) == 0);
+  pid_t pid = ::fork();
+  REQUIRE(pid >= 0);
+  if (pid == 0) {
+    ::dup2(fds[1], 2);
+    ::close(fds[0]);
+    install_fault_handlers(r.value());
+    // Make the page inaccessible, then touch it: SIGSEGV at a known guest address.
+    ::mprotect(r.value().base() + 0x82000000ull, 4096, PROT_NONE);
+    *r.value().translate<volatile uint32_t>(0x82000010) = 1;
+    ::_exit(0);  // not reached
+  }
+  ::close(fds[1]);
+  char buf[256] = {};
+  ssize_t n = ::read(fds[0], buf, sizeof buf - 1);
+  ::close(fds[0]);
+  int status = 0;
+  REQUIRE(::waitpid(pid, &status, 0) == pid);
+  REQUIRE(WIFEXITED(status));
+  CHECK(WEXITSTATUS(status) == 4);
+  REQUIRE(n > 0);
+  CHECK(std::string(buf).find("SIGSEGV at guest 0x82000010") == 0);
+}
