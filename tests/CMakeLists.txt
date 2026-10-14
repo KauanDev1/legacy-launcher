@@ -1,9 +1,29 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 include(Catch)
-add_executable(lr_tests test_result.cpp test_sha256.cpp test_paths.cpp test_xdvdfs.cpp test_stfs.cpp test_xex2.cpp test_integration_formats.cpp test_runner.cpp test_game_config.cpp test_process.cpp test_doctor.cpp test_extract_verify.cpp test_recomp_config.cpp test_integration_pipeline.cpp test_switch_scan.cpp test_runtime_core.cpp test_loader.cpp test_kernel_registry.cpp test_import_stubs.cpp test_guest_thread.cpp)
+add_executable(lr_tests test_result.cpp test_sha256.cpp test_paths.cpp test_xdvdfs.cpp test_stfs.cpp test_xex2.cpp test_integration_formats.cpp test_runner.cpp test_game_config.cpp test_process.cpp test_doctor.cpp test_extract_verify.cpp test_recomp_config.cpp test_integration_pipeline.cpp test_switch_scan.cpp test_runtime_core.cpp test_loader.cpp test_kernel_registry.cpp test_import_stubs.cpp test_guest_thread.cpp test_fake_game.cpp)
 target_include_directories(lr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(lr_tests PRIVATE lr_common lr_formats lr_pipeline lr_runtime_core XenonUtils tomlplusplus::tomlplusplus Catch2::Catch2WithMain)
 lr_configure_target(lr_tests)
 catch_discover_tests(lr_tests ADD_TAGS_AS_LABELS PROPERTIES TIMEOUT 3600)
 target_compile_definitions(lr_tests PRIVATE LR_SOURCE_DIR="${CMAKE_SOURCE_DIR}" LR_RESOURCES_DIR="${LR_RESOURCES_DIR}")
 add_dependencies(lr_tests lr_resources)
+
+# --- fake game: main.cpp + hand-written "generated" code + stubs rendered by render_import_stubs ---
+find_package(SDL2 QUIET)
+if(TARGET SDL2::SDL2)
+  set(LR_FAKE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/support/fake_generated)
+  add_executable(lr_gen_import_stubs support/gen_import_stubs.cpp)
+  target_link_libraries(lr_gen_import_stubs PRIVATE lr_pipeline lr_common)
+  lr_configure_target(lr_gen_import_stubs)
+  set(LR_FAKE_STUBS ${CMAKE_CURRENT_BINARY_DIR}/fake_import_stubs.cpp)
+  add_custom_command(OUTPUT ${LR_FAKE_STUBS}
+    COMMAND lr_gen_import_stubs ${LR_FAKE_DIR}/ppc_recomp_shared.h ${LR_FAKE_STUBS}
+    DEPENDS lr_gen_import_stubs ${LR_FAKE_DIR}/ppc_recomp_shared.h VERBATIM)
+  add_executable(lr_fake_game ${CMAKE_SOURCE_DIR}/src/runtime/main.cpp ${LR_FAKE_DIR}/ppc_func_mapping.cpp
+    ${LR_FAKE_DIR}/fake_recomp.cpp ${LR_FAKE_DIR}/fake_kernel.cpp ${LR_FAKE_STUBS})
+  target_include_directories(lr_fake_game PRIVATE ${LR_FAKE_DIR})
+  target_link_libraries(lr_fake_game PRIVATE lr_runtime_core XenonUtils SDL2::SDL2)
+  lr_configure_target(lr_fake_game)
+  add_dependencies(lr_tests lr_fake_game)
+  target_compile_definitions(lr_tests PRIVATE LR_FAKE_GAME_PATH="$<TARGET_FILE:lr_fake_game>")
+endif()

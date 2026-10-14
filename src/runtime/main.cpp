@@ -1,0 +1,160 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Game entry point. NOT part of a prebuilt library: the game template compiles this file together with the
+// generated ppc_config.h / ppc_recomp_*.cpp / ppc_func_mapping.cpp and the generated import stubs, and links
+// lr_runtime_core with --whole-archive so strong LR_KERNEL_EXPORT definitions beat the weak stubs.
+//
+// Usage: <game> --image <xex> [--data <dir>] [--headless] [--coverage]
+// Exit codes: 0 ok (also: window closed by the user), 2 usage/load error, 3 unimplemented import, 4 fault.
+
+#include <SDL.h>
+#include <unistd.h>
+
+#include <atomic>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "ppc_config.h"
+#include "ppc_context.h"
+#include "runtime/fault.h"
+#include "runtime/func_table.h"
+#include "runtime/guest_memory.h"
+#include "runtime/guest_thread.h"
+#include "runtime/kernel/registry.h"
+#include "runtime/loader.h"
+
+// Emitted by lr::pipeline::render_import_stubs.
+extern const char* const lr_import_names[];
+extern const size_t lr_import_count;
+
+namespace {
+
+using namespace lr::runtime;
+
+struct Options {
+  std::string image;
+  std::string data;
+  bool headless = false;
+  bool coverage = false;
+};
+
+int usage(const char* msg) {
+  if (msg) std::fprintf(stderr, "error: %s\n", msg);
+  std::fprintf(stderr, "usage: game --image <xex> [--data <dir>] [--headless] [--coverage]\n");
+  return kExitUsage;
+}
+
+int print_coverage() {
+  size_t done = 0;
+  std::printf("| Import | Status |\n|---|---|\n");
+  for (size_t i = 0; i < lr_import_count; ++i) {
+    const bool impl = lr::kernel::is_implemented(lr_import_names[i]);
+    done += impl;
+    std::printf("| %s | %s |\n", lr_import_names[i], impl ? "implemented" : "missing");
+  }
+  std::printf("\nImplemented: %zu / %zu\n", done, lr_import_count);
+  return 0;
+}
+
+// Runs the guest on a helper thread and keeps the SDL window alive on the main thread.
+int run_with_window(GuestMemory& mem, uint32_t entry, GuestEntryFn* fn) {
+  if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+    std::fprintf(stderr, "error: SDL_Init failed: %s (use --headless to run without a window)\n", SDL_GetError());
+    return kExitUsage;
+  }
+  SDL_Window* win = SDL_CreateWindow("LegacyRecomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, 0);
+  if (!win) {
+    std::fprintf(stderr, "error: SDL_CreateWindow failed: %s (use --headless to run without a window)\n", SDL_GetError());
+    SDL_Quit();
+    return kExitUsage;
+  }
+  std::atomic<bool> done{false};
+  std::atomic<int> rc{0};
+  std::thread runner([&] {
+    rc = run_guest(mem, entry, fn);
+    done = true;
+  });
+  bool closed = false;
+  while (!done && !closed) {
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev)) closed = closed || ev.type == SDL_QUIT;
+    SDL_Delay(5);
+  }
+  if (closed && !done) {
+    // The user closed the window while the guest is still running: report success and take the guest down with us.
+    std::fflush(nullptr);
+    _exit(0);
+  }
+  runner.join();
+  SDL_DestroyWindow(win);
+  SDL_Quit();
+  return rc;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  Options opt;
+  for (int i = 1; i < argc; ++i) {
+    const std::string a = argv[i];
+    if (a == "--headless") opt.headless = true;
+    else if (a == "--coverage") opt.coverage = true;
+    else if (a == "--image" || a == "--data") {
+      if (i + 1 >= argc) return usage(("missing value for " + a).c_str());
+      (a == "--image" ? opt.image : opt.data) = argv[++i];
+    } else {
+      return usage(("unknown argument " + a).c_str());
+    }
+  }
+  if (opt.coverage) return print_coverage();
+  if (opt.image.empty()) return usage("--image is required");
+
+  std::ifstream f(opt.image, std::ios::binary);
+  if (!f) {
+    std::fprintf(stderr, "error: cannot read %s\n", opt.image.c_str());
+    return kExitUsage;
+  }
+  const std::vector<char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+
+  auto mem = GuestMemory::reserve(0x1'0000'0000ull + PPC_CODE_SIZE * 2);
+  if (!mem) {
+    std::fprintf(stderr, "error: %s\n", mem.error().message.c_str());
+    return kExitUsage;
+  }
+  auto img = load_image(mem.value(), std::as_bytes(std::span(bytes)));
+  if (!img) {
+    std::fprintf(stderr, "error: cannot load %s: %s\n", opt.image.c_str(), img.error().message.c_str());
+    return kExitUsage;
+  }
+  if (img.value().base != PPC_IMAGE_BASE) {
+    std::fprintf(stderr, "error: image base 0x%08X does not match the recompiled build (0x%08llX)\n", img.value().base,
+                 static_cast<unsigned long long>(PPC_IMAGE_BASE));
+    return kExitUsage;
+  }
+
+  std::vector<FuncMapping> maps;
+  GuestEntryFn* entry_fn = nullptr;
+  for (const PPCFuncMapping* m = PPCFuncMappings; m->host != nullptr; ++m) {
+    maps.push_back({static_cast<uint32_t>(m->guest), reinterpret_cast<void*>(m->host)});
+    if (m->guest == img.value().entry) entry_fn = m->host;
+  }
+  if (auto r = install_function_table(mem.value(), PPC_IMAGE_BASE + PPC_IMAGE_SIZE, PPC_CODE_BASE, PPC_CODE_SIZE, maps); !r) {
+    std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
+    return kExitUsage;
+  }
+  if (!entry_fn) {
+    std::fprintf(stderr, "error: no recompiled function at entry point 0x%08X\n", img.value().entry);
+    return kExitUsage;
+  }
+  if (auto r = install_fault_handlers(mem.value()); !r) {
+    std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
+    return kExitUsage;
+  }
+
+  if (opt.headless) return run_guest(mem.value(), img.value().entry, entry_fn);
+  return run_with_window(mem.value(), img.value().entry, entry_fn);
+}
