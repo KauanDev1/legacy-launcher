@@ -20,3 +20,12 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/Catch2/ext
 
 add_subdirectory(src)
 add_subdirectory(tests)
+
+# Install layout mirrors the build tree: <prefix>/bin/legacyrecomp* next to <prefix>/share/legacyrecomp (resources:
+# tools, config, runtime libs/headers/template), which lr::resources_dir finds as <exe dir>/../share/legacyrecomp.
+foreach(_lr_exe legacyrecomp legacyrecomp-gui)
+  if(TARGET ${_lr_exe})
+    install(TARGETS ${_lr_exe} RUNTIME DESTINATION bin)
+  endif()
+endforeach()
+install(DIRECTORY "${LR_RESOURCES_DIR}/" DESTINATION share/legacyrecomp USE_SOURCE_PERMISSIONS)
