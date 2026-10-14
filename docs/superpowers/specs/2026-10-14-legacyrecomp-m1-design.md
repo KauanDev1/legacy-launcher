@@ -147,7 +147,8 @@ legacyrecomp run     [--root DIR] [-- args do jogo]
 
 ### 5.3 GUI
 
-Uma janela ImGui com: seleção da ISO (diálogo de arquivo do SDL), botão Instalar, lista de
+Uma janela ImGui com: seleção da ISO (arrastar e soltar, diálogo do `zenity`/`kdialog` ou caminho
+digitado), botão Instalar, lista de
 etapas com status/progresso, painel de log rolável, botões Cancelar e Jogar. O pipeline roda numa
 thread de trabalho; a UI lê os eventos de uma fila protegida por mutex.
 
@@ -159,7 +160,7 @@ padrão do ImGui. Layout: cabeçalho com selo de estado; à esquerda, o cartão 
 cartão "Instalação" com as etapas em lista vertical (ícones desenhados, barra de progresso na
 etapa em andamento, alerta de erro inline); embaixo, o painel "Registro" recolhível, que abre
 sozinho quando a instalação falha. Tamanhos escalam com o DPI da tela; o código fica em
-`launcher/gui/{theme,widgets,ui_model}` (`ui_model` é puro e testado).
+`launcher/gui/{theme,widgets,ui_model}` (`ui_model` é puro e testado). Uso e opções: `docs/gui.md`.
 
 ## 6. Runtime (esqueleto do M1)
 
