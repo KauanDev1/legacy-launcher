@@ -42,19 +42,21 @@ add_executable(legacyrecomp-game
 # Generated dir first: ppc_config.h / ppc_context.h must be the game's own.
 target_include_directories(legacyrecomp-game PRIVATE "${LR_GENERATED}" "${_rt}/include" "${_rt}/include/simde")
 
-# Flags (documented in docs/reverse-engineering/README.md, "Compilar o jogo"):
+# Flags (XenonRecomp's README asks only for Clang; the rest follows UnleashedRecomp, the reference XenonRecomp game):
 #  -O2                      Release; the generated code is far too slow and large at -O0.
 #  -fno-strict-aliasing     generated code type-puns PPCRegister / guest memory (UnleashedRecomp uses it too).
+#  -ffp-model=strict        UnleashedRecomp's setting for the generated code: no FMA contraction, and the compiler
+#                           respects the FP environment the code changes (rounding mode / flush-to-zero via MXCSR).
 #  -fexceptions             default, kept explicit: lr::kernel::UnimplementedImport unwinds through generated frames.
 #  -march=sandybridge       x86-64 baseline UnleashedRecomp targets; lets simde map ppc_context.h's VMX helpers to
 #                           real SSE4.1/AVX instructions instead of scalar fallbacks (the CPU must support AVX).
 #  -Wno-*                   XenonRecomp output trips these by design; the template never uses -Werror.
 target_compile_options(legacyrecomp-game PRIVATE
-  -O2 -fno-strict-aliasing -fexceptions
+  -O2 -fno-strict-aliasing -ffp-model=strict -fexceptions
   $<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=sandybridge>
   -Wno-switch -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-label
   -Wno-null-arithmetic -Wno-null-conversion -Wno-tautological-undefined-compare -Wno-void-pointer-to-int-cast
-  -Wno-int-to-void-pointer-cast -Wno-invalid-offsetof)
+  -Wno-int-to-void-pointer-cast -Wno-invalid-offsetof -Wno-c++23-extensions)
 
 # --whole-archive: every strong LR_KERNEL_EXPORT in the runtime must win over the weak stubs in import_stubs.cpp,
 # even when nothing else references its object file.
