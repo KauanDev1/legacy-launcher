@@ -39,7 +39,7 @@ Namespaces: `lr`, `lr::formats`, `lr::pipeline`, `lr::runtime`, `lr::kernel`.
 - Every commit passes `ctest --preset dev -L unit`. Conventional Commits, one commit per task step marked "Commit", ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - External tools are launched with `posix_spawn` and an argv vector, never through a shell.
 
-Also: GPL-3.0; every new source file starts with `// SPDX-License-Identifier: GPL-3.0-or-later`; code, identifiers and commit messages in English, `docs/` prose in Portuguese.
+Also: MIT license (changed from GPL-3.0 to MIT on 2026-10-14 by the project owner), see `docs/adr/0002-license.md`; every new source file starts with `// SPDX-License-Identifier: MIT` (`#` comment in CMake/Python/shell); never copy code from UnleashedRecomp (GPL-3.0), use it only as a reference; code, identifiers and commit messages in English, `docs/` prose in Portuguese.
 
 ## Docs
 

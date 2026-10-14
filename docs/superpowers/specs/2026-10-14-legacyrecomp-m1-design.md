@@ -25,7 +25,7 @@ primeiro import de kernel não implementado.
 | Launcher | CLI **e** GUI no M1, sobre a mesma biblioteca |
 | Stack | C++20, CMake + Ninja, Clang ≥ 18, SDL2, Dear ImGui |
 | Abordagem | Submódulos hedge-dev (XenonRecomp/XenonAnalyse/XenonUtils, XenosRecomp) + runtime próprio, usando UnleashedRecomp como referência |
-| Licença | **GPL-3.0** (permite portar trechos do UnleashedRecomp legalmente) |
+| Licença | **MIT** (alterada de GPL-3.0 para MIT em 2026-10-14 pelo dono do projeto). A GPL-3.0 tinha sido escolhida para permitir portar trechos do UnleashedRecomp; agora ele é só referência e não se copia código dele. Ver `docs/adr/0002-license.md` |
 | Versão alvo | XEX do pacote XBLA **+ Title Update 1** aplicado (ambos presentes no disco) |
 | Idioma | Docs em português; código, identificadores e mensagens de commit em inglês |
 
@@ -50,7 +50,7 @@ Leitura somente-leitura da ISO `Minecraft - Xbox 360 Edition (World).iso` (7,8 G
 ```
 LegacyRecomp/
 ├── CMakeLists.txt, CMakePresets.json
-├── LICENSE, README.md, AGENTS.md, CLAUDE.md, .gitignore
+├── LICENSE (MIT), README*.md (7 idiomas), AGENTS.md, CLAUDE.md, .gitignore
 ├── thirdparty/            # submódulos fixados em commit
 │   ├── XenonRecomp/       #   (inclui XenonAnalyse e XenonUtils)
 │   ├── XenosRecomp/       #   (reservado; usado a partir do M3)
@@ -204,7 +204,7 @@ sozinho quando a instalação falha. Tamanhos escalam com o DPI da tela; o códi
 - `docs/`: `architecture.md`, `pipeline.md`, `formats/{xdvdfs,stfs,xex2}.md`,
   `reverse-engineering/` (guia Ghidra + XEXLoaderWV, tabela de endereços com a forma como cada
   um foi encontrado), `kernel-coverage.md`, `roadmap.md`, `adr/0001-static-recompilation.md`,
-  `adr/0002-gpl-3.md`, `superpowers/{specs,plans}/`.
+  `adr/0002-license.md` (era `adr/0002-gpl-3.md`; licença alterada de GPL-3.0 para MIT em 2026-10-14 pelo dono do projeto), `superpowers/{specs,plans}/`.
 - **`AGENTS.md` canônico** (comandos, regras, convenções); o `CLAUDE.md` importa `@AGENTS.md` e
   acrescenta só o que é específico do Claude.
 - **Regras invioláveis:** nada do jogo ou derivado dele no git; testes passando antes de cada

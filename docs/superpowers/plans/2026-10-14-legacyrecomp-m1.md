@@ -18,7 +18,7 @@ tomlplusplus, Catch2 v3, XenonRecomp/XenonAnalyse/XenonUtils (hedge-dev).
 
 ## Global Constraints
 
-- License GPL-3.0; every new source file starts with `// SPDX-License-Identifier: GPL-3.0-or-later`.
+- License MIT (changed from GPL-3.0 to MIT on 2026-10-14 by the project owner); every new source file starts with `// SPDX-License-Identifier: MIT`. Until then: GPL-3.0 with `GPL-3.0-or-later` headers. UnleashedRecomp (GPL-3.0) is a reference only; never copy its code. See `docs/adr/0002-license.md`.
 - Namespace `lr` (`lr::formats`, `lr::pipeline`, `lr::runtime`, `lr::kernel`); code, identifiers, commit messages in English; `docs/` prose in Portuguese.
 - Public APIs return `lr::Result<T>`; no exceptions cross module boundaries (sole exception: `lr::kernel::UnimplementedImport`, thrown and caught inside the runtime).
 - Never commit `*.iso`, `*.xex`, `*.xexp`, `private/`, `work/`, generated `ppc_*` files. Before every commit: `git status --short` must show none of them.
@@ -71,7 +71,7 @@ docs/ architecture.md pipeline.md roadmap.md kernel-coverage.md formats/*.md
 ### Task 1: Repository scaffold, common error types, agent docs
 
 **Files:**
-- Create: `CMakeLists.txt`, `CMakePresets.json`, `cmake/LrWarnings.cmake`, `LICENSE` (GPL-3.0 full text), `AGENTS.md`, `CLAUDE.md`, `src/common/{result.h,error.h,error.cpp,log.h,log.cpp}`, `src/common/CMakeLists.txt`, `tests/CMakeLists.txt`, `tests/test_result.cpp`
+- Create: `CMakeLists.txt`, `CMakePresets.json`, `cmake/LrWarnings.cmake`, `LICENSE` (GPL-3.0 full text; replaced by the MIT text on 2026-10-14, Task 16a), `AGENTS.md`, `CLAUDE.md`, `src/common/{result.h,error.h,error.cpp,log.h,log.cpp}`, `src/common/CMakeLists.txt`, `tests/CMakeLists.txt`, `tests/test_result.cpp`
 - Add submodules: `thirdparty/Catch2` (tag v3.x latest), `thirdparty/XenonRecomp` (`--recursive`), `thirdparty/imgui` (tag v1.91.x latest)
 
 **Interfaces:**
@@ -448,12 +448,12 @@ Runner rules: a stage is skipped iff `is_complete(id, fingerprint)` and every `o
 ### Task 16: Documentation, README, coverage report, acceptance check
 
 **Files:**
-- Create: `README.md`, `docs/{architecture.md,pipeline.md,roadmap.md,kernel-coverage.md}`, `docs/adr/0001-static-recompilation.md`, `docs/adr/0002-gpl-3.md`, `docs/adr/0003-m1-plan-deviations.md`
+- Create: `README.md`, `docs/{architecture.md,pipeline.md,roadmap.md,kernel-coverage.md}`, `docs/adr/0001-static-recompilation.md`, `docs/adr/0002-license.md` (created by Task 16a; MIT, see Global Constraints), `docs/adr/0003-m1-plan-deviations.md`
 - Modify: `AGENTS.md` (final commands), `docs/reverse-engineering/README.md`
 
 - [ ] **Step 1:** `docs/kernel-coverage.md` = output of `~/.local/share/legacyrecomp/bin/legacyrecomp-game --coverage` (import names + status only) with a header explaining how to regenerate it.
-- [ ] **Step 2:** Docs: `architecture.md` (units, dependency direction, Mermaid diagram, runtime memory map with the Task 12 constants), `pipeline.md` (stage table, data root layout, `state.toml`, `--force` semantics, error codes and exit codes, troubleshooting by error code), `roadmap.md` (M1–M5 from spec §13 with M1 marked done), ADR 0001 (static recomp with hedge-dev; pinned submodule commits), ADR 0002 (GPL-3.0 reasoning), ADR 0003 (each deviation from Global Constraints with its reason).
-- [ ] **Step 3:** `README.md` (English, with a Portuguese section link): banner title + one-line pitch; badges (license, C++20, platform Linux); legal notice ("You must own and dump your own disc. This repository contains no game code or assets. Not affiliated with Mojang, Microsoft or 4J Studios."); quick start (toolchain install, clone `--recursive`, build preset, `legacyrecomp install --iso …`, `legacyrecomp run`); Mermaid pipeline diagram; status table (M1 ✅ … M5); GUI screenshot; credits (hedge-dev XenonRecomp/XenosRecomp/UnleashedRecomp, Xenia, free60); contributing pointer to `AGENTS.md`.
+- [ ] **Step 2:** Docs: `architecture.md` (units, dependency direction, Mermaid diagram, runtime memory map with the Task 12 constants), `pipeline.md` (stage table, data root layout, `state.toml`, `--force` semantics, error codes and exit codes, troubleshooting by error code), `roadmap.md` (M1–M5 from spec §13 with M1 marked done), ADR 0001 (static recomp with hedge-dev; pinned submodule commits), ADR 0002 (license: already written by Task 16a, MIT (changed from GPL-3.0 to MIT on 2026-10-14 by the project owner)), ADR 0003 (each deviation from Global Constraints with its reason).
+- [ ] **Step 3:** `README.md` (English; Task 16a already wrote it plus six translations, so this step only refreshes it): banner title + one-line pitch; badges (license, C++20, platform Linux); legal notice ("You must own and dump your own disc. This repository contains no game code or assets. Not affiliated with Mojang, Microsoft or 4J Studios."); quick start (toolchain install, clone `--recursive`, build preset, `legacyrecomp install --iso …`, `legacyrecomp run`); Mermaid pipeline diagram; status table (M1 ✅ … M5); GUI screenshot; credits (hedge-dev XenonRecomp/XenosRecomp/UnleashedRecomp, Xenia, free60); contributing pointer to `AGENTS.md`.
 - [ ] **Step 4: Acceptance check** — spec §10, each item with evidence:
   1. fresh root: `legacyrecomp install --iso …` exit 0;
   2. GUI install shown working (Task 15 step 5);
