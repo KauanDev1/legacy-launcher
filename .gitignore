@@ -29,3 +29,6 @@ compile_commands.json
 .idea/
 *.swp
 .DS_Store
+# hand-written test fakes that merely mimic the generated names
+!tests/support/fake_generated/
+!tests/support/fake_generated/*
