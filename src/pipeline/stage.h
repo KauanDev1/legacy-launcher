@@ -11,12 +11,16 @@
 
 namespace lr::pipeline {
 
+class StateStore;
+
 struct StageContext {
   const Options& options;
   DataPaths paths;
   fs::path resources;
   const GameConfig& game;
   ProgressSink& sink;
+  // Set by run(); lets extract reuse its stored fingerprint when no ISO is given. Null in unit tests.
+  const StateStore* state = nullptr;
 };
 
 struct Stage {

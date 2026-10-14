@@ -49,6 +49,12 @@ Result<StateStore> StateStore::load(const fs::path& path) {
   return store;
 }
 
+std::optional<std::string> StateStore::complete_fingerprint(StageId id) const {
+  auto it = stages_.find(stage_name(id));
+  if (it == stages_.end() || !it->second.complete) return std::nullopt;
+  return it->second.fingerprint;
+}
+
 bool StateStore::is_complete(StageId id, std::string_view fingerprint) const {
   auto it = stages_.find(stage_name(id));
   return it != stages_.end() && it->second.complete && it->second.fingerprint == fingerprint;

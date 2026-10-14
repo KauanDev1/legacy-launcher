@@ -56,6 +56,7 @@ Result<void> run(const Options& options, ProgressSink& sink) {
 
   StageContext ctx{opts, DataPaths::from_root(opts.root), resources, game, sink};
   LR_TRY_ASSIGN(state, StateStore::load(ctx.paths.state_file));
+  ctx.state = &state;
   SystemDoctorProbe probe;
   auto owned = default_stages(probe);
   std::vector<Stage*> stages;

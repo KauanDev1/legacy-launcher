@@ -5,6 +5,7 @@
 #include <fstream>
 
 #include "common/sha256.h"
+#include "pipeline/state.h"
 #include "pipeline/stages/extract_stage.h"
 #include "pipeline/stages/verify_stage.h"
 #include "support/stfs_builder.h"
@@ -241,4 +242,31 @@ TEST_CASE("extract validates all paths before writing anything", "[unit]") {
   CHECK(r.error().code == ErrorCode::InvalidFormat);
   CHECK_FALSE(fs::exists(c.paths.game / "good.txt"));
   CHECK_FALSE(fs::exists(c.paths.input / "package.xex"));
+}
+
+TEST_CASE("extract without an iso reuses the stored fingerprint when complete", "[unit]") {
+  Fixture f;
+  f.opts.iso.clear();
+  auto stage = make_extract_stage();
+  auto c = f.ctx();
+
+  auto none = stage->fingerprint(c);  // no state at all
+  REQUIRE_FALSE(none);
+  CHECK(none.error().code == ErrorCode::NotFound);
+  CHECK(none.error().hint.find("legacyrecomp install --iso") != std::string::npos);
+
+  fs::create_directories(f.dir / "data" / "work");
+  auto state = StateStore::load(f.dir / "state.toml");
+  REQUIRE(state);
+  c.state = &state.value();
+  CHECK_FALSE(stage->fingerprint(c));  // empty store
+
+  state.value().mark_started(StageId::Extract);
+  CHECK_FALSE(stage->fingerprint(c));  // started but not complete
+
+  state.value().mark_complete(StageId::Extract, "fp-123");
+  auto fp = stage->fingerprint(c);
+  REQUIRE(fp);
+  CHECK(fp.value() == "fp-123");
+  CHECK(state.value().is_complete(StageId::Extract, fp.value()));
 }

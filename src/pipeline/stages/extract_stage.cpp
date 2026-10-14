@@ -12,6 +12,7 @@
 #include "formats/reader.h"
 #include "formats/stfs.h"
 #include "formats/xdvdfs.h"
+#include "pipeline/state.h"
 
 namespace lr::pipeline {
 namespace {
@@ -93,6 +94,14 @@ class ExtractStage : public Stage {
 
   Result<std::string> fingerprint(StageContext& ctx) override {
     std::error_code ec;
+    if (ctx.options.iso.empty()) {
+      // `legacyrecomp build` without --iso: an already extracted game stays valid as is.
+      if (ctx.state) {
+        if (auto stored = ctx.state->complete_fingerprint(StageId::Extract)) return *stored;
+      }
+      return Error{ErrorCode::NotFound, "no game extracted yet and no --iso given",
+                   "run `legacyrecomp install --iso <file>` first"};
+    }
     auto size = fs::file_size(ctx.options.iso, ec);
     if (ec) return Error{ErrorCode::IoError, "cannot stat " + ctx.options.iso.string() + ": " + ec.message(), ""};
     auto mtime = fs::last_write_time(ctx.options.iso, ec);
@@ -110,6 +119,9 @@ class ExtractStage : public Stage {
 
   Result<void> execute(StageContext& ctx) override {
     std::error_code ec;
+    if (ctx.options.iso.empty())
+      return Error{ErrorCode::NotFound, "the extracted game is missing or incomplete and no --iso was given",
+                   "run `legacyrecomp install --iso <file>`"};
     // Re-extraction owns game/: clear it so versions never mix. Done after validation below.
 
     // Lifetime chain: FileReader -> XdvdfsImage -> package reader -> StfsPackage (each borrows the previous).
