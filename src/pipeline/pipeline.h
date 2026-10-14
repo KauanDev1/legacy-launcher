@@ -26,7 +26,8 @@ fs::path data_root(const Options& options);
 Result<void> run(const Options& options, ProgressSink& sink);
 
 // Spawns <root>/bin/legacyrecomp-game --image <root>/work/image/default_tu1.xex --data <root>/game [extra_args...]
-// with inherited stdio (posix_spawn, no shell) and waits. Returns its exit code (128 + signal if it was killed).
+// with inherited stdio (posix_spawn, no shell) and waits; the launcher ignores SIGINT/SIGQUIT meanwhile, so Ctrl+C
+// stops only the game. Returns its exit code (128 + signal if it was killed, e.g. 130 for Ctrl+C).
 // NotFound if the game was not built yet.
 Result<int> launch(const Options& options, std::span<const std::string> extra_args);
 

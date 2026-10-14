@@ -79,13 +79,29 @@ Result<int> launch(const Options& options, std::span<const std::string> extra_ar
   for (auto& a : args) argv.push_back(a.data());
   argv.push_back(nullptr);
 
-  // Inherited stdio and process group (Ctrl+C reaches the game); default SIGPIPE and an empty signal mask, as
-  // the launcher may ignore SIGPIPE (run_tool does).
+  // Inherited stdio and process group: Ctrl+C / Ctrl+\ reach the game, while the launcher ignores them until the
+  // game exits (so it can report 128 + signal). The child gets default SIGINT/SIGQUIT/SIGPIPE (ignored dispositions
+  // survive exec) and an empty signal mask.
+  struct sigaction ign{}, old_int{}, old_quit{};
+  ign.sa_handler = SIG_IGN;
+  sigemptyset(&ign.sa_mask);
+  ::sigaction(SIGINT, &ign, &old_int);
+  ::sigaction(SIGQUIT, &ign, &old_quit);
+  struct RestoreSignals {
+    const struct sigaction &i, &q;
+    ~RestoreSignals() {
+      ::sigaction(SIGINT, &i, nullptr);
+      ::sigaction(SIGQUIT, &q, nullptr);
+    }
+  } restore{old_int, old_quit};
+
   posix_spawnattr_t attr;
   posix_spawnattr_init(&attr);
   sigset_t def, mask;
   sigemptyset(&def);
   sigaddset(&def, SIGPIPE);
+  sigaddset(&def, SIGINT);
+  sigaddset(&def, SIGQUIT);
   sigemptyset(&mask);
   int rc = posix_spawnattr_setsigdefault(&attr, &def);
   if (rc == 0) rc = posix_spawnattr_setsigmask(&attr, &mask);

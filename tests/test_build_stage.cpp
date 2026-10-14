@@ -138,3 +138,17 @@ TEST_CASE("launch reports a missing game build", "[unit]") {
   CHECK(r.error().code == ErrorCode::NotFound);
   CHECK(r.error().message.find("legacyrecomp-game") != std::string::npos);
 }
+
+TEST_CASE("launch forwards Ctrl+C to the game, survives it and returns 128 + SIGINT", "[unit]") {
+  TempDir t;
+  write(t.path / "work" / "image" / "default_tu1.xex", "image");
+  // Stand-in game: interrupts its parent (the launcher must ignore that) and then itself.
+  const fs::path game = t.path / "bin" / "legacyrecomp-game";
+  write(game, "#!/bin/sh\nkill -INT $PPID\nkill -INT $$\nsleep 5\nexit 0\n");
+  fs::permissions(game, fs::perms::owner_all);
+  Options opts;
+  opts.root = t.path;
+  auto r = launch(opts, {});
+  REQUIRE(r);
+  CHECK(r.value() == 130);
+}
