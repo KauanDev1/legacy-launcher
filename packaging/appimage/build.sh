@@ -290,6 +290,7 @@ cp "$repo/LICENSE" "$doc/LICENSE"
 # Every ELF we built must run on glibc 2.31 and need nothing beyond glibc (no libstdc++, no SDL .so).
 
 log "checking the binaries"
+gpl_disasm_marker="attempt to set y bit when using + or - modifier"  # thirdparty/.../disasm/ppc-dis.c
 for f in "$appdir/usr/bin/legacyrecomp" "$appdir/usr/bin/legacyrecomp-gui" "$res/tools/XenonAnalyse" \
   "$res/tools/XenonRecomp" "$ninja"; do
   [ -x "$f" ] || die "missing $f"
@@ -301,8 +302,26 @@ for f in "$appdir/usr/bin/legacyrecomp" "$appdir/usr/bin/legacyrecomp-gui" "$res
   bad=$(readelf -d "$f" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' |
     grep -Ev '^(libc|libm|libdl|libpthread|librt|ld-linux-x86-64)\.so\.[0-9]+$' || true)
   [ -z "$bad" ] || die "${f#"$appdir"/} needs libraries outside glibc: $bad"
+  # GPL tripwire (ADR 0002, like the no_gpl_disassembler_in_binaries test): the binutils PowerPC disassembler
+  # (GPL-2.0-or-later) may live in XenonAnalyse/XenonRecomp only, never in the MIT launchers. zig leaves no
+  # .symtab in these binaries, so besides the decode_insn_ppc symbol (checked when a symbol table exists) we look
+  # for one of ppc-dis.c's message strings, which must be present in the tools (else the marker is stale).
+  case $f in
+    */usr/bin/legacyrecomp | */usr/bin/legacyrecomp-gui)
+      syms=$(LC_ALL=C readelf -sW "$f")  # no pipe into grep -q: with pipefail, readelf's SIGPIPE would mask a hit
+      ! grep -qw decode_insn_ppc <<< "$syms" ||
+        die "${f#"$appdir"/} contains decode_insn_ppc: the GPL-2.0-or-later binutils disassembler got linked in"
+      ! grep -qaF "$gpl_disasm_marker" "$f" ||
+        die "${f#"$appdir"/} contains the binutils disassembler (\"$gpl_disasm_marker\")"
+      ;;
+    */tools/XenonAnalyse | */tools/XenonRecomp)
+      grep -qaF "$gpl_disasm_marker" "$f" ||
+        die "GPL tripwire marker \"$gpl_disasm_marker\" not found in ${f#"$appdir"/}; update the marker"
+      ;;
+  esac
   log "  ${f#"$appdir"/}: glibc ${newest:-none}"
 done
+[ ! -e "$res/runtime/lib/libdisasm.a" ] || die "runtime/lib/libdisasm.a is staged; the game link must not get it"
 
 # --- AppImage ------------------------------------------------------------------------------------------------------
 

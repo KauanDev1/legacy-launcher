@@ -58,6 +58,10 @@ O que o `build.sh` faz:
    estático com PIC e o LegacyRecomp (preset `release` com `CMAKE_BUILD_TYPE=Release`, alvos
    `legacyrecomp`, `legacyrecomp-gui` e `lr_resources`), e instala com `cmake --install` em `AppDir/usr`.
 4. Confere todos os ELF compilados: nenhum pode exigir glibc acima da 2.31 nem bibliotecas fora da glibc.
+   Também roda o tripwire de GPL (ADR 0002): `legacyrecomp` e `legacyrecomp-gui` não podem ter o símbolo
+   `decode_insn_ppc` nem uma mensagem do `ppc-dis.c` do binutils (o zig não deixa `.symtab`, então a busca
+   pela mensagem é a que vale; ela precisa aparecer no `XenonAnalyse` e no `XenonRecomp`, senão o marcador
+   ficou velho), e a `libdisasm.a` não pode estar em `runtime/lib/`.
 5. Escreve `THIRD-PARTY-LICENSES` (`packaging/appimage/licenses.sh`) em `usr/share/doc/legacyrecomp/` e na
    raiz do AppDir, mais `AppRun`, `.desktop` e ícone, e chama o `appimagetool` com o runtime fixado.
 6. Gera o arquivo-fonte: `git archive` do `HEAD` mais `git submodule foreach --recursive git archive`,
