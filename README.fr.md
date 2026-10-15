@@ -19,6 +19,9 @@
   <img src="docs/assets/gui-m1.png" alt="Le launcher de LegacyRecomp après une installation terminée" width="760">
 </p>
 
+> [!IMPORTANT]
+> **Il vous faut votre propre exemplaire du jeu.** LegacyRecomp ne contient ni ne télécharge aucun code ou fichier de Minecraft, et ne fournit, n'indique ni n'aide à obtenir des images du jeu : créez l'image à partir d'un disque qui vous appartient. Nous ne soutenons pas le piratage, et les issues demandant des ISO seront fermées.
+
 ## Présentation
 
 Minecraft: Xbox 360 Edition a été écrit pour le processeur PowerPC de la Xbox 360. LegacyRecomp traduit ce code machine en C++ à l'avance, fonction par fonction, puis compile le résultat pour x86-64 avec Clang. On obtient un exécutable Linux tout ce qu'il y a de plus ordinaire. Aucun émulateur ne tourne en dessous : le travail qu'un émulateur fait instruction par instruction pendant la partie est fait une seule fois, à la compilation.

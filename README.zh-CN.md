@@ -19,6 +19,9 @@
   <img src="docs/assets/gui-m1.png" alt="安装完成后的 LegacyRecomp 启动器" width="760">
 </p>
 
+> [!IMPORTANT]
+> **你需要拥有正版游戏。** LegacyRecomp 不包含、也不会下载任何 Minecraft 的代码或资源，不提供、不链接、也不帮助任何人获取游戏镜像：请用你自己拥有的光盘制作镜像。我们不支持盗版，索要 ISO 的 issue 会被直接关闭。
+
 ## 这是什么
 
 Minecraft: Xbox 360 Edition 是为 Xbox 360 的 PowerPC 处理器编写的。LegacyRecomp 预先把这些机器码逐个函数翻译成 C++，再用 Clang 编译成 x86-64 程序，得到的就是一个普通的 Linux 可执行文件。运行时底层并没有模拟器：模拟器在游戏过程中逐条指令做的工作，在这里只在构建时做一次。
