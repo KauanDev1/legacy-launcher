@@ -13,3 +13,7 @@
 # musl-COPYRIGHT.txt                  https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v1.2.5
 # openssl-LICENSE.txt                 https://raw.githubusercontent.com/openssl/openssl/openssl-3.6.0/LICENSE.txt
 #                                     (OpenSSL 3.6.0 is linked statically in the official CMake 4.4.4 binary)
+# xenia-LICENSE                       https://raw.githubusercontent.com/xenia-project/xenia/95a5c3ee250f80c3b9d139658649d9ffb6db3eec/LICENSE
+#                                     (BSD-3-Clause; SHA-256 369ea6b0f7ba57544067e9d470ca82a927da787fb0a749b11cb55f1fd0ba47ae).
+#                                     XenonUtils' xex_patcher.cpp/.h and xbox/xboxkrnl_table.inc, xam_table.inc
+#                                     are Xenia code ("see LICENSE in the root"), which XenonRecomp does not ship.

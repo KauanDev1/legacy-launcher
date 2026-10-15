@@ -53,7 +53,8 @@ Where things are in the AppImage:
 Component                          License                                   Where
 ---------------------------------  ----------------------------------------  ------------------------------------
 LegacyRecomp                       MIT                                       launchers, runtime, game template
-XenonRecomp/XenonAnalyse/XenonUtils MIT (XenonUtils incl. code from Xenia)   tools; XenonUtils in the launchers
+XenonRecomp/XenonAnalyse/XenonUtils MIT                                      tools; XenonUtils in the launchers
+Xenia (code in XenonUtils)         BSD-3-Clause                              launchers, tools (in XenonUtils), note 5
 Dear ImGui                         MIT                                       legacyrecomp-gui
 toml++                             MIT                                       launchers, XenonRecomp
 {fmt}                              MIT                                       launchers, tools
@@ -105,11 +106,20 @@ Notes
    corresponding source of the runtime and of libfuse, including that patch, is published next to this
    AppImage as LegacyRecomp-$version-runtime-sources.tar.gz.
 
+5. XenonUtils (linked into legacyrecomp, legacyrecomp-gui, XenonAnalyse and XenonRecomp, and shipped as
+   usr/share/legacyrecomp/runtime/lib/libXenonUtils.a) contains code from the Xenia project: the XEX patcher
+   (xex_patcher.cpp, xex_patcher.h) and the kernel export tables (xbox/xboxkrnl_table.inc, xam_table.inc).
+   That code is under Xenia's BSD-3-Clause license, reproduced below.
+
 This file is an engineering reading of the licenses, not legal advice.
 EOF
 
 section "LegacyRecomp (MIT)" "$repo/LICENSE"
 section "XenonRecomp, XenonAnalyse, XenonUtils (MIT)" "$repo/thirdparty/XenonRecomp/LICENSE.md"
+printf '\n\nXenia (BSD-3-Clause), code in XenonUtils\n========================================\n\n'
+printf -- '--- notice from thirdparty/XenonRecomp/XenonUtils/xex_patcher.cpp ---\n\n'
+sed -n '3,10p' "$repo/thirdparty/XenonRecomp/XenonUtils/xex_patcher.cpp"
+section "Xenia license (the LICENSE the notice above refers to)" "$here/licenses/xenia-LICENSE"
 section "Dear ImGui (MIT)" "$repo/thirdparty/imgui/LICENSE.txt"
 section "toml++ (MIT)" "$tp/tomlplusplus/LICENSE"
 section "{fmt} (MIT)" "$tp/fmt/LICENSE"
