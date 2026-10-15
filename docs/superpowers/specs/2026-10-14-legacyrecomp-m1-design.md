@@ -117,7 +117,7 @@ Result<void> launch(const Options&);   // etapa "run"
 
 | # | Etapa | Entrada → Saída | Notas |
 |---|-------|-----------------|-------|
-| 0 | `doctor` | — | clang ≥ 18, cmake ≥ 3.25, ninja, espaço livre, RAM. Falha com dica de instalação (ex.: `pacman -S clang lld cmake ninja`). |
+| 0 | `doctor` | — | clang ≥ 18, cmake ≥ 3.25, ninja, espaço livre, RAM. Falha com dica de instalação (ex.: `pacman -S clang cmake ninja`). |
 | 1 | `extract` | ISO → `work/input/default.xex`, `work/input/default.xexp`, `game/…` | XDVDFS → pacote STFS `000D0000` (xex + assets) e STFS do TU1 (xexp). |
 | 2 | `verify` | arquivos → ok/erro | SHA-256 contra `hashes.toml`. Divergência → `UnsupportedVersion` listando os hashes encontrados. |
 | 3 | `patch` | xex + xexp → `work/image/default_tu1.xex` (descriptografado/descomprimido) | Via XenonUtils. |

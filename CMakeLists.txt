@@ -5,7 +5,7 @@ project(LegacyRecomp LANGUAGES C CXX)
 if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
   message(FATAL_ERROR
     "LegacyRecomp requires Clang (found '${CMAKE_CXX_COMPILER_ID}'). "
-    "Install it with: sudo pacman -S --needed clang lld llvm, then use `cmake --preset dev`.")
+    "Install it with: sudo pacman -S --needed clang, then use `cmake --preset dev`.")
 endif()
 
 set(CMAKE_CXX_STANDARD 20)

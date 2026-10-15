@@ -5,7 +5,7 @@ LegacyRecomp statically recompiles Minecraft: Xbox 360 Edition to a native Linux
 ## Build and test
 
 ```
-sudo pacman -S --needed clang lld llvm cmake ninja sdl2   # toolchain
+sudo pacman -S --needed clang cmake ninja sdl2 pkgconf   # toolchain
 cmake --preset dev                                        # configure (Debug, ASan+UBSan)
 cmake --build --preset dev
 ctest --preset dev -L unit                                # fast tests, no game data needed
