@@ -116,7 +116,7 @@ class ExtractStage : public Stage {
     auto abs_iso = fs::absolute(ctx.options.iso, ec);
     if (ec) return Error{ErrorCode::IoError, "cannot resolve " + ctx.options.iso.string() + ": " + ec.message(), ""};
     return abs_iso.string() + "|" + std::to_string(size) + "|" +
-           std::to_string(mtime.time_since_epoch().count()) + "|" + cfg;
+           std::to_string(static_cast<long long>(mtime.time_since_epoch().count())) + "|" + cfg;
   }
 
   std::vector<fs::path> outputs(StageContext& ctx) const override {

@@ -3,6 +3,10 @@
 
 #include <unistd.h>
 
+#if defined(__x86_64__)
+#include <cpuid.h>
+#endif
+
 #include <charconv>
 #include <regex>
 #include <system_error>
@@ -85,8 +89,15 @@ bool SystemDoctorProbe::pkg_config_exists(std::string_view package) {
 
 bool SystemDoctorProbe::cpu_supports_avx() {
 #if defined(__x86_64__)
-  __builtin_cpu_init();
-  return __builtin_cpu_supports("avx");
+  // CPUID + XGETBV instead of __builtin_cpu_supports: that builtin needs compiler-rt's __cpu_model, which zig's
+  // runtime (the AppImage toolchain) does not provide. AVX is usable when the CPU has it, the OS enabled XSAVE and
+  // saves the XMM and YMM state (XCR0 bits 1 and 2).
+  unsigned eax = 0, ebx = 0, ecx = 0, edx = 0;
+  if (!__get_cpuid(1, &eax, &ebx, &ecx, &edx)) return false;
+  if (!(ecx & bit_AVX) || !(ecx & bit_OSXSAVE)) return false;
+  unsigned xcr0_lo = 0, xcr0_hi = 0;
+  __asm__ volatile("xgetbv" : "=a"(xcr0_lo), "=d"(xcr0_hi) : "c"(0));
+  return (xcr0_lo & 0x6u) == 0x6u;
 #else
   return true;  // the template only adds -march=sandybridge on x86_64
 #endif

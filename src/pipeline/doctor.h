@@ -30,7 +30,7 @@ struct SystemDoctorProbe : DoctorProbe {
   Result<uint64_t> free_bytes(const std::filesystem::path& path) override;
   uint64_t total_ram() override;
   bool pkg_config_exists(std::string_view package) override;
-  bool cpu_supports_avx() override;  // __builtin_cpu_supports("avx") on x86-64; true elsewhere
+  bool cpu_supports_avx() override;  // CPUID/XGETBV (AVX usable) on x86-64; true elsewhere
 };
 
 struct DoctorReport {
