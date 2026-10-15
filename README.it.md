@@ -102,8 +102,7 @@ sudo dnf install clang cmake ninja-build SDL2-devel pkgconf git
 ```
 
 ```sh
-# <URL del repository> è un segnaposto: il progetto non ha ancora un repository pubblico
-git clone --recursive <URL del repository> legacyrecomp
+git clone --recursive https://github.com/KauanDev1/legacy-launcher.git legacyrecomp
 cd legacyrecomp
 cmake --preset release
 cmake --build --preset release
