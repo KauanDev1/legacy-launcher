@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 cmake_minimum_required(VERSION 3.25)
 project(LegacyRecomp LANGUAGES C CXX)
 
