@@ -27,3 +27,16 @@ if(TARGET SDL2::SDL2)
   add_dependencies(lr_tests lr_fake_game)
   target_compile_definitions(lr_tests PRIVATE LR_FAKE_GAME_PATH="$<TARGET_FILE:lr_fake_game>")
 endif()
+
+# --- GPL tripwire: the binutils disassembler (GPL-2.0-or-later) must stay out of our binaries (ADR 0002) ---
+set(_lr_tripwire_bins "$<TARGET_FILE:legacyrecomp>")
+foreach(_t legacyrecomp-gui lr_fake_game)
+  if(TARGET ${_t})
+    string(APPEND _lr_tripwire_bins "|$<TARGET_FILE:${_t}>")
+  endif()
+endforeach()
+add_test(NAME no_gpl_disassembler_in_binaries
+  COMMAND ${CMAKE_COMMAND} "-DNM=${CMAKE_NM}" "-DBINARIES=${_lr_tripwire_bins}"
+          "-DRUNTIME_LIB_DIR=${LR_RESOURCES_DIR}/runtime/lib"
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/support/check_no_gpl_disassembler.cmake)
+set_tests_properties(no_gpl_disassembler_in_binaries PROPERTIES LABELS unit)

@@ -61,10 +61,11 @@ target_compile_options(legacyrecomp-game PRIVATE
   -Wno-int-to-void-pointer-cast -Wno-invalid-offsetof -Wno-c++23-extensions)
 
 # --whole-archive: every strong LR_KERNEL_EXPORT in the runtime must win over the weak stubs in import_stubs.cpp,
-# even when nothing else references its object file.
+# even when nothing else references its object file. libdisasm.a (GPL-2.0-or-later binutils disassembler) is
+# deliberately not linked: the game never references it (ADR 0002, tripwire test no_gpl_disassembler_in_binaries).
 target_link_libraries(legacyrecomp-game PRIVATE
   "-Wl,--whole-archive" "${_rt}/lib/liblr_runtime_core.a" "-Wl,--no-whole-archive"
-  "${_rt}/lib/libXenonUtils.a" "${_rt}/lib/libdisasm.a"
+  "${_rt}/lib/libXenonUtils.a"
   SDL2::SDL2 Threads::Threads)
 set_target_properties(legacyrecomp-game PROPERTIES LINK_DEPENDS
-  "${_rt}/lib/liblr_runtime_core.a;${_rt}/lib/libXenonUtils.a;${_rt}/lib/libdisasm.a")
+  "${_rt}/lib/liblr_runtime_core.a;${_rt}/lib/libXenonUtils.a")

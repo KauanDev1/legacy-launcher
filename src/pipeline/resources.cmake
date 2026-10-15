@@ -7,7 +7,8 @@
 #   runtime/include/{runtime,common}/ our headers (same include layout as src/)
 #   runtime/include/simde/            SIMD Everywhere headers (ppc_context.h includes <x86/avx.h>)
 #   runtime/lib/                      liblr_runtime_core.a (sanitizer-free staged variant, see src/runtime),
-#                                     libXenonUtils.a, libdisasm.a
+#                                     libXenonUtils.a. Not libdisasm.a: XenonUtils' PowerPC disassembler is
+#                                     GPL-2.0-or-later (binutils) and the game uses none of it (ADR 0002).
 # and the GUI launcher's fonts (assets/fonts: Inter, JetBrains Mono and their OFL licence texts) under fonts/.
 # ppc_context.h itself is not staged under runtime/: XenonRecomp copies it into work/generated.
 set(LR_RESOURCES_DIR "${CMAKE_BINARY_DIR}/share/legacyrecomp" CACHE INTERNAL "Staged resources dir (build tree)")
@@ -96,10 +97,11 @@ add_custom_command(OUTPUT "${_lr_simde_stamp}"
 list(APPEND _lr_staged "${_lr_simde_stamp}")
 
 add_custom_target(lr_resources ALL
-  DEPENDS ${_lr_staged} XenonAnalyse XenonRecomp lr_runtime_core_staged XenonUtils disasm
+  DEPENDS ${_lr_staged} XenonAnalyse XenonRecomp lr_runtime_core_staged XenonUtils
   COMMAND ${CMAKE_COMMAND} -E make_directory "${_lr_runtime_dir}/lib"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:XenonUtils>" "${_lr_runtime_dir}/lib/libXenonUtils.a"
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:disasm>" "${_lr_runtime_dir}/lib/libdisasm.a"
+  # Older builds staged libdisasm.a; remove it so `cmake --install` never ships it.
+  COMMAND ${CMAKE_COMMAND} -E rm -f "${_lr_runtime_dir}/lib/libdisasm.a"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${LR_RESOURCES_DIR}/tools"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:XenonAnalyse>" "${LR_RESOURCES_DIR}/tools/XenonAnalyse"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:XenonRecomp>" "${LR_RESOURCES_DIR}/tools/XenonRecomp"
