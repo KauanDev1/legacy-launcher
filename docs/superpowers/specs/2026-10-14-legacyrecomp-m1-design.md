@@ -257,10 +257,16 @@ Decisão do usuário: o LegacyRecomp é distribuído como **AppImage autossufici
   pacotes.
 - Toolchain embutido: **Zig** (`zig c++`, que traz clang, libc++ e headers/objetos da glibc e
   compila mirando uma glibc antiga, ex. 2.31, para rodar em qualquer distro) + `cmake` + `ninja`
-  estáticos + headers e `.so` do SDL2. Plano B, se o Zig não compilar o código gerado com as flags
-  necessárias: LLVM oficial + sysroot mínimo de uma distro antiga.
-- Dentro do AppImage (`$APPDIR` definido) o `doctor` e a etapa `build` usam o toolchain embutido; fora
-  dele, continuam usando o do sistema.
+  estáticos + SDL2 **estático** (headers, `libSDL2.a` e `SDL2Config.cmake`, compilado do fonte fixado; a
+  GUI e o jogo ligam o SDL2 estaticamente, sem `.so`). Plano B, se o Zig não compilar o código gerado com
+  as flags necessárias: LLVM oficial + sysroot mínimo de uma distro antiga.
+- Quando a pasta de recursos tem `toolchain/` (o caso do AppImage) o `doctor` e a etapa `build` usam o
+  toolchain embutido; sem ela, continuam usando o do sistema.
+
+> Correção (2026-10-14, revisão final do M1): a versão original deste adendo dizia "headers e `.so` do
+> SDL2" e detectava o AppImage por `$APPDIR` definido. O que foi implementado é o SDL2 estático e a
+> detecção pela pasta `<recursos>/toolchain` (ADR 0003, D1, R26 e R28). Com tudo compilado pelo zig, a
+> glibc mínima do AppImage é a 2.29.
 - Critério de aceite adicional: `packaging/appimage/build.sh` gera `LegacyRecomp-x86_64.AppImage`;
   numa pasta de dados limpa, `./LegacyRecomp-x86_64.AppImage install --iso <ISO>` e `run -- --headless`
   produzem o mesmo resultado do M1 (código 3 em `NtAllocateVirtualMemory`) **com o PATH sem

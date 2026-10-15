@@ -9,8 +9,10 @@ do spec, ou que preencheu uma lacuna dele. Formato: o quê, por quê, custo se e
 ## Desvios declarados no plano (restrições globais)
 
 ### D1. SDL2 é dependência do sistema, não submódulo
-- Por quê: SDL2 é empacotado em todas as distros alvo e compilá-lo junto aumentaria muito o build; o
-  AppImage (Task 17) embute os headers e `.so`.
+- Por quê: SDL2 é empacotado em todas as distros alvo e compilá-lo junto aumentaria muito o build. Vale
+  para a instalação a partir do código-fonte. O AppImage (Task 17) é a exceção: compila o SDL2 2.32.10 a
+  partir do fonte fixado, **estático** (`toolchain/sdl2/`: headers, `libSDL2.a` e o `SDL2Config.cmake`), e a
+  GUI e o jogo ligam o SDL2 estaticamente; nenhum `.so` do SDL é embutido nem exigido (ver R26).
 - Custo se errado: quem não tem SDL2 precisa instalá-lo; trocar por submódulo é uma mudança de CMake.
 
 ### D2. Estado do pipeline em `state.toml`, não `state.json`
@@ -159,4 +161,34 @@ do spec, ou que preencheu uma lacuna dele. Formato: o quê, por quê, custo se e
 ### R25. Parar de empacotar `libdisasm.a` e adicionar um teste "tripwire" para `decode_insn_ppc`
 - Por quê: o desassemblador GPL do XenonRecomp não é usado; ficar fora dos binários evita obrigações de GPL.
   O Task 17 precisa distribuir `THIRD-PARTY-LICENSES` e o arquivo-fonte completo com submódulos.
-- Custo: nenhum. O teste não vale em binários com símbolos removidos.
+- Custo: nenhum. O teste não vale em binários com símbolos removidos (no AppImage, o `build.sh` procura
+  também uma mensagem do `ppc-dis.c` nos launchers, que o zig deixa sem `.symtab`).
+
+### R26. SDL2 estático no AppImage; piso de glibc 2.29 (substituída em parte pela decisão "zig em tudo")
+- O quê (decisão original): o AppImage compila o SDL2 fixado como biblioteca estática PIC e embute os headers
+  (o jogo liga estático, sem `.so` do SDL em tempo de execução); os launchers usariam
+  `-static-libstdc++`/`-static-libgcc` e a glibc mínima seria a da máquina de build (2.44), com um build em
+  contêiner antigo como trabalho futuro.
+- Substituída: durante o Task 17 o projeto inteiro (launchers, ferramentas, Ninja, SDL2 e o jogo) passou a
+  ser compilado pelo zig (`-target x86_64-linux-gnu.2.31`, libc++ estática). A parte do SDL2 estático
+  continua valendo; a do `-static-libstdc++` e do piso 2.44 não. O piso real, conferido com `readelf`, é
+  glibc 2.29 (launchers e jogo; Ninja 2.17, ferramentas 2.16; o CMake oficial exige 2.17). Ver
+  `docs/packaging.md`.
+- Custo se errado: o AppImage não roda em distros com glibc anterior à 2.29.
+
+### R27. O código-fonte da libfuse vai junto de cada release do AppImage
+- O quê: o runtime type2 do AppImage liga a libfuse 3.15.0 (LGPL-2.1) estaticamente. Ela entra no
+  `THIRD-PARTY-LICENSES`, e o `build.sh` baixa (fixado em `toolchain.lock`) o fonte da libfuse e do runtime
+  type2, com o patch do runtime, e grava `LegacyRecomp-<versão>-runtime-sources.tar.gz` ao lado do AppImage.
+- Custo se errado: nenhum (só um arquivo a mais na release).
+
+### R28. O modo embutido é detectado por `<recursos>/toolchain`, não por `$APPDIR`
+- O quê: o spec (§14) dizia que o `doctor` e a etapa `build` usam o toolchain embutido quando `$APPDIR` está
+  definido. A implementação (`has_bundled_toolchain` em `src/pipeline/toolchain.h`) entra no modo embutido
+  quando a pasta `toolchain/` existe dentro da pasta de recursos (`share/legacyrecomp`), e aí exige todos os
+  arquivos do toolchain.
+- Por quê: `$APPDIR` é herdado por qualquer processo filho e pode estar definido sem o toolchain (ou faltar
+  com ele, se alguém extrair o AppImage com `--appimage-extract`); a pasta de recursos é o que o launcher
+  realmente usa. Também permite testar o modo embutido sem AppImage.
+- Custo se errado: uma instalação a partir do fonte com uma pasta `toolchain/` sobrando nos recursos usaria
+  esse toolchain; o erro seria `ToolMissing` com a dica de AppImage corrompido.
