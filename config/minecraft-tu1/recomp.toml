@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Configuração do XenonRecomp para Minecraft: Xbox 360 Edition + TU1 (imagem work/image/default_tu1.xex,
 # sha256 em game.toml [hashes] patched_image). Chaves conforme thirdparty/XenonRecomp/README.md.
 # Cada endereço tem evidência em docs/reverse-engineering/addresses.md.
