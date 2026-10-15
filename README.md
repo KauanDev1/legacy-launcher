@@ -70,7 +70,7 @@ You need an x86-64 CPU with AVX, about 8 GB of free disk space and your own imag
 
 ### AppImage
 
-The AppImage carries its own compiler (Zig), CMake, Ninja and SDL2, so there is nothing to install: it compiles the game on your machine with what it brings along. It needs glibc 2.29 or newer (Debian 11, Ubuntu 20.04 and later). There is no download yet, so build it from a clone of the repository (with its submodules):
+The AppImage carries its own compiler (Zig), CMake, Ninja and SDL2, so there is nothing to install: it compiles the game on your machine with what it brings along. It should run on glibc 2.29 or newer (Ubuntu 20.04, Debian 11 and later); so far it has only been tested on an Arch-based system with glibc 2.44. There is no download yet, so build it from a clone of the repository (with its submodules):
 
 ```sh
 packaging/appimage/build.sh        # writes packaging/appimage/out/LegacyRecomp-x86_64.AppImage
@@ -79,6 +79,7 @@ packaging/appimage/build.sh        # writes packaging/appimage/out/LegacyRecomp-
 [docs/packaging.md](docs/packaging.md) lists what the build machine needs and what goes into the image. Then:
 
 ```sh
+cd packaging/appimage/out
 chmod +x LegacyRecomp-x86_64.AppImage
 ./LegacyRecomp-x86_64.AppImage                                    # opens the launcher
 ./LegacyRecomp-x86_64.AppImage install --iso ~/Games/minecraft.iso

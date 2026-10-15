@@ -70,7 +70,7 @@ flowchart TD
 
 ### AppImage
 
-AppImage 自带编译器（Zig）、CMake、Ninja 和 SDL2，不需要安装任何东西：它用自带的工具在你的机器上编译游戏。需要 glibc 2.29 或更新版本（Debian 11、Ubuntu 20.04 及之后的版本）。目前还没有下载地址，请从仓库的克隆（包含子模块）自行构建：
+AppImage 自带编译器（Zig）、CMake、Ninja 和 SDL2，不需要安装任何东西：它用自带的工具在你的机器上编译游戏。应该能在 glibc 2.29 或更新版本上运行（Ubuntu 20.04、Debian 11 及之后的版本）；目前只在一台 glibc 2.44 的 Arch 系发行版上测试过。目前还没有下载地址，请从仓库的克隆（包含子模块）自行构建：
 
 ```sh
 packaging/appimage/build.sh        # 生成 packaging/appimage/out/LegacyRecomp-x86_64.AppImage
@@ -79,6 +79,7 @@ packaging/appimage/build.sh        # 生成 packaging/appimage/out/LegacyRecomp-
 [docs/packaging.md](docs/packaging.md) 说明了构建机器需要什么，以及镜像里包含什么。然后：
 
 ```sh
+cd packaging/appimage/out
 chmod +x LegacyRecomp-x86_64.AppImage
 ./LegacyRecomp-x86_64.AppImage                                    # 打开启动器
 ./LegacyRecomp-x86_64.AppImage install --iso ~/Games/minecraft.iso
