@@ -34,8 +34,8 @@ arquivo nosso (procedência e hashes das fontes) e recebeu o cabeçalho MIT como
 - O MIT cobre apenas o nosso código. O pacote distribuído (instalação via `cmake --install` e, a partir
   da Task 17, o AppImage) leva também código de terceiros com outras licenças, listado abaixo. As
   licenças GPL/LGPL de alguns desses componentes valem para eles, não para o nosso código.
-- Os arquivos de licença dos terceiros ainda não são copiados para `share/legacyrecomp/` (só o
-  `COPYING` do simde e as licenças das fontes). A Task 17 (AppImage) deve incluir todos.
+- Os pacotes binários têm obrigações próprias (LGPL-2.1 e GPL-2.0-or-later de componentes de terceiros),
+  descritas em "Obrigações dos pacotes binários" no fim deste documento.
 
 ### Dependências e onde cada uma entra
 
@@ -52,15 +52,35 @@ arquivos que `cmake --install` produz.
 | {fmt} | MIT (`thirdparty/XenonRecomp/thirdparty/fmt/LICENSE`) | `legacyrecomp`, `legacyrecomp-gui`, ferramentas do XenonRecomp |
 | xxHash (biblioteca) | BSD-2-Clause (`thirdparty/XenonRecomp/thirdparty/xxHash/LICENSE`) | `XenonRecomp`. O utilitário `xxhsum` (GPL-2.0, `cli/COPYING`) é compilado como subproduto, mas não é instalado nem distribuído |
 | SIMD Everywhere (simde) | MIT (`thirdparty/XenonRecomp/thirdparty/simde/COPYING`) | Cabeçalhos incluídos pelo `ppc_context.h` no código gerado; copiados para `share/legacyrecomp/runtime/include/simde/` com o `COPYING` |
-| libmspack (só `lzxd.c`) | LGPL-2.1 (`thirdparty/XenonRecomp/thirdparty/libmspack/libmspack/COPYING.LIB` e cabeçalho do arquivo) | Compilado dentro de `libXenonUtils.a`; os símbolos `lzxd_*` estão ligados estaticamente em `legacyrecomp`, `legacyrecomp-gui`, nas duas ferramentas e no jogo (conferido no `lr_fake_game`, que liga as mesmas bibliotecas). Como a ligação é estática, a LGPL exige que o usuário possa religar com outra versão da biblioteca: o código-fonte completo do LegacyRecomp e dos submódulos é público, o que atende a isso |
+| libmspack (só `lzxd.c`) | LGPL-2.1 (`thirdparty/XenonRecomp/thirdparty/libmspack/libmspack/COPYING.LIB` e cabeçalho do arquivo) | Compilado dentro de `libXenonUtils.a`; os símbolos `lzxd_*` estão ligados estaticamente em `legacyrecomp`, `legacyrecomp-gui`, nas duas ferramentas e no jogo (conferido no `lr_fake_game`, que liga as mesmas bibliotecas). Obrigações ao distribuir binários: ver "Obrigações dos pacotes binários" abaixo |
 | tiny-AES-c | Unlicense, domínio público (`thirdparty/XenonRecomp/thirdparty/tiny-AES-c/unlicense.txt`) | Dentro de `libXenonUtils.a` (decifra o XEX) |
 | TinySHA1 | Licença tipo ISC no cabeçalho de `TinySHA1.hpp` | Só cabeçalho, usado por `XenonUtils` |
-| disasm (desmontador PowerPC do GNU binutils) | GPL-2.0-or-later (cabeçalho de `thirdparty/XenonRecomp/thirdparty/disasm/ppc-dis.c`) | Ligado nas ferramentas `XenonAnalyse` e `XenonRecomp`. `libdisasm.a` também é instalada em `share/legacyrecomp/runtime/lib/` e passada ao link do jogo, mas nenhum símbolo dela é puxado (conferido com `nm` em `legacyrecomp`, `legacyrecomp-gui` e no `lr_fake_game`, que liga as mesmas bibliotecas do jogo). As ferramentas são programas separados, que o launcher só executa |
+| disasm (desmontador PowerPC do GNU binutils) | GPL-2.0-or-later (cabeçalho de `thirdparty/XenonRecomp/thirdparty/disasm/ppc-dis.c`; a pasta não tem arquivo `COPYING`) | Só nas ferramentas `XenonAnalyse` e `XenonRecomp`, que por isso são, como obra combinada, GPL-2.0-or-later. Não entra em `legacyrecomp`, `legacyrecomp-gui` nem no jogo: desde a decisão R25 (2026-10-14) a `libdisasm.a` não é mais copiada para `share/legacyrecomp/runtime/lib/` nem passada ao link do jogo, e o teste `no_gpl_disassembler_in_binaries` (rótulo `unit`) falha se o símbolo `decode_insn_ppc` aparecer nesses binários ou se a `libdisasm.a` voltar a ser copiada |
 | SDL2 | zlib (pacote do sistema, `/usr/share/licenses/sdl2-compat/LICENSE`) | Ligada dinamicamente em `legacyrecomp-gui` e no jogo; dependência do sistema, não submódulo |
 | Inter, JetBrains Mono | SIL OFL 1.1 (`assets/fonts/LICENSE-*.txt`) | Copiadas para `share/legacyrecomp/fonts/` com as licenças |
 | Xenia | BSD (não está no repositório; licença não conferida localmente) | Nada. Usado só como referência para offsets de estruturas e formatos. O XenonRecomp, segundo o próprio README, reaproveita código do Xenia Canary para aplicar patches em XEX |
 
-Resumo: o MIT do LegacyRecomp é compatível com todos os componentes acima. Quem redistribuir o pacote
-completo precisa levar junto os avisos de licença dos terceiros e, para o desmontador do binutils
-(GPL-2.0-or-later) e a libmspack (LGPL-2.1), garantir acesso ao código-fonte correspondente, que está
-nos submódulos.
+### Obrigações dos pacotes binários
+
+O código-fonte do LegacyRecomp é MIT. Os pacotes binários que distribuímos (instalação via
+`cmake --install`, AppImage, qualquer arquivo de release) juntam esse código com componentes de outras
+licenças e, por isso, carregam as obrigações combinadas de todos eles:
+
+- **LGPL-2.1 (libmspack, `lzxd.c`)**, ligada estaticamente em `legacyrecomp` e `legacyrecomp-gui` (e no
+  jogo, que o usuário compila na própria máquina). Cada release binária leva o texto da LGPL-2.1, um aviso
+  de que a libmspack está incluída e sob qual licença, e o código-fonte correspondente àquela release
+  exata, oferecido junto com o binário. Como entregamos o código-fonte completo, submódulos incluídos, o
+  usuário consegue religar os programas com outra versão da libmspack, que é o que a LGPL exige para
+  ligação estática.
+- **GPL-2.0-or-later (desmontador do binutils)**: as ferramentas `XenonAnalyse` e `XenonRecomp` são, como
+  obras combinadas, GPL-2.0-or-later. Cada release binária leva o texto da GPL-2.0 e o código-fonte
+  correspondente dessas ferramentas. A pasta `thirdparty/XenonRecomp/thirdparty/disasm/` não traz um
+  arquivo `COPYING`, então o texto da GPL-2.0 é fornecido por nós.
+- **Avisos dos demais componentes** (MIT, BSD-2-Clause, zlib, OFL, Unlicense, ISC): os textos de licença
+  vão juntos no pacote. Hoje só o `COPYING` do simde e as licenças das fontes são copiados para
+  `share/legacyrecomp/`; o arquivo `THIRD-PARTY-LICENSES` completo é tarefa da Task 17.
+- **Código-fonte com submódulos**: os arquivos `.tar.gz` que o GitHub gera para cada tag **não incluem os
+  submódulos**. Por isso cada release precisa anexar um arquivo de código-fonte completo, com os
+  submódulos, ao lado do AppImage (Task 17: `LegacyRecomp-<versão>-source.tar.gz`).
+
+Isto é uma leitura de engenharia das licenças, não um parecer jurídico.
