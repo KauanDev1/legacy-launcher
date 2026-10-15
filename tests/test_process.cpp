@@ -47,6 +47,23 @@ TEST_CASE("run_tool passes args with spaces and parens verbatim", "[unit]") {
   CHECK(lines[0] == "Minecraft - Xbox 360 Edition (World).iso");
 }
 
+TEST_CASE("run_tool and capture_output pass the full program path as argv0", "[unit]") {
+  // CMake locates its modules from argv[0]: a bare name sends it to whatever cmake is on PATH (or nowhere).
+  const auto cat = find_program("cat");
+  REQUIRE(cat.has_value());
+  const std::string want = cat->string() + std::string(1, '\0') + "/proc/self/cmdline";
+  std::string seen;
+  ToolInvocation inv;
+  inv.program = "cat";
+  inv.args = {"/proc/self/cmdline"};
+  inv.on_line = [&](std::string_view l) { seen += l; };
+  REQUIRE(run_tool(inv).ok());
+  CHECK(seen.starts_with(want));
+  auto out = capture_output("cat", {"/proc/self/cmdline"});
+  REQUIRE(out);
+  CHECK(out.value().starts_with(want));
+}
+
 TEST_CASE("run_tool reports non-zero exit with log tail hint", "[unit]") {
   ToolInvocation inv;
   inv.program = "/bin/sh";

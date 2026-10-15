@@ -95,7 +95,9 @@ Result<Child> spawn_child(const fs::path& program, const std::vector<std::string
   chk(posix_spawnattr_setsigmask(&attr, &mask));
   chk(posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK));
 
-  std::string argv0 = exe.filename().string();
+  // argv[0] is the full path, as a shell would pass it: CMake finds its modules (CMAKE_ROOT) from argv[0], and
+  // with a bare name it would search PATH and pick another cmake, or none (the AppImage's bundled cmake).
+  std::string argv0 = exe.string();
   std::vector<char*> argv;
   argv.push_back(argv0.data());
   std::vector<std::string> copy = args;
