@@ -24,9 +24,11 @@ bool iequals(std::string_view a, std::string_view b) {
                     [](unsigned char x, unsigned char y) { return std::tolower(x) == std::tolower(y); });
 }
 
-// Entry paths come from untrusted media: they must stay inside game/.
+// Entry paths come from untrusted media: they must stay inside game/ and be plain names (no NUL, which would
+// truncate the path at the OS boundary, and no control bytes, which would garble logs and terminals).
 Result<void> check_entry_path(const std::string& path) {
   bool bad = path.empty() || path.front() == '/';
+  if (std::any_of(path.begin(), path.end(), [](char c) { return static_cast<unsigned char>(c) < 0x20; })) bad = true;
   size_t pos = 0;
   while (!bad && pos <= path.size()) {
     size_t slash = path.find('/', pos);
@@ -36,7 +38,20 @@ Result<void> check_entry_path(const std::string& path) {
     pos = slash + 1;
   }
   if (path.find('\\') != std::string::npos) bad = true;
-  if (bad) return Error{ErrorCode::InvalidFormat, "unsafe path in package: " + path, ""};
+  if (bad) {
+    std::string shown;  // escape control bytes so the message itself stays safe to print
+    for (unsigned char c : path) {
+      if (c < 0x20) {
+        static constexpr char kHex[] = "0123456789abcdef";
+        shown += "\\x";
+        shown += kHex[c >> 4];
+        shown += kHex[c & 0xF];
+      } else {
+        shown += static_cast<char>(c);
+      }
+    }
+    return Error{ErrorCode::InvalidFormat, "unsafe path in package: " + shown, ""};
+  }
   return {};
 }
 

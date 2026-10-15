@@ -79,6 +79,8 @@ do spec, ou que preencheu uma lacuna dele. Formato: o quê, por quê, custo se e
 ### R9. `extract` rejeita caminhos STFS com `..` ou `/` inicial; `game.toml` fica ao lado do `recomp.toml`
 - Por quê: evitar path traversal a partir de um pacote malicioso. (A parte "doctor sempre re-executa" foi
   substituída pelo R19.) Custo: pequeno.
+- Complemento (revisão final): também rejeita `\`, NUL e bytes de controle (< 0x20); a mensagem de erro
+  mostra esses bytes escapados (`\xNN`).
 
 ### R10. O fingerprint de `verify` inclui os hashes esperados
 - Por quê: mudar `game.toml` precisa invalidar a verificação. Custo: nenhum.

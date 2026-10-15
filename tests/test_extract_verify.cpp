@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -124,6 +125,36 @@ TEST_CASE("extract rejects paths escaping game/", "[unit]") {
   auto r = make_extract_stage()->execute(c);
   REQUIRE_FALSE(r);
   CHECK(r.error().code == ErrorCode::InvalidFormat);
+}
+
+TEST_CASE("extract rejects entry names with NUL or control bytes", "[unit]") {
+  for (const std::string& bad : {std::string("a\0b", 3), std::string("tab\tname"), std::string("nl\nname"),
+                                std::string("esc\x1b[2J"), std::string("\x01")}) {
+    INFO("name bytes: " << bad.size());
+    Fixture f;
+    testing::StfsBuilder pkg, tu;
+    pkg.add_file("default.xex", bytes("A"));
+    pkg.add_file(bad, bytes("evil"));
+    tu.add_file("default.xexp", bytes("B"));
+    f.write_iso(pkg.build(), tu.build());
+    auto c = f.ctx();
+    auto r = make_extract_stage()->execute(c);
+    REQUIRE_FALSE(r);
+    CHECK(r.error().code == ErrorCode::InvalidFormat);
+    CHECK(r.error().message.find("\\x") != std::string::npos);  // control bytes are escaped in the message
+    CHECK(std::none_of(r.error().message.begin(), r.error().message.end(),
+                       [](char ch) { return static_cast<unsigned char>(ch) < 0x20; }));
+  }
+  // Bytes >= 0x20 (spaces, UTF-8) stay allowed.
+  Fixture f;
+  testing::StfsBuilder pkg, tu;
+  pkg.add_file("default.xex", bytes("A"));
+  pkg.add_file("na\xc3\xafve name.txt", bytes("ok"));
+  tu.add_file("default.xexp", bytes("B"));
+  f.write_iso(pkg.build(), tu.build());
+  auto c = f.ctx();
+  REQUIRE(make_extract_stage()->execute(c));
+  CHECK(slurp(c.paths.game / "na\xc3\xafve name.txt") == "ok");
 }
 
 TEST_CASE("extract honours cancellation and leaves no marker", "[unit]") {
