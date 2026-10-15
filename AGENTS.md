@@ -21,6 +21,7 @@ cmake --preset release && cmake --build --preset release
 build/release/bin/legacyrecomp install --iso /path/to/game.iso   # CLI: doctor..build, cached via work/state.toml
 build/release/bin/legacyrecomp run                               # exit 3 = first unimplemented kernel import (expected in M1)
 build/release/bin/legacyrecomp-gui                               # GUI launcher (see docs/gui.md)
+packaging/appimage/build.sh                                      # AppImage + source archive in packaging/appimage/out (docs/packaging.md)
 ```
 
 Pass `--root <dir>` (or `LEGACYRECOMP_ROOT`) to choose the data root; use a disk, never a tmpfs. Binaries land in `build/<preset>/bin`. Only Clang is supported (CMake refuses other compilers). Our targets get strict flags through `lr_configure_target()` in `cmake/LrWarnings.cmake`; never apply it to submodules.
@@ -52,7 +53,7 @@ Also: MIT license (changed from GPL-3.0 to MIT on 2026-10-14 by the project owne
 
 ## Docs
 
-Map: `docs/architecture.md`, `docs/pipeline.md`, `docs/gui.md`, `docs/roadmap.md`, `docs/kernel-coverage.md` (regenerated from a real build, see its header), `docs/adr/`, `docs/formats/`, `docs/reverse-engineering/`.
+Map: `docs/architecture.md`, `docs/pipeline.md`, `docs/gui.md`, `docs/packaging.md` (AppImage), `docs/roadmap.md`, `docs/kernel-coverage.md` (regenerated from a real build, see its header), `docs/adr/`, `docs/formats/`, `docs/reverse-engineering/`.
 
 Live in `docs/` (design specs and plans under `docs/superpowers/`, ADRs in `docs/adr/`, format notes in `docs/formats/`). Docs change in the same commit as the code they describe.
 

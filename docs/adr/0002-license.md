@@ -56,7 +56,7 @@ arquivos que `cmake --install` produz.
 | tiny-AES-c | Unlicense, domínio público (`thirdparty/XenonRecomp/thirdparty/tiny-AES-c/unlicense.txt`) | Dentro de `libXenonUtils.a` (decifra o XEX) |
 | TinySHA1 | Licença tipo ISC no cabeçalho de `TinySHA1.hpp` | Só cabeçalho, usado por `XenonUtils` |
 | disasm (desmontador PowerPC do GNU binutils) | GPL-2.0-or-later (cabeçalho de `thirdparty/XenonRecomp/thirdparty/disasm/ppc-dis.c`; a pasta não tem arquivo `COPYING`) | Só nas ferramentas `XenonAnalyse` e `XenonRecomp`, que por isso são, como obra combinada, GPL-2.0-or-later. Não entra em `legacyrecomp`, `legacyrecomp-gui` nem no jogo: desde a decisão R25 (2026-10-14) a `libdisasm.a` não é mais copiada para `share/legacyrecomp/runtime/lib/` nem passada ao link do jogo, e o teste `no_gpl_disassembler_in_binaries` (rótulo `unit`) falha se o símbolo `decode_insn_ppc` aparecer nesses binários ou se a `libdisasm.a` voltar a ser copiada |
-| SDL2 | zlib (pacote do sistema, `/usr/share/licenses/sdl2-compat/LICENSE`) | Ligada dinamicamente em `legacyrecomp-gui` e no jogo; dependência do sistema, não submódulo |
+| SDL2 | zlib (pacote do sistema, `/usr/share/licenses/sdl2-compat/LICENSE`; no AppImage, `LICENSE.txt` do SDL2 2.32.10) | Ligada dinamicamente em `legacyrecomp-gui` e no jogo; dependência do sistema, não submódulo. No AppImage, compilada estática a partir do fonte fixado e ligada estaticamente na GUI e no jogo |
 | Inter, JetBrains Mono | SIL OFL 1.1 (`assets/fonts/LICENSE-*.txt`) | Copiadas para `share/legacyrecomp/fonts/` com as licenças |
 | Xenia | BSD (não está no repositório; licença não conferida localmente) | Nada. Usado só como referência para offsets de estruturas e formatos. O XenonRecomp, segundo o próprio README, reaproveita código do Xenia Canary para aplicar patches em XEX |
 
@@ -77,10 +77,12 @@ licenças e, por isso, carregam as obrigações combinadas de todos eles:
   correspondente dessas ferramentas. A pasta `thirdparty/XenonRecomp/thirdparty/disasm/` não traz um
   arquivo `COPYING`, então o texto da GPL-2.0 é fornecido por nós.
 - **Avisos dos demais componentes** (MIT, BSD-2-Clause, zlib, OFL, Unlicense, ISC): os textos de licença
-  vão juntos no pacote. Hoje só o `COPYING` do simde e as licenças das fontes são copiados para
-  `share/legacyrecomp/`; o arquivo `THIRD-PARTY-LICENSES` completo é tarefa da Task 17.
+  vão juntos no pacote. A instalação via `cmake --install` copia só o `COPYING` do simde e as licenças das
+  fontes para `share/legacyrecomp/`; o AppImage leva o `THIRD-PARTY-LICENSES` completo
+  (`usr/share/doc/legacyrecomp/`, gerado por `packaging/appimage/licenses.sh`, ver `docs/packaging.md`).
 - **Código-fonte com submódulos**: os arquivos `.tar.gz` que o GitHub gera para cada tag **não incluem os
   submódulos**. Por isso cada release precisa anexar um arquivo de código-fonte completo, com os
-  submódulos, ao lado do AppImage (Task 17: `LegacyRecomp-<versão>-source.tar.gz`).
+  submódulos, ao lado do AppImage (`LegacyRecomp-<versão>-source.tar.gz`, escrito pelo
+  `packaging/appimage/build.sh`).
 
 Isto é uma leitura de engenharia das licenças, não um parecer jurídico.

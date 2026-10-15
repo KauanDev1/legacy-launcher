@@ -70,7 +70,13 @@ You need an x86-64 CPU with AVX, about 8 GB of free disk space and your own imag
 
 ### AppImage
 
-The AppImage is in progress and not released yet. It will bundle its own compiler, so there will be nothing to install, and it will be published on the project's releases page. Once it is out, this is how it will work:
+The AppImage carries its own compiler (Zig), CMake, Ninja and SDL2, so there is nothing to install: it compiles the game on your machine with what it brings along. It needs glibc 2.29 or newer (Debian 11, Ubuntu 20.04 and later). There is no download yet, so build it from a clone of the repository (with its submodules):
+
+```sh
+packaging/appimage/build.sh        # writes packaging/appimage/out/LegacyRecomp-x86_64.AppImage
+```
+
+[docs/packaging.md](docs/packaging.md) lists what the build machine needs and what goes into the image. Then:
 
 ```sh
 chmod +x LegacyRecomp-x86_64.AppImage
@@ -120,7 +126,7 @@ build/release/bin/legacyrecomp-gui                                 # the graphic
 | Recompiler | XenonRecomp, XenonAnalyse and XenonUtils from hedge-dev |
 | Launcher UI | SDL2, Dear ImGui, Inter and JetBrains Mono fonts |
 | Config and tests | toml++, Catch2 |
-| Packaging | AppImage with a bundled Zig toolchain (in progress) |
+| Packaging | AppImage with a bundled Zig toolchain |
 | Written in-house | XDVDFS, STFS and XEX2 readers, the install pipeline, the runtime |
 
 ## Project layout

@@ -70,7 +70,13 @@ flowchart TD
 
 ### AppImage
 
-AppImage 还在开发中，尚未发布。它将自带编译器，不需要安装任何东西，发布后会放在项目的 releases 页面上。届时的用法如下：
+AppImage 自带编译器（Zig）、CMake、Ninja 和 SDL2，不需要安装任何东西：它用自带的工具在你的机器上编译游戏。需要 glibc 2.29 或更新版本（Debian 11、Ubuntu 20.04 及之后的版本）。目前还没有下载地址，请从仓库的克隆（包含子模块）自行构建：
+
+```sh
+packaging/appimage/build.sh        # 生成 packaging/appimage/out/LegacyRecomp-x86_64.AppImage
+```
+
+[docs/packaging.md](docs/packaging.md) 说明了构建机器需要什么，以及镜像里包含什么。然后：
 
 ```sh
 chmod +x LegacyRecomp-x86_64.AppImage
@@ -120,7 +126,7 @@ build/release/bin/legacyrecomp-gui                                 # 图形启�
 | 重编译器 | hedge-dev 的 XenonRecomp、XenonAnalyse 和 XenonUtils |
 | 启动器界面 | SDL2、Dear ImGui、Inter 和 JetBrains Mono 字体 |
 | 配置与测试 | toml++、Catch2 |
-| 打包 | AppImage，内置 Zig 工具链（开发中） |
+| 打包 | AppImage，内置 Zig 工具链 |
 | 自行实现 | XDVDFS、STFS 和 XEX2 读取器，安装流程，运行时 |
 
 ## 项目结构

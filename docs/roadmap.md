@@ -4,8 +4,8 @@ Fonte: spec do M1 (`docs/superpowers/specs/2026-10-14-legacyrecomp-m1-design.md`
 
 | Marco | Escopo | Estado |
 |---|---|---|
-| M1 | Pipeline completo (doctor a build), formatos, runtime mínimo, CLI e GUI, documentação. O jogo compila e para na primeira importação do kernel sem implementação (saída 3) | feito, exceto o AppImage |
-| M1, Task 17 | AppImage autossuficiente com toolchain embutido (zig c++, cmake, ninja, SDL2), `THIRD-PARTY-LICENSES` e arquivo-fonte completo | em andamento |
+| M1 | Pipeline completo (doctor a build), formatos, runtime mínimo, CLI e GUI, documentação. O jogo compila e para na primeira importação do kernel sem implementação (saída 3) | feito |
+| M1, Task 17 | AppImage autossuficiente com toolchain embutido (zig c++, cmake, ninja, SDL2), `THIRD-PARTY-LICENSES` e arquivo-fonte completo (`docs/packaging.md`) | feito |
 | M2 | Kernel HLE: threads, arquivos, sincronização, TLS/KTHREAD completos | futuro |
 | M3 | GPU: Vulkan + XenosRecomp (shaders) | futuro |
 | M4 | Áudio, entrada e saves | futuro |
