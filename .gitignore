@@ -17,6 +17,9 @@ ppc_func_mapping.cpp
 ppc_config.h
 
 # --- Build artifacts --------------------------------------------------------
+# AppImage packaging: pinned downloads, toolchain builds, AppDir and the AppImage itself
+packaging/appimage/cache/
+packaging/appimage/out/
 build/
 build-*/
 cmake-build-*/

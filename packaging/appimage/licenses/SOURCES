@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# License texts that are not in the source tree or in a pinned download, kept here unchanged so that
+# packaging/appimage/licenses.sh can copy them into THIRD-PARTY-LICENSES. Fetched on 2026-10-14.
+#
+# GPL-2.0.txt                         GNU GPL version 2 text (copy of thirdparty/XenonRecomp/thirdparty/xxHash/cli/COPYING).
+#                                     The binutils disassembler in thirdparty/XenonRecomp/thirdparty/disasm/ has no
+#                                     COPYING file of its own (ADR 0002).
+# appimage-type2-runtime-LICENSE.txt  https://raw.githubusercontent.com/AppImage/type2-runtime/20251108/LICENSE
+# squashfuse-LICENSE.txt              https://raw.githubusercontent.com/vasi/squashfuse/0.5.2/LICENSE
+# zstd-LICENSE.txt                    https://raw.githubusercontent.com/facebook/zstd/v1.5.7/LICENSE
+# zlib-LICENSE.txt                    https://raw.githubusercontent.com/madler/zlib/v1.3.1/LICENSE
+# mimalloc-LICENSE.txt                https://raw.githubusercontent.com/microsoft/mimalloc/v2.1.7/LICENSE
+# musl-COPYRIGHT.txt                  https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v1.2.5

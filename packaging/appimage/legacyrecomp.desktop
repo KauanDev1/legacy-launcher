@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+[Desktop Entry]
+Type=Application
+Name=LegacyRecomp
+Comment=Builds a native Linux port of Minecraft: Xbox 360 Edition from your own disc image
+Exec=legacyrecomp-gui
+Icon=legacyrecomp
+Terminal=false
+Categories=Game;

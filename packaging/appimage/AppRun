@@ -1,0 +1,16 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# AppImage entry point.
+#   (no arguments)        the graphical launcher (legacyrecomp-gui)
+#   gui [gui options]     the graphical launcher with options, e.g. `gui --root DIR --screenshot shot.bmp`
+#   anything else         the command-line launcher, e.g. `install --iso FILE`, `run -- --headless`, `doctor`
+# The launchers find their resources (and the bundled toolchain) at usr/share/legacyrecomp next to usr/bin.
+here=${APPDIR:-$(dirname "$(readlink -f "$0")")}
+if [ "$#" -eq 0 ]; then
+  exec "$here/usr/bin/legacyrecomp-gui"
+fi
+if [ "$1" = gui ]; then
+  shift
+  exec "$here/usr/bin/legacyrecomp-gui" "$@"
+fi
+exec "$here/usr/bin/legacyrecomp" "$@"
