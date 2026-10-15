@@ -14,7 +14,16 @@ LEGACYRECOMP_ISO=/path/to/game.iso ctest --preset dev -L integration
 
 Requirements: x86-64 CPU with AVX (the game is compiled with `-march=sandybridge`; `doctor` checks it), Clang ≥ 18, CMake ≥ 3.25, Ninja, SDL2, 8 GiB free disk.
 
-Binaries land in `build/dev/bin`. Only Clang is supported (CMake refuses other compilers). Our targets get strict flags through `lr_configure_target()` in `cmake/LrWarnings.cmake`; never apply it to submodules.
+Release build and usage:
+
+```
+cmake --preset release && cmake --build --preset release
+build/release/bin/legacyrecomp install --iso /path/to/game.iso   # CLI: doctor..build, cached via work/state.toml
+build/release/bin/legacyrecomp run                               # exit 3 = first unimplemented kernel import (expected in M1)
+build/release/bin/legacyrecomp-gui                               # GUI launcher (see docs/gui.md)
+```
+
+Pass `--root <dir>` (or `LEGACYRECOMP_ROOT`) to choose the data root; use a disk, never a tmpfs. Binaries land in `build/<preset>/bin`. Only Clang is supported (CMake refuses other compilers). Our targets get strict flags through `lr_configure_target()` in `cmake/LrWarnings.cmake`; never apply it to submodules.
 
 Include root is `src/`: write `#include "common/result.h"`.
 
@@ -42,6 +51,8 @@ Namespaces: `lr`, `lr::formats`, `lr::pipeline`, `lr::runtime`, `lr::kernel`.
 Also: MIT license (changed from GPL-3.0 to MIT on 2026-10-14 by the project owner), see `docs/adr/0002-license.md`; every new source file starts with `// SPDX-License-Identifier: MIT` (`#` comment in CMake/Python/shell); never copy code from UnleashedRecomp (GPL-3.0), use it only as a reference; code, identifiers and commit messages in English, `docs/` prose in Portuguese.
 
 ## Docs
+
+Map: `docs/architecture.md`, `docs/pipeline.md`, `docs/gui.md`, `docs/roadmap.md`, `docs/kernel-coverage.md` (regenerated from a real build, see its header), `docs/adr/`, `docs/formats/`, `docs/reverse-engineering/`.
 
 Live in `docs/` (design specs and plans under `docs/superpowers/`, ADRs in `docs/adr/`, format notes in `docs/formats/`). Docs change in the same commit as the code they describe.
 
