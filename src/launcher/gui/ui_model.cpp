@@ -117,15 +117,26 @@ float approach_progress(float displayed, float target, float dt_seconds, float r
   return target - next < 0.005f ? target : next;
 }
 
-float ui_scale(float dpi, float framebuffer_scale, const char* env_override) {
-  if (env_override && *env_override) {
-    char* end = nullptr;
-    const float v = std::strtof(env_override, &end);
-    if (end && *end == '\0' && v >= 0.5f && v <= 4.0f) return v;
-  }
-  const float display = dpi > 0.0f ? dpi / 96.0f : 1.0f;
-  const float s = display / std::max(framebuffer_scale, 1.0f);
-  return std::clamp(std::round(s * 4.0f) / 4.0f, 1.0f, 3.0f);
+namespace {
+
+// The whole of `text` as a number in [lo, hi], if it is one.
+std::optional<float> parse_scale(const char* text, float lo, float hi) {
+  if (!text || !*text) return std::nullopt;
+  char* end = nullptr;
+  const float v = std::strtof(text, &end);
+  if (!end || *end != '\0' || !(v >= lo && v <= hi)) return std::nullopt;
+  return v;
+}
+
+}  // namespace
+
+float ui_scale(float framebuffer_scale, const ScaleEnv& env) {
+  if (auto v = parse_scale(env.override_scale, 0.5f, 4.0f)) return *v;
+  if (framebuffer_scale > 1.0f) return 1.0f;
+  auto hint = parse_scale(env.gdk_scale, 1.0f, 4.0f);
+  if (!hint) hint = parse_scale(env.qt_scale_factor, 1.0f, 4.0f);
+  if (!hint) return 1.0f;
+  return std::clamp(std::round(*hint * 4.0f) / 4.0f, 1.0f, 3.0f);
 }
 
 LogTone classify_log_line(std::string_view line) {

@@ -26,9 +26,12 @@ Exemplo: `legacyrecomp-gui --iso ~/Jogos/minecraft.iso --install`.
 ## Variáveis de ambiente
 
 - `LEGACYRECOMP_ROOT`: pasta de dados (como `--root`, que tem precedência).
-- `LEGACYRECOMP_UI_SCALE`: escala da interface (0.5 a 4, ex. `1.25`). Por padrão vem do DPI da tela,
-  descontada a escala que o sistema já aplica à janela (Wayland). Útil no X11 quando o DPI informado
-  está errado.
+- `LEGACYRECOMP_UI_SCALE`: escala da interface (0.5 a 4, ex. `1.25`). Sem ela: no Wayland e em telas
+  HiDPI o próprio sistema escala a janela, e a escala fica 1; no X11 vale `GDK_SCALE` ou, na falta dele,
+  `QT_SCALE_FACTOR` (1 a 4), senão 1. O DPI informado pelo X11 não é usado: é o DPI físico do monitor,
+  não a escala da área de trabalho.
+
+A janela abre com 1100×720 vezes a escala, limitada a 90% da área útil da tela.
 - `LEGACYRECOMP_RESOURCES`: pasta `share/legacyrecomp` alternativa (ferramentas, template, fontes).
 
 ## Fontes

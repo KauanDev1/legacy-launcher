@@ -66,27 +66,36 @@ TEST_CASE("classify_log_line tints errors and warnings", "[unit]") {
   CHECK(classify_log_line("[3/10] Building x") == LogTone::Normal);
 }
 
-TEST_CASE("ui_scale divides the display scale by the framebuffer scale", "[unit]") {
+TEST_CASE("ui_scale: no hints means 1, a framebuffer scale > 1 already covers HiDPI", "[unit]") {
   using Catch::Approx;
-  CHECK(ui_scale(96.0f, 1.0f, nullptr) == Approx(1.0f));
-  CHECK(ui_scale(192.0f, 2.0f, nullptr) == Approx(1.0f));  // logical coordinates: fb already scales
-  CHECK(ui_scale(144.0f, 1.0f, nullptr) == Approx(1.5f));
-  CHECK(ui_scale(192.0f, 1.0f, nullptr) == Approx(2.0f));
-  CHECK(ui_scale(96.0f, 2.0f, nullptr) == Approx(1.0f));  // never below 1
-  CHECK(ui_scale(0.0f, 1.0f, nullptr) == Approx(1.0f));   // DPI unknown
-  CHECK(ui_scale(110.0f, 1.0f, nullptr) == Approx(1.25f));  // quarter steps
-  CHECK(ui_scale(1000.0f, 1.0f, nullptr) == Approx(3.0f));
+  CHECK(ui_scale(1.0f, {}) == Approx(1.0f));
+  CHECK(ui_scale(2.0f, {}) == Approx(1.0f));
+  CHECK(ui_scale(2.0f, {nullptr, "2", "2"}) == Approx(1.0f));  // Wayland/HiDPI: the framebuffer scales
+  CHECK(ui_scale(0.0f, {}) == Approx(1.0f));
 }
 
-TEST_CASE("ui_scale honours a valid LEGACYRECOMP_UI_SCALE override", "[unit]") {
+TEST_CASE("ui_scale uses GDK_SCALE / QT_SCALE_FACTOR as hints on a 1x framebuffer", "[unit]") {
   using Catch::Approx;
-  CHECK(ui_scale(192.0f, 1.0f, "1.25") == Approx(1.25f));
-  CHECK(ui_scale(96.0f, 2.0f, "0.75") == Approx(0.75f));
-  CHECK(ui_scale(144.0f, 1.0f, "") == Approx(1.5f));
-  CHECK(ui_scale(144.0f, 1.0f, "abc") == Approx(1.5f));
-  CHECK(ui_scale(144.0f, 1.0f, "1.5x") == Approx(1.5f));
-  CHECK(ui_scale(144.0f, 1.0f, "0") == Approx(1.5f));
-  CHECK(ui_scale(144.0f, 1.0f, "9") == Approx(1.5f));
+  CHECK(ui_scale(1.0f, {nullptr, "2", nullptr}) == Approx(2.0f));
+  CHECK(ui_scale(1.0f, {nullptr, nullptr, "1.5"}) == Approx(1.5f));
+  CHECK(ui_scale(1.0f, {nullptr, "2", "1.5"}) == Approx(2.0f));    // GDK_SCALE first
+  CHECK(ui_scale(1.0f, {nullptr, "abc", "1.5"}) == Approx(1.5f));  // invalid GDK_SCALE skipped
+  CHECK(ui_scale(1.0f, {nullptr, nullptr, "1.3"}) == Approx(1.25f));  // quarter steps
+  CHECK(ui_scale(1.0f, {nullptr, nullptr, "0.5"}) == Approx(1.0f));   // never shrinks below 1
+  CHECK(ui_scale(1.0f, {nullptr, "9", nullptr}) == Approx(1.0f));     // out of range
+  CHECK(ui_scale(1.0f, {nullptr, "", ""}) == Approx(1.0f));
+}
+
+TEST_CASE("ui_scale honours a valid LEGACYRECOMP_UI_SCALE override over everything", "[unit]") {
+  using Catch::Approx;
+  CHECK(ui_scale(1.0f, {"1.25", nullptr, nullptr}) == Approx(1.25f));
+  CHECK(ui_scale(2.0f, {"1.25", nullptr, nullptr}) == Approx(1.25f));
+  CHECK(ui_scale(1.0f, {"0.75", "2", nullptr}) == Approx(0.75f));
+  for (const char* bad : {"", "abc", "1.5x", "0", "9"}) {
+    CAPTURE(bad);
+    CHECK(ui_scale(1.0f, {bad, nullptr, nullptr}) == Approx(1.0f));
+    CHECK(ui_scale(1.0f, {bad, "2", nullptr}) == Approx(2.0f));
+  }
 }
 
 TEST_CASE("stage_message translates the pipeline's progress messages", "[unit]") {

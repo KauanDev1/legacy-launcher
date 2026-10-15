@@ -27,7 +27,8 @@ void usage() {
       "  --iso         prefill the ISO field\n"
       "  --install     start the install immediately\n"
       "  --screenshot  save the window to a BMP once and exit (after the install, if started)\n"
-      "environment: LEGACYRECOMP_UI_SCALE=<0.5..4> overrides the UI scale (default: from the display DPI)\n",
+      "environment: LEGACYRECOMP_UI_SCALE=<0.5..4> overrides the UI scale (default: 1, or GDK_SCALE /\n"
+      "  QT_SCALE_FACTOR on X11; Wayland/HiDPI backends scale the framebuffer themselves)\n",
       stderr);
 }
 
@@ -41,19 +42,14 @@ bool save_screenshot(SDL_Renderer* r, const char* path) {
   return ok;
 }
 
-// Horizontal DPI of the first display, 0 when unknown.
-float display_dpi() {
-  float ddpi = 0, hdpi = 0, vdpi = 0;
-  return SDL_GetDisplayDPI(0, &ddpi, &hdpi, &vdpi) == 0 ? hdpi : 0.0f;
-}
-
-// `w`x`h` (window coordinates) scaled by `scale`, but never larger than the display's usable area.
-SDL_Point scaled_size(int w, int h, float scale) {
+// `w`x`h` (window coordinates) scaled by `scale`, but at most 90% of the usable area of `display`, so the window
+// always fits (title bar and panels included).
+SDL_Point scaled_size(int display, int w, int h, float scale) {
   SDL_Point p{static_cast<int>(static_cast<float>(w) * scale), static_cast<int>(static_cast<float>(h) * scale)};
   SDL_Rect usable;
-  if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && usable.w > 0 && usable.h > 0) {
-    p.x = std::min(p.x, usable.w);
-    p.y = std::min(p.y, usable.h);
+  if (SDL_GetDisplayUsableBounds(display, &usable) == 0 && usable.w > 0 && usable.h > 0) {
+    p.x = std::min(p.x, usable.w * 9 / 10);
+    p.y = std::min(p.y, usable.h * 9 / 10);
   }
   return p;
 }
@@ -81,7 +77,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   // Created at the unscaled size first: the UI scale depends on the renderer's framebuffer scale.
-  const SDL_Point initial = scaled_size(1100, 720, 1.0f);
+  const SDL_Point initial = scaled_size(0, 1100, 720, 1.0f);
   SDL_Window* window = SDL_CreateWindow("LegacyRecomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, initial.x,
                                         initial.y, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   SDL_Renderer* renderer =
@@ -94,7 +90,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   // Window sizes are in window coordinates. Where those are logical (Wayland, sdl2-compat on SDL3) the
-  // framebuffer scale already carries the display scale, so ui_scale only adds what it does not cover.
+  // framebuffer scale already carries the display scale; see lr::gui::ui_scale for the rest.
   float fb_scale = 1.0f;
   {
     int win_w = 0, win_h = 0, out_w = 0, out_h = 0;
@@ -102,13 +98,15 @@ int main(int argc, char** argv) {
     SDL_GetRendererOutputSize(renderer, &out_w, &out_h);
     if (win_w > 0 && out_w > 0) fb_scale = static_cast<float>(out_w) / static_cast<float>(win_w);
   }
-  const float ui_scale = lr::gui::ui_scale(display_dpi(), fb_scale, std::getenv("LEGACYRECOMP_UI_SCALE"));
-  if (ui_scale != 1.0f) {
-    const SDL_Point size = scaled_size(1100, 720, ui_scale);
+  const float ui_scale = lr::gui::ui_scale(
+      fb_scale, {std::getenv("LEGACYRECOMP_UI_SCALE"), std::getenv("GDK_SCALE"), std::getenv("QT_SCALE_FACTOR")});
+  const int display = std::max(0, SDL_GetWindowDisplayIndex(window));
+  const SDL_Point size = scaled_size(display, 1100, 720, ui_scale);
+  if (size.x != initial.x || size.y != initial.y) {
     SDL_SetWindowSize(window, size.x, size.y);
-    SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED_DISPLAY(display), SDL_WINDOWPOS_CENTERED_DISPLAY(display));
   }
-  const SDL_Point minimum = scaled_size(900, 600, ui_scale);
+  const SDL_Point minimum = scaled_size(display, 900, 600, ui_scale);
   SDL_SetWindowMinimumSize(window, minimum.x, minimum.y);
 
   IMGUI_CHECKVERSION();

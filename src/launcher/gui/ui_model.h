@@ -37,11 +37,17 @@ std::string abbreviate_home(const std::filesystem::path& path, const char* home)
 // within half a percent). Moving backwards (a new run) snaps immediately.
 float approach_progress(float displayed, float target, float dt_seconds, float rate = 10.0f);
 
-// UI scale on top of the window's logical coordinates. `env_override` (LEGACYRECOMP_UI_SCALE) wins when it parses
-// as a number in [0.5, 4]. Otherwise the display scale (`dpi` / 96; 1 when dpi <= 0) divided by the framebuffer
-// scale (drawable / window size: backends with logical coordinates already scale by it), rounded to quarter
-// steps and clamped to [1, 3].
-float ui_scale(float dpi, float framebuffer_scale, const char* env_override);
+// Environment the UI scale may come from (getenv() results; null/empty = unset).
+struct ScaleEnv {
+  const char* override_scale = nullptr;   // LEGACYRECOMP_UI_SCALE, a float in [0.5, 4]
+  const char* gdk_scale = nullptr;        // GDK_SCALE (desktop hint)
+  const char* qt_scale_factor = nullptr;  // QT_SCALE_FACTOR (desktop hint)
+};
+// UI scale on top of the window's logical coordinates. A valid override wins. Otherwise a framebuffer scale
+// > 1 (Wayland/HiDPI backends) already scales everything, so 1. Otherwise GDK_SCALE, then QT_SCALE_FACTOR,
+// if in [1, 4] (rounded to quarter steps, clamped to [1, 3]); else 1. The display DPI is deliberately not
+// used: X11 reports the monitor's physical DPI, not the desktop scale.
+float ui_scale(float framebuffer_scale, const ScaleEnv& env);
 
 // Colour class of a log line: "[ERROR]"/"error:"/"FAILED:" lines are errors, "[WARN]"/"warning:" warnings.
 enum class LogTone { Normal, Warning, Error };
