@@ -51,7 +51,8 @@ std::string_view usage_text() {
          "  --jobs <n>                 parallel jobs (default: hardware concurrency)\n"
          "  --help                     show this text\n"
          "\n"
-         "exit codes: 0 ok, 1 pipeline error, 2 usage; `run` returns the game's exit code.\n"
+         "exit codes: 0 ok, 1 pipeline error, 2 usage, 130 cancelled; `run` returns the game's exit code\n"
+         "(1 if it cannot be started, 128 + signal if the game is killed).\n"
          "Ctrl+C (or SIGTERM/SIGHUP) during install/build cancels cleanly; completed stages stay cached.\n"
          "A second one kills the running tool and exits at once.\n";
 }

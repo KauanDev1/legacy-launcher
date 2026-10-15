@@ -95,14 +95,16 @@ curso manda SIGTERM ao grupo da ferramenta (SIGKILL após 3 s) e a CLI sai com 1
 grupo da ferramenta com SIGKILL e encerra a CLI na hora, pelo próprio sinal; nenhum cmake/ninja/clang fica
 órfão.
 
-`legacyrecomp run` devolve o código do jogo:
+`legacyrecomp run` devolve o código do jogo, com duas exceções do próprio launcher:
 
-| Saída do jogo | Significado |
+| Saída de `run` | Significado |
 |---|---|
 | 0 | fim normal |
-| 2 | uso ou preparação falhou (imagem ausente, base diferente da compilada, mapeamento de memória) |
+| 1 | o launcher não conseguiu iniciar o jogo (jogo não compilado, `work/image/default_tu1.xex` ausente, falha no `posix_spawn`); a mensagem vai para stderr como `error:` |
+| 2 | uso ou preparação falhou dentro do jogo (imagem ausente, base diferente da compilada, mapeamento de memória) |
 | 3 | importação do kernel não implementada (esperado no M1; o relatório vai para stderr) |
 | 4 | falha de execução (SIGSEGV, SIGILL etc. tratada pelo handler) |
+| 128 + sinal | o jogo morreu por um sinal não tratado (por exemplo 130 com Ctrl+C, 137 com SIGKILL) |
 
 ## Solução de problemas por código de erro
 
