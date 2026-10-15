@@ -104,7 +104,8 @@ o SDL continua abrindo com `dlopen` as bibliotecas X11/Wayland/áudio do sistema
 
 O AppImage é montado num caminho diferente a cada execução (`/tmp/.mount_XXXX`). Como o caminho do template
 muda, a etapa `build` apaga `work/build` e recompila do zero quando precisa rodar de novo (ver
-`reset_stale_build_dir`); depois de uma instalação completa ela fica em cache e isso não acontece.
+`reset_stale_build_dir`, que faz o mesmo quando a pasta de dados foi movida, pois o `CMAKE_CACHEFILE_DIR` do
+cache deixa de bater); depois de uma instalação completa ela fica em cache e isso não acontece.
 
 ## Por que tudo é compilado com o zig
 

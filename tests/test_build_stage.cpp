@@ -92,12 +92,28 @@ TEST_CASE("reset_stale_build_dir wipes a build dir configured from another templ
   REQUIRE(none);
   CHECK_FALSE(none.value());
 
-  write(build / "CMakeCache.txt", "# cache\nCMAKE_HOME_DIRECTORY:INTERNAL=" + tmpl.string() + "\nFOO:BOOL=ON\n");
+  const std::string good_cache = "# cache\nCMAKE_CACHEFILE_DIR:INTERNAL=" + build.string() +
+                                 "\nCMAKE_HOME_DIRECTORY:INTERNAL=" + tmpl.string() + "\nFOO:BOOL=ON\n";
+  write(build / "CMakeCache.txt", good_cache);
   write(build / "build.ninja", "x");
   auto same = reset_stale_build_dir(build, tmpl / ".");
   REQUIRE(same);
   CHECK_FALSE(same.value());
   CHECK(fs::exists(build / "build.ninja"));
+
+  // The data root moved: same template, but the cache was written for another build dir.
+  write(build / "CMakeCache.txt", "CMAKE_CACHEFILE_DIR:INTERNAL=/old/root/work/build\nCMAKE_HOME_DIRECTORY:INTERNAL=" +
+                                      tmpl.string() + "\n");
+  auto root_moved = reset_stale_build_dir(build, tmpl);
+  REQUIRE(root_moved);
+  CHECK(root_moved.value());
+  CHECK_FALSE(fs::exists(build));
+
+  write(build / "CMakeCache.txt", "CMAKE_HOME_DIRECTORY:INTERNAL=" + tmpl.string() + "\n");  // no CACHEFILE_DIR
+  auto no_cachefile_dir = reset_stale_build_dir(build, tmpl);
+  REQUIRE(no_cachefile_dir);
+  CHECK(no_cachefile_dir.value());
+  CHECK_FALSE(fs::exists(build));
 
   write(build / "CMakeCache.txt", "CMAKE_HOME_DIRECTORY:INTERNAL=/old/prefix/share/legacyrecomp/runtime/template\n");
   auto moved = reset_stale_build_dir(build, tmpl);

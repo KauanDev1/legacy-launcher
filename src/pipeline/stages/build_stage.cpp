@@ -90,18 +90,23 @@ Result<bool> reset_stale_build_dir(const fs::path& build_dir, const fs::path& te
   std::error_code ec;
   const fs::path cache = build_dir / "CMakeCache.txt";
   if (!fs::exists(cache, ec) && !ec) return false;
-  bool stale = true;
+  // Both directories recorded in the cache must still be ours: the source (template) dir and the build dir
+  // itself (CMake also refuses a cache written for another build dir, e.g. after the data root was moved).
+  auto same_dir = [](const fs::path& recorded, const fs::path& actual) {
+    std::error_code eq;
+    return recorded.lexically_normal() == actual.lexically_normal() || fs::equivalent(recorded, actual, eq);
+  };
+  std::optional<bool> home_ok, cachefile_ok;
   if (std::ifstream f(cache, std::ios::binary); f) {
-    constexpr std::string_view kKey = "CMAKE_HOME_DIRECTORY:INTERNAL=";
-    for (std::string line; std::getline(f, line);) {
-      if (!line.starts_with(kKey)) continue;
-      const fs::path home = fs::path(line.substr(kKey.size())).lexically_normal();
-      std::error_code eq;
-      stale = home != template_dir.lexically_normal() && !fs::equivalent(home, template_dir, eq);
-      break;
+    constexpr std::string_view kHome = "CMAKE_HOME_DIRECTORY:INTERNAL=";
+    constexpr std::string_view kCacheFile = "CMAKE_CACHEFILE_DIR:INTERNAL=";
+    for (std::string line; std::getline(f, line) && !(home_ok && cachefile_ok);) {
+      if (!home_ok && line.starts_with(kHome)) home_ok = same_dir(line.substr(kHome.size()), template_dir);
+      if (!cachefile_ok && line.starts_with(kCacheFile))
+        cachefile_ok = same_dir(line.substr(kCacheFile.size()), build_dir);
     }
   }
-  if (!stale) return false;
+  if (home_ok.value_or(false) && cachefile_ok.value_or(false)) return false;
   fs::remove_all(build_dir, ec);
   if (ec)
     return Error{ErrorCode::IoError, "cannot remove stale build dir " + build_dir.string() + ": " + ec.message(), ""};

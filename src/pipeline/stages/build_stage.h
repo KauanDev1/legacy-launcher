@@ -24,9 +24,11 @@ Result<std::string> build_fingerprint(const fs::path& generated, const fs::path&
 unsigned build_jobs(unsigned requested, unsigned hardware_threads, uint64_t total_ram_bytes);
 
 // CMake refuses to reuse a build dir configured from another source dir ("does not match the source used to generate
-// cache") and never recovers. If <build_dir>/CMakeCache.txt exists and its CMAKE_HOME_DIRECTORY is not
-// `template_dir` (e.g. the launcher moved or was installed elsewhere), or the cache is unreadable / has no such
-// entry, removes `build_dir` and returns true. No cache -> false, nothing touched. IoError if removal fails.
+// cache") or whose cache was written in another build dir ("CMakeCache.txt directory ... is different"), and never
+// recovers. If <build_dir>/CMakeCache.txt exists and its CMAKE_HOME_DIRECTORY is not `template_dir` (e.g. the
+// launcher moved or was installed elsewhere) or its CMAKE_CACHEFILE_DIR is not `build_dir` (the data root moved), or
+// the cache is unreadable / lacks either entry, removes `build_dir` and returns true. No cache -> false, nothing
+// touched. IoError if removal fails.
 Result<bool> reset_stale_build_dir(const fs::path& build_dir, const fs::path& template_dir);
 
 }  // namespace lr::pipeline
