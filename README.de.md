@@ -102,6 +102,7 @@ sudo dnf install clang lld llvm cmake ninja-build SDL2-devel pkgconf git
 ```
 
 ```sh
+# <URL des Repositorys> ist ein Platzhalter: Das Projekt hat noch kein öffentliches Repository
 git clone --recursive <URL des Repositorys> legacyrecomp
 cd legacyrecomp
 cmake --preset release

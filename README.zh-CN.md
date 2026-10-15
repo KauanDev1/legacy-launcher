@@ -102,6 +102,7 @@ sudo dnf install clang lld llvm cmake ninja-build SDL2-devel pkgconf git
 ```
 
 ```sh
+# <仓库地址> 是占位符：项目目前还没有公开仓库
 git clone --recursive <仓库地址> legacyrecomp
 cd legacyrecomp
 cmake --preset release
