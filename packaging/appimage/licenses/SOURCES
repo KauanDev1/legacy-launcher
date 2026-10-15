@@ -11,3 +11,5 @@
 # zlib-LICENSE.txt                    https://raw.githubusercontent.com/madler/zlib/v1.3.1/LICENSE
 # mimalloc-LICENSE.txt                https://raw.githubusercontent.com/microsoft/mimalloc/v2.1.7/LICENSE
 # musl-COPYRIGHT.txt                  https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v1.2.5
+# openssl-LICENSE.txt                 https://raw.githubusercontent.com/openssl/openssl/openssl-3.6.0/LICENSE.txt
+#                                     (OpenSSL 3.6.0 is linked statically in the official CMake 4.4.4 binary)

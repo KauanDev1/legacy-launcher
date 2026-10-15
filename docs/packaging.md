@@ -20,18 +20,20 @@ CLI `legacyrecomp`. Sem FUSE no sistema, use `--appimage-extract-and-run` como p
 variável `APPIMAGE_EXTRACT_AND_RUN=1`).
 
 Na primeira compilação o zig monta a libc++, a libunwind e os stubs da glibc no cache dele
-(`$XDG_CACHE_HOME/zig`, normalmente `~/.cache/zig`, cerca de 30 s e algumas dezenas de MB). As compilações
+(`$XDG_CACHE_HOME/zig`, normalmente `~/.cache/zig`, cerca de 30 s e 100 MB). As compilações
 seguintes reaproveitam esse cache.
 
 ## Gerar o AppImage
 
 ```sh
-packaging/appimage/build.sh [--out DIR] [--jobs N]
+packaging/appimage/build.sh [--out DIR] [--jobs N] [--allow-dirty]
 ```
 
 Saída em `packaging/appimage/out/` (ou `--out`): `LegacyRecomp-x86_64.AppImage`,
-`LegacyRecomp-<versão>-source.tar.gz` e o `AppDir/` usado para montar o AppImage. A versão vem de
-`LR_VERSION` (padrão `0.1.0-m1`). Downloads, fontes extraídas, builds e o cache do zig ficam em
+`LegacyRecomp-<versão>-source.tar.gz`, `LegacyRecomp-<versão>-runtime-sources.tar.gz` e o `AppDir/` usado
+para montar o AppImage. Uma release anexa os três arquivos. A versão vem de `LR_VERSION` (padrão
+`0.1.0-m1`). Com mudanças não commitadas o script se recusa a rodar, porque o arquivo-fonte sai do `HEAD` e
+não corresponderia ao AppImage; `--allow-dirty` libera isso para builds de teste. Downloads, fontes extraídas, builds e o cache do zig ficam em
 `packaging/appimage/cache/`; as duas pastas são ignoradas pelo git. O script pode ser rodado de novo: os
 builds são incrementais e o `AppDir` é refeito do zero.
 
@@ -45,7 +47,9 @@ com `APPIMAGE_EXTRACT_AND_RUN=1`).
 O que o `build.sh` faz:
 
 1. Baixa as versões fixadas em `packaging/appimage/toolchain.lock`, cada uma numa pasta nova, e confere o
-   SHA-256 antes de extrair. O tarball do zig também tem a assinatura minisign conferida (Ed25519 sobre o
+   SHA-256 antes de extrair. Um arquivo do cache que não bate mais com o hash é baixado de novo; um download
+   que não bate interrompe o script. A extração vai para uma pasta temporária, renomeada só se o `tar` deu
+   certo. O tarball do zig também tem a assinatura minisign conferida (Ed25519 sobre o
    BLAKE2b-512, com `openssl`).
 2. Monta o `AppDir/usr/share/legacyrecomp/toolchain/` (layout abaixo), com o zig reduzido ao que o alvo
    `x86_64-linux-gnu` usa (sem as outras libcs, sem headers de outros alvos, sem TSan e sem docs: de 406 MB
@@ -58,7 +62,10 @@ O que o `build.sh` faz:
    raiz do AppDir, mais `AppRun`, `.desktop` e ícone, e chama o `appimagetool` com o runtime fixado.
 6. Gera o arquivo-fonte: `git archive` do `HEAD` mais `git submodule foreach --recursive git archive`,
    concatenados sob o prefixo `LegacyRecomp-<versão>/`. Os `.tar.gz` que o GitHub gera para as tags não
-   trazem os submódulos. Mudanças não commitadas ficam de fora (o script avisa).
+   trazem os submódulos.
+7. Gera `LegacyRecomp-<versão>-runtime-sources.tar.gz`, o fonte correspondente do runtime do AppImage: o
+   fonte do type2-runtime na tag fixada (com os scripts de build e o patch que ele aplica na libfuse) e o
+   tarball da libfuse 3.15.0 que esses scripts compilam (mesma versão e mesmo SHA-256), mais um `README`.
 
 ### Versões fixadas
 
@@ -70,6 +77,8 @@ O que o `build.sh` faz:
 | SDL2 | 2.32.10 (fonte, compilado estático com zig) | assinatura GPG de Sam Lantinga (`1528 635D 8053 A57F 77D1 E086 30A5 9377 A776 3BE6`) |
 | appimagetool | 1.9.1 | sem checksum oficial; hash do arquivo baixado |
 | AppImage type2 runtime | 20251108 | sem checksum oficial; hash do arquivo baixado |
+| Fonte do type2 runtime | 20251108 (arquivo da tag) | sem checksum oficial; hash do arquivo baixado |
+| Fonte da libfuse | 3.15.0 | o mesmo SHA-256 que o `install-dependencies.sh` do type2 runtime confere |
 
 O binário oficial do Ninja não serve: ele depende da `libstdc++.so.6` do sistema. Compilado com o zig, ele só
 depende da glibc.
@@ -168,9 +177,10 @@ Executado em 2026-10-14 na máquina de desenvolvimento (Manjaro, glibc 2.44, 12 
   dela, mas até agora só foi testado nessa máquina; testar numa distro antiga (container) fica para depois.
 - **Backends do SDL2**: dependem dos headers presentes na máquina que gerou o AppImage (ver requisitos).
 - **x86-64 com AVX** apenas, como no build a partir do código-fonte.
-- **libfuse no runtime do AppImage**: o runtime type2 liga estaticamente a libfuse 3 (LGPL-2.1). O
-  `THIRD-PARTY-LICENSES` aponta o repositório e os scripts que dizem quais fontes ele usa; não anexamos essas
-  fontes à release.
+- **libfuse no runtime do AppImage**: o runtime type2 liga estaticamente a libfuse 3.15.0 (LGPL-2.1). O
+  fonte correspondente (runtime, patch e libfuse) vai em `LegacyRecomp-<versão>-runtime-sources.tar.gz`, que
+  a release anexa ao lado do AppImage. As outras bibliotecas do runtime (musl, squashfuse, zstd, zlib,
+  mimalloc) têm licenças permissivas; os textos estão no `THIRD-PARTY-LICENSES`.
 
 ## Licenças no AppImage
 
@@ -178,6 +188,7 @@ Executado em 2026-10-14 na máquina de desenvolvimento (Manjaro, glibc 2.44, 12 
 tabela de componentes, as notas de obra combinada (XenonAnalyse/XenonRecomp GPL-2.0-or-later; libmspack
 LGPL-2.1 estática nos launchers e nas ferramentas, com o arquivo-fonte completo da release ao lado) e o texto
 integral de cada licença: as da tabela do ADR 0002, mais zig, LLVM/libc++, glibc (`LICENSES`), headers do
-Linux, CMake e as bibliotecas que ele embute, Ninja, SDL2, o runtime do AppImage e o que ele liga. Os textos
+Linux, CMake e as bibliotecas que ele embute (incluindo a OpenSSL 3.6.0, ligada estaticamente no binário
+oficial do CMake), Ninja, SDL2, o runtime do AppImage e o que ele liga (com o aviso de copyright da libfuse). Os textos
 que não estão no código nem nos downloads ficam em `packaging/appimage/licenses/` (origem em `SOURCES`),
 incluindo o texto da GPL-2.0 que o `disasm/` não traz.

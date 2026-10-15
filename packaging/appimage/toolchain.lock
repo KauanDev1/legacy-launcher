@@ -12,12 +12,18 @@
 #                 1528 635D 8053 A57F 77D1 E086 30A5 9377 A776 3BE6.
 #   appimagetool  no upstream checksum; hash of the release asset as downloaded.
 #   runtime       AppImage type2-runtime; no upstream checksum (a GPG .sig is published); hash as downloaded.
+#   runtime-src   source of that runtime (GitHub tag archive); no upstream checksum; hash as downloaded.
+#   libfuse-src   the libfuse the runtime links statically (LGPL-2.1): same version and SHA-256 as the runtime's
+#                 scripts/common/install-dependencies.sh at tag 20251108. Not built here; shipped next to the
+#                 AppImage as corresponding source (LegacyRecomp-<version>-runtime-sources.tar.gz).
 zig          0.17.0    1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026  https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz
 cmake        4.4.4     e5bb807f7728cb60cd8b27ebc97a2edb469b68655f21e844a600c3575b76f5bb  https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-linux-x86_64.tar.gz
 ninja-src    1.13.2    974d6b2f4eeefa25625d34da3cb36bdcebe7fbce40f4c16ac0835fd1c0cbae17  https://github.com/ninja-build/ninja/archive/refs/tags/v1.13.2.tar.gz
 sdl2         2.32.10   5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165  https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz
 appimagetool 1.9.1     ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
 runtime      20251108  2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+runtime-src  20251108  4c4f6df4647c9f01f871d7edd3716d8aeeffda9d22ffbebe3fccd95a6ab52c95  https://github.com/AppImage/type2-runtime/archive/refs/tags/20251108.tar.gz
+libfuse-src  3.15.0    70589cfd5e1cff7ccd6ac91c86c01be340b227285c5e200baa284e401eea2ca0  https://github.com/libfuse/libfuse/releases/download/fuse-3.15.0/fuse-3.15.0.tar.xz
 
 # Zig's minisign public key (https://ziglang.org/download/).
 zig-minisign-key  RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U

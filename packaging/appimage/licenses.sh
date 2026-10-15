@@ -4,16 +4,16 @@
 # the GPL/LGPL combined works (docs/adr/0002-license.md, "Obrigações dos pacotes binários") and the full license
 # text and copyright notice of each component.
 #
-#   licenses.sh OUT VERSION REPO ZIG_DIR CMAKE_DIR NINJA_SRC_DIR SDL2_SRC_DIR
+#   licenses.sh OUT VERSION REPO ZIG_DIR CMAKE_DIR NINJA_SRC_DIR SDL2_SRC_DIR LIBFUSE_SRC_DIR
 #
-# ZIG_DIR, CMAKE_DIR, NINJA_SRC_DIR and SDL2_SRC_DIR are the extracted pinned downloads (packaging/appimage/build.sh).
+# The *_DIR arguments are the extracted pinned downloads (packaging/appimage/build.sh).
 set -euo pipefail
 
-if [ "$#" -ne 7 ]; then
-  echo "usage: $0 OUT VERSION REPO ZIG_DIR CMAKE_DIR NINJA_SRC_DIR SDL2_SRC_DIR" >&2
+if [ "$#" -ne 8 ]; then
+  echo "usage: $0 OUT VERSION REPO ZIG_DIR CMAKE_DIR NINJA_SRC_DIR SDL2_SRC_DIR LIBFUSE_SRC_DIR" >&2
   exit 2
 fi
-out=$1 version=$2 repo=$3 zig=$4 cmake=$5 ninja=$6 sdl2=$7
+out=$1 version=$2 repo=$3 zig=$4 cmake=$5 ninja=$6 sdl2=$7 libfuse=$8
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 tp=$repo/thirdparty/XenonRecomp/thirdparty
 
@@ -72,6 +72,7 @@ LLVM, Clang, LLD, libc++,          Apache-2.0 WITH LLVM-exception            ins
 GNU C Library headers and sources  LGPL-2.1-or-later + notices in LICENSES   toolchain/zig/lib/libc
 Linux kernel UAPI headers          GPL-2.0 WITH Linux-syscall-note           toolchain/zig/lib/libc/include
 CMake (and its bundled libraries)  BSD-3-Clause (+ licenses listed below)    toolchain/cmake
+OpenSSL 3.6.0                      Apache-2.0                                statically linked in toolchain/cmake
 Ninja                              Apache-2.0                                toolchain/bin/ninja
 AppImage type2 runtime             MIT                                       the AppImage file header, note 4
   musl, libfuse, squashfuse,       MIT, LGPL-2.1, BSD-2-Clause,
@@ -99,9 +100,10 @@ Notes
    https://github.com/libsdl-org/SDL.
 
 4. The AppImage type2 runtime (https://github.com/AppImage/type2-runtime, release 20251108) is used
-   unmodified. It statically links musl libc, libfuse 3 (LGPL-2.1, with the patch in that repository),
-   squashfuse, libzstd, zlib and mimalloc. Their sources are listed in that repository's build scripts
-   (scripts/common/install-dependencies.sh at tag 20251108).
+   unmodified. It statically links musl libc, libfuse 3.15.0 (LGPL-2.1, with the patch in that repository),
+   squashfuse, libzstd, zlib and mimalloc (see its scripts/common/install-dependencies.sh). The
+   corresponding source of the runtime and of libfuse, including that patch, is published next to this
+   AppImage as LegacyRecomp-$version-runtime-sources.tar.gz.
 
 This file is an engineering reading of the licenses, not legal advice.
 EOF
@@ -145,8 +147,18 @@ for d in "$cmake"/doc/cmake/cm*/; do
   # shellcheck disable=SC2046
   section "CMake bundled library: $name" $(find "$d" -type f | sort)
 done
+printf '\n\nOpenSSL 3.6.0 (Apache-2.0), statically linked in the official CMake binary\n'
+printf '=========================================================================\n\n'
+printf 'Copyright (c) 1998-2025 The OpenSSL Project Authors\nCopyright (c) 1995-1998 Eric A. Young, Tim J. Hudson\n'
+printf 'All rights reserved.\n'
+section "OpenSSL license text" "$here/licenses/openssl-LICENSE.txt"
 section "Ninja (Apache-2.0)" "$ninja/COPYING"
 section "AppImage type2 runtime (MIT)" "$here/licenses/appimage-type2-runtime-LICENSE.txt"
+printf '\n\nlibfuse 3.15.0 (LGPL-2.1 for lib/ and include/), in the AppImage runtime\n'
+printf '=======================================================================\n\n'
+printf -- '--- notice from fuse-3.15.0/lib/fuse.c ---\n\n'
+header_comment "$libfuse/lib/fuse.c" 10
+section "libfuse license terms and authors (the LGPL-2.1 text is above)" "$libfuse/LICENSE" "$libfuse/AUTHORS"
 section "musl libc (MIT), in the AppImage runtime" "$here/licenses/musl-COPYRIGHT.txt"
 section "squashfuse (BSD-2-Clause), in the AppImage runtime" "$here/licenses/squashfuse-LICENSE.txt"
 section "Zstandard (BSD-3-Clause), in the AppImage runtime" "$here/licenses/zstd-LICENSE.txt"
