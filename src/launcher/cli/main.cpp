@@ -35,6 +35,9 @@ namespace fs = std::filesystem;
 using namespace lr::formats;
 
 constexpr int kMaxTreeDepth = 4;
+// Recursion limit of the package/XEX walkers. The disc is untrusted: a directory entry can point back at an
+// ancestor, and walking that cycle would recurse until the stack overflows. Real discs nest about 5 levels.
+constexpr int kMaxWalkDepth = 16;
 
 std::string utf8_from_u16(const std::u16string& s) {
   std::string out;
@@ -130,7 +133,11 @@ Result<void> inspect_package(const XdvdfsImage& img, const std::string& path) {
 }
 
 // Walks `dir` recursively; calls inspect_package on every file (STFS packages have no extension).
-Result<void> walk_packages(const XdvdfsImage& img, const std::string& dir) {
+Result<void> walk_packages(const XdvdfsImage& img, const std::string& dir, int depth = 0) {
+  if (depth >= kMaxWalkDepth) {
+    std::printf("\n[%s] nested deeper than %d levels; not walked\n", dir.c_str(), kMaxWalkDepth);
+    return {};
+  }
   auto entries = img.list(dir);
   if (!entries) {
     std::printf("\n[%s] not present on disc\n", dir.c_str());
@@ -139,7 +146,7 @@ Result<void> walk_packages(const XdvdfsImage& img, const std::string& dir) {
   for (const auto& e : entries.value()) {
     std::string p = join(dir, e.name);
     if (e.is_dir) {
-      LR_TRY(walk_packages(img, p));
+      LR_TRY(walk_packages(img, p, depth + 1));
     } else {
       LR_TRY(inspect_package(img, p));
     }
@@ -147,12 +154,16 @@ Result<void> walk_packages(const XdvdfsImage& img, const std::string& dir) {
   return {};
 }
 
-Result<void> walk_xex(const XdvdfsImage& img, const std::string& dir) {
+Result<void> walk_xex(const XdvdfsImage& img, const std::string& dir, int depth = 0) {
+  if (depth >= kMaxWalkDepth) {
+    std::printf("[%s] nested deeper than %d levels; not walked\n", dir.c_str(), kMaxWalkDepth);
+    return {};
+  }
   LR_TRY_ASSIGN(entries, img.list(dir));
   for (const auto& e : entries) {
     std::string p = join(dir, e.name);
     if (e.is_dir) {
-      LR_TRY(walk_xex(img, p));
+      LR_TRY(walk_xex(img, p, depth + 1));
     } else if (is_xex_name(e.name)) {
       LR_TRY_ASSIGN(f, img.open_file(p));
       LR_TRY(print_xex(*f, "disc:" + p, ""));

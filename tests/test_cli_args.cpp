@@ -1,11 +1,25 @@
 // SPDX-License-Identifier: MIT
 #include <catch2/catch_test_macros.hpp>
 
+#include <fcntl.h>
+#include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <chrono>
+#include <cstdint>
+#include <fstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "launcher/cli/args.h"
+#include "support/temp_dir.h"
+#include "support/xdvdfs_builder.h"
+
+extern char** environ;
 
 using namespace lr;
 using namespace lr::cli;
@@ -77,4 +91,42 @@ TEST_CASE("build --force extract or doctor without --iso is a usage error", "[un
   CHECK_FALSE(parse({"build", "--force", "doctor"}));
   CHECK(parse({"build", "--force", "extract", "--iso", "g.iso"}));
   CHECK(parse({"build", "--force", "patch"}));
+}
+
+TEST_CASE("inspect --iso terminates on a directory cycle", "[unit]") {
+  // Root holds one directory, Content, whose entry points back at the root directory: Content/Content/... forever.
+  auto img = testing::XdvdfsBuilder().add("Content/pkg", {std::byte{1}}).build();
+  const size_t entry = static_cast<size_t>(img.root_sector) * testing::kSector;  // root's only entry: Content
+  for (int i = 0; i < 4; ++i) img.data[entry + 4 + i] = std::byte((img.root_sector >> (8 * i)) & 0xFF);
+
+  lr::testing::TempDir tmp{"lr_inspect_cycle"};
+  const auto iso = tmp.path / "cycle.iso";  // XDVDFS at partition offset 0
+  std::ofstream(iso, std::ios::binary)
+      .write(reinterpret_cast<const char*>(img.data.data()), static_cast<std::streamsize>(img.data.size()));
+
+  posix_spawn_file_actions_t fa;
+  posix_spawn_file_actions_init(&fa);
+  posix_spawn_file_actions_addopen(&fa, 1, "/dev/null", O_WRONLY, 0);
+  posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
+  std::vector<std::string> store = {LR_CLI_PATH, "inspect", "--iso", iso.string()};
+  std::vector<char*> argv;
+  for (auto& a : store) argv.push_back(a.data());
+  argv.push_back(nullptr);
+  pid_t pid = -1;
+  REQUIRE(posix_spawn(&pid, LR_CLI_PATH, &fa, nullptr, argv.data(), environ) == 0);
+  posix_spawn_file_actions_destroy(&fa);
+
+  int st = 0;
+  bool done = false;
+  for (int i = 0; i < 600 && !done; ++i) {  // 60 s
+    done = ::waitpid(pid, &st, WNOHANG) == pid;
+    if (!done) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  if (!done) {
+    ::kill(pid, SIGKILL);
+    ::waitpid(pid, &st, 0);
+  }
+  REQUIRE(done);
+  CHECK(WIFEXITED(st));
+  if (WIFEXITED(st)) CHECK(WEXITSTATUS(st) == 0);
 }

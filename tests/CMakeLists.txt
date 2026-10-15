@@ -5,7 +5,9 @@ target_include_directories(lr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_
 target_link_libraries(lr_tests PRIVATE lr_common lr_formats lr_pipeline lr_cli lr_gui_core lr_runtime_core XenonUtils tomlplusplus::tomlplusplus Catch2::Catch2WithMain)
 lr_configure_target(lr_tests)
 catch_discover_tests(lr_tests ADD_TAGS_AS_LABELS PROPERTIES TIMEOUT 3600)
-target_compile_definitions(lr_tests PRIVATE LR_SOURCE_DIR="${CMAKE_SOURCE_DIR}" LR_RESOURCES_DIR="${LR_RESOURCES_DIR}")
+target_compile_definitions(lr_tests PRIVATE LR_SOURCE_DIR="${CMAKE_SOURCE_DIR}" LR_RESOURCES_DIR="${LR_RESOURCES_DIR}"
+  LR_CLI_PATH="$<TARGET_FILE:legacyrecomp>")
+add_dependencies(lr_tests legacyrecomp)
 add_dependencies(lr_tests lr_resources)
 
 # --- fake game: main.cpp + hand-written "generated" code + stubs rendered by render_import_stubs ---
