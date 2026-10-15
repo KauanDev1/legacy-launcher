@@ -23,7 +23,7 @@
 
 Minecraft: Xbox 360 Edition was built for the Xbox 360's PowerPC processor. LegacyRecomp translates that machine code into C++ ahead of time, function by function, and compiles the result for x86-64 with Clang. What comes out is an ordinary Linux executable. No emulator runs underneath it: the work an emulator does instruction by instruction while you play happens once, at build time.
 
-That translation happens on your computer. The launcher reads your own disc image, extracts the game, applies the title update, recompiles everything and builds the executable. This repository ships the tools and a runtime that replaces the parts of the Xbox 360 system software the game talks to. It never ships any of the game's code.
+That translation happens on your computer. The launcher reads your own disc image, extracts the game, applies the Title Update, recompiles everything and builds the executable. This repository ships the tools and a runtime that replaces the parts of the Xbox 360 system software the game talks to. It never ships any of the game's code.
 
 ## Open source
 
@@ -41,7 +41,7 @@ The game is not playable yet. Nothing is drawn on screen.
 | M4 | Audio, input, saves | Planned |
 | M5 | Playable: main menu and worlds | Planned |
 
-With M1 done, the launcher turns your disc into `legacyrecomp-game`, and `legacyrecomp run` starts the recompiled entry point. The game's code runs until its first call into the Xbox kernel that the runtime does not provide yet, `NtAllocateVirtualMemory`, and then exits with code 3 and a report naming that call. The game imports 459 kernel functions, and none of them are implemented so far. That is the work of M2.
+With M1 done, the launcher turns your disc into `legacyrecomp-game`, and `legacyrecomp run` starts the recompiled entry point. The game's code runs until its first call into the Xbox kernel that the runtime does not provide yet, `NtAllocateVirtualMemory`, and then exits with code 3 and a report naming that call. The game imports 459 system functions from xboxkrnl (the kernel) and XAM, and none of them are implemented so far. That is the work of M2.
 
 One known obstacle for later milestones: the pinned XenonRecomp version does not handle some PowerPC instructions this game uses (`bdzf`, `stfsu`, `lfsu`, `vsel128` and others), which shows up as 3,279 warnings during recompilation.
 
@@ -62,7 +62,7 @@ flowchart TD
     clang --> game["legacyrecomp-game"]
 ```
 
-The disc's own `Default.xex` is only a small loader. The real game sits in an XBLA package on the disc, and Title Update 1 is on the disc too. XenonAnalyse finds no jump tables in this executable, so the pipeline runs its own scanner, which finds 221. Compiling the generated code takes about 4.5 minutes and up to about 2.6 GiB of RAM; the whole first install takes around 5.5 minutes.
+The disc's own `Default.xex` is only a small loader. The real game sits in an XBLA package on the disc, and Title Update 1 is on the disc too. XenonAnalyse finds no jump tables in this executable, so the pipeline runs its own scanner, which finds 221. On a 12-thread machine, compiling the generated code takes about 4.5 minutes and the whole first install around 5.5. Memory use depends on how many files compile at once: the launcher runs at most one compile job per CPU thread and per 2 GiB of RAM, and `--jobs` sets the number by hand.
 
 ## Getting started
 
@@ -70,7 +70,7 @@ You need an x86-64 CPU with AVX, about 8 GB of free disk space and your own imag
 
 ### AppImage
 
-The AppImage bundles its own compiler, so there is nothing to install. Releases will be published on the project's releases page; none is out yet.
+The AppImage is in progress and not released yet. It will bundle its own compiler, so there will be nothing to install, and it will be published on the project's releases page. Once it is out, this is how it will work:
 
 ```sh
 chmod +x LegacyRecomp-x86_64.AppImage
@@ -120,7 +120,7 @@ build/release/bin/legacyrecomp-gui                                 # the graphic
 | Recompiler | XenonRecomp, XenonAnalyse and XenonUtils from hedge-dev |
 | Launcher UI | SDL2, Dear ImGui, Inter and JetBrains Mono fonts |
 | Config and tests | toml++, Catch2 |
-| Packaging | AppImage with a bundled Zig toolchain |
+| Packaging | AppImage with a bundled Zig toolchain (in progress) |
 | Written in-house | XDVDFS, STFS and XEX2 readers, the install pipeline, the runtime |
 
 ## Project layout

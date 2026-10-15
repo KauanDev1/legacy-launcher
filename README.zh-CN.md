@@ -23,7 +23,7 @@
 
 Minecraft: Xbox 360 Edition 是为 Xbox 360 的 PowerPC 处理器编写的。LegacyRecomp 预先把这些机器码逐个函数翻译成 C++，再用 Clang 编译成 x86-64 程序，得到的就是一个普通的 Linux 可执行文件。运行时底层并没有模拟器：模拟器在游戏过程中逐条指令做的工作，在这里只在构建时做一次。
 
-翻译过程在你自己的电脑上完成。启动器读取你自己的光盘镜像，提取游戏、应用标题更新、完成重编译并生成可执行文件。本仓库提供的是这些工具，以及一个运行时，用来替代游戏所调用的那部分 Xbox 360 系统软件。仓库从不分发任何游戏代码。
+翻译过程在你自己的电脑上完成。启动器读取你自己的光盘镜像，提取游戏、应用 Title Update、完成重编译并生成可执行文件。本仓库提供的是这些工具，以及一个运行时，用来替代游戏所调用的那部分 Xbox 360 系统软件。仓库从不分发任何游戏代码。
 
 ## 开源
 
@@ -41,7 +41,7 @@ LegacyRecomp 是自由软件，采用 MIT 许可证。欢迎任何形式的贡�
 | M4 | 音频、手柄输入、存档 | 计划中 |
 | M5 | 可游玩：主菜单和世界 | 计划中 |
 
-M1 完成后，启动器可以把你的光盘变成 `legacyrecomp-game`，`legacyrecomp run` 会启动重编译后的入口点。游戏代码会一直运行，直到第一次调用运行时尚未提供的 Xbox 内核函数 `NtAllocateVirtualMemory`，随后以退出码 3 结束，并输出一份指明该调用的报告。游戏一共导入了 459 个内核函数，目前一个都还没有实现，这正是 M2 要做的事。
+M1 完成后，启动器可以把你的光盘变成 `legacyrecomp-game`，`legacyrecomp run` 会启动重编译后的入口点。游戏代码会一直运行，直到第一次调用运行时尚未提供的 Xbox 内核函数 `NtAllocateVirtualMemory`，随后以退出码 3 结束，并输出一份指明该调用的报告。游戏一共从 xboxkrnl（内核）和 XAM 导入了 459 个系统函数，目前一个都还没有实现，这正是 M2 要做的事。
 
 后续里程碑有一个已知的障碍：当前固定版本的 XenonRecomp 不支持游戏用到的部分 PowerPC 指令（`bdzf`、`stfsu`、`lfsu`、`vsel128` 等），重编译时会因此产生 3279 条警告。
 
@@ -62,7 +62,7 @@ flowchart TD
     clang --> game["legacyrecomp-game"]
 ```
 
-光盘上的 `Default.xex` 只是一个小小的加载器，真正的游戏在光盘里的一个 XBLA 包中，Title Update 1 也在光盘上。XenonAnalyse 在这个可执行文件里一个跳转表（jump table）都找不到，所以流程里用了我们自己写的扫描器，它找到了 221 个。编译生成的代码大约需要 4.5 分钟，内存占用最高约 2.6 GiB；第一次完整安装大约需要 5.5 分钟。
+光盘上的 `Default.xex` 只是一个小小的加载器，真正的游戏在光盘里的一个 XBLA 包中，Title Update 1 也在光盘上。XenonAnalyse 在这个可执行文件里一个跳转表（jump table）都找不到，所以流程里用了我们自己写的扫描器，它找到了 221 个。在一台 12 线程的机器上，编译生成的代码大约需要 4.5 分钟，第一次完整安装大约需要 5.5 分钟。内存占用取决于同时编译的文件数量：启动器同时运行的编译任务数既不超过 CPU 线程数，也不超过内存容量除以 2 GiB；也可以用 `--jobs` 手动指定。
 
 ## 快速开始
 
@@ -70,7 +70,7 @@ flowchart TD
 
 ### AppImage
 
-AppImage 自带编译器，不需要安装任何东西。版本会发布在项目的 releases 页面上，目前还没有发布任何版本。
+AppImage 还在开发中，尚未发布。它将自带编译器，不需要安装任何东西，发布后会放在项目的 releases 页面上。届时的用法如下：
 
 ```sh
 chmod +x LegacyRecomp-x86_64.AppImage
@@ -120,7 +120,7 @@ build/release/bin/legacyrecomp-gui                                 # 图形启�
 | 重编译器 | hedge-dev 的 XenonRecomp、XenonAnalyse 和 XenonUtils |
 | 启动器界面 | SDL2、Dear ImGui、Inter 和 JetBrains Mono 字体 |
 | 配置与测试 | toml++、Catch2 |
-| 打包 | AppImage，内置 Zig 工具链 |
+| 打包 | AppImage，内置 Zig 工具链（开发中） |
 | 自行实现 | XDVDFS、STFS 和 XEX2 读取器，安装流程，运行时 |
 
 ## 项目结构

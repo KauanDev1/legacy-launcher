@@ -23,7 +23,7 @@
 
 Minecraft: Xbox 360 Edition a été écrit pour le processeur PowerPC de la Xbox 360. LegacyRecomp traduit ce code machine en C++ à l'avance, fonction par fonction, puis compile le résultat pour x86-64 avec Clang. On obtient un exécutable Linux tout ce qu'il y a de plus ordinaire. Aucun émulateur ne tourne en dessous : le travail qu'un émulateur fait instruction par instruction pendant la partie est fait une seule fois, à la compilation.
 
-Cette traduction a lieu sur votre machine. Le launcher lit l'image de votre propre disque, extrait le jeu, applique la mise à jour du titre, recompile le tout et produit l'exécutable. Ce dépôt fournit les outils et un runtime qui remplace les parties du logiciel système de la Xbox 360 avec lesquelles le jeu communique. Il ne distribue jamais le moindre code du jeu.
+Cette traduction a lieu sur votre machine. Le launcher lit l'image de votre propre disque, extrait le jeu, applique le Title Update, recompile le tout et produit l'exécutable. Ce dépôt fournit les outils et un runtime qui remplace les parties du logiciel système de la Xbox 360 avec lesquelles le jeu communique. Il ne distribue jamais le moindre code du jeu.
 
 ## Open source
 
@@ -41,7 +41,7 @@ Le jeu n'est pas encore jouable. Rien ne s'affiche à l'écran.
 | M4 | Audio, manettes, sauvegardes | Prévu |
 | M5 | Jouable : menu principal et mondes | Prévu |
 
-Avec M1 terminé, le launcher transforme votre disque en `legacyrecomp-game`, et `legacyrecomp run` lance le point d'entrée recompilé. Le code du jeu s'exécute jusqu'à son premier appel au noyau de la Xbox que le runtime ne fournit pas encore, `NtAllocateVirtualMemory`, puis s'arrête avec le code 3 et un rapport qui nomme cet appel. Le jeu importe 459 fonctions du noyau, et aucune n'est implémentée pour l'instant. C'est le travail de M2.
+Avec M1 terminé, le launcher transforme votre disque en `legacyrecomp-game`, et `legacyrecomp run` lance le point d'entrée recompilé. Le code du jeu s'exécute jusqu'à son premier appel au noyau de la Xbox que le runtime ne fournit pas encore, `NtAllocateVirtualMemory`, puis s'arrête avec le code 3 et un rapport qui nomme cet appel. Le jeu importe 459 fonctions système de xboxkrnl (le noyau) et de XAM, et aucune n'est implémentée pour l'instant. C'est le travail de M2.
 
 Un obstacle est déjà connu pour la suite : la version épinglée de XenonRecomp ne gère pas certaines instructions PowerPC utilisées par le jeu (`bdzf`, `stfsu`, `lfsu`, `vsel128` et d'autres), ce qui se traduit par 3 279 avertissements pendant la recompilation.
 
@@ -62,7 +62,7 @@ flowchart TD
     clang --> game["legacyrecomp-game"]
 ```
 
-Le `Default.xex` du disque n'est qu'un petit chargeur. Le vrai jeu se trouve dans un paquet XBLA sur le disque, et le Title Update 1 est lui aussi sur le disque. XenonAnalyse ne trouve aucune table de saut (jump table) dans cet exécutable, donc le pipeline utilise son propre scanner, qui en trouve 221. La compilation du code généré prend environ 4,5 minutes et jusqu'à 2,6 Gio de RAM ; la première installation complète prend à peu près 5,5 minutes.
+Le `Default.xex` du disque n'est qu'un petit chargeur. Le vrai jeu se trouve dans un paquet XBLA sur le disque, et le Title Update 1 est lui aussi sur le disque. XenonAnalyse ne trouve aucune table de saut (jump table) dans cet exécutable, donc le pipeline utilise son propre scanner, qui en trouve 221. Sur une machine à 12 threads, la compilation du code généré prend environ 4,5 minutes, et la première installation complète à peu près 5,5. La mémoire utilisée dépend du nombre de fichiers compilés en parallèle : le launcher lance au plus une tâche de compilation par thread du processeur et par tranche de 2 Gio de RAM, et `--jobs` permet de fixer ce nombre à la main.
 
 ## Démarrage
 
@@ -70,7 +70,7 @@ Il vous faut un processeur x86-64 avec AVX, environ 8 Go d'espace disque libre e
 
 ### AppImage
 
-L'AppImage embarque son propre compilateur, il n'y a donc rien à installer. Les versions seront publiées sur la page des releases du projet ; aucune n'est encore sortie.
+L'AppImage est encore en préparation et n'a pas encore été publiée. Elle embarquera son propre compilateur, il n'y aura donc rien à installer, et sera publiée sur la page des releases du projet. Une fois disponible, elle s'utilisera ainsi :
 
 ```sh
 chmod +x LegacyRecomp-x86_64.AppImage
@@ -120,7 +120,7 @@ build/release/bin/legacyrecomp-gui                                 # le launcher
 | Recompilateur | XenonRecomp, XenonAnalyse et XenonUtils, de hedge-dev |
 | Interface du launcher | SDL2, Dear ImGui, polices Inter et JetBrains Mono |
 | Configuration et tests | toml++, Catch2 |
-| Distribution | AppImage avec une toolchain Zig intégrée |
+| Distribution | AppImage avec une toolchain Zig intégrée (en préparation) |
 | Écrit dans le projet | Lecteurs XDVDFS, STFS et XEX2, le pipeline d'installation, le runtime |
 
 ## Organisation du dépôt

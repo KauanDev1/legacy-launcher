@@ -23,7 +23,7 @@
 
 O Minecraft: Xbox 360 Edition foi feito para o processador PowerPC do Xbox 360. O LegacyRecomp traduz esse código de máquina para C++ antes da execução, função por função, e compila o resultado para x86-64 com o Clang. O que sai disso é um executável comum de Linux. Não tem emulador rodando por baixo: o trabalho que um emulador faz instrução por instrução enquanto você joga acontece uma vez só, na hora de compilar.
 
-Essa tradução acontece no seu computador. O launcher lê a imagem do seu próprio disco, extrai o jogo, aplica a atualização de título, recompila tudo e gera o executável. Este repositório distribui as ferramentas e um runtime que substitui as partes do sistema do Xbox 360 com que o jogo conversa. Nenhum código do jogo é distribuído.
+Essa tradução acontece no seu computador. O launcher lê a imagem do seu próprio disco, extrai o jogo, aplica o Title Update, recompila tudo e gera o executável. Este repositório distribui as ferramentas e um runtime que substitui as partes do sistema do Xbox 360 com que o jogo conversa. Nenhum código do jogo é distribuído.
 
 ## Código aberto
 
@@ -41,7 +41,7 @@ O jogo ainda não dá para jogar. Nada aparece na tela.
 | M4 | Áudio, controles, saves | Planejado |
 | M5 | Jogável: menu principal e mundos | Planejado |
 
-Com o M1 pronto, o launcher transforma o seu disco no `legacyrecomp-game`, e o `legacyrecomp run` inicia o ponto de entrada recompilado. O código do jogo roda até a primeira chamada ao kernel do Xbox que o runtime ainda não oferece, `NtAllocateVirtualMemory`, e aí termina com código 3 e um relatório que aponta essa chamada. O jogo importa 459 funções do kernel, e nenhuma delas está implementada ainda. Esse é o trabalho do M2.
+Com o M1 pronto, o launcher transforma o seu disco no `legacyrecomp-game`, e o `legacyrecomp run` inicia o ponto de entrada recompilado. O código do jogo roda até a primeira chamada ao kernel do Xbox que o runtime ainda não oferece, `NtAllocateVirtualMemory`, e aí termina com código 3 e um relatório que aponta essa chamada. O jogo importa 459 funções de sistema do xboxkrnl (o kernel) e do XAM, e nenhuma delas está implementada ainda. Esse é o trabalho do M2.
 
 Um obstáculo já conhecido para os próximos marcos: a versão fixada do XenonRecomp não trata algumas instruções PowerPC que o jogo usa (`bdzf`, `stfsu`, `lfsu`, `vsel128` e outras), o que aparece como 3.279 avisos durante a recompilação.
 
@@ -62,7 +62,7 @@ flowchart TD
     clang --> game["legacyrecomp-game"]
 ```
 
-O `Default.xex` do disco é só um carregador pequeno. O jogo de verdade fica num pacote XBLA dentro do disco, e o Title Update 1 também vem no disco. O XenonAnalyse não encontra nenhuma tabela de salto (jump table) nesse executável, então o pipeline usa um scanner próprio, que encontra 221. Compilar o código gerado leva cerca de 4,5 minutos e usa até uns 2,6 GiB de RAM; a primeira instalação inteira leva por volta de 5,5 minutos.
+O `Default.xex` do disco é só um carregador pequeno. O jogo de verdade fica num pacote XBLA dentro do disco, e o Title Update 1 também vem no disco. O XenonAnalyse não encontra nenhuma tabela de salto (jump table) nesse executável, então o pipeline usa um scanner próprio, que encontra 221. Numa máquina com 12 threads, compilar o código gerado leva cerca de 4,5 minutos, e a primeira instalação inteira, por volta de 5,5. O uso de memória depende de quantos arquivos compilam ao mesmo tempo: o launcher roda no máximo um job de compilação por thread da CPU e por 2 GiB de RAM, e o `--jobs` define esse número manualmente.
 
 ## Primeiros passos
 
@@ -70,7 +70,7 @@ Você precisa de uma CPU x86-64 com AVX, cerca de 8 GB livres em disco e uma ima
 
 ### AppImage
 
-O AppImage já traz o próprio compilador, então não é preciso instalar nada. As versões vão ser publicadas na página de releases do projeto; nenhuma saiu ainda.
+O AppImage ainda está em desenvolvimento e não foi lançado. Ele vai trazer o próprio compilador, então não vai ser preciso instalar nada, e vai ser publicado na página de releases do projeto. Quando sair, o uso vai ser assim:
 
 ```sh
 chmod +x LegacyRecomp-x86_64.AppImage
@@ -120,7 +120,7 @@ O `legacyrecomp inspect --iso <arquivo>` lista o conteúdo do disco e os cabeça
 | Recompilador | XenonRecomp, XenonAnalyse e XenonUtils, da hedge-dev |
 | Interface do launcher | SDL2, Dear ImGui, fontes Inter e JetBrains Mono |
 | Configuração e testes | toml++, Catch2 |
-| Empacotamento | AppImage com toolchain Zig embutido |
+| Empacotamento | AppImage com toolchain Zig embutido (em desenvolvimento) |
 | Feito no próprio projeto | Leitores de XDVDFS, STFS e XEX2, o pipeline de instalação, o runtime |
 
 ## Estrutura do projeto

@@ -41,7 +41,7 @@ Spielbar ist das Spiel noch nicht. Auf dem Bildschirm erscheint nichts.
 | M4 | Audio, Controller, Spielstände | Geplant |
 | M5 | Spielbar: Hauptmenü und Welten | Geplant |
 
-Mit M1 macht der Launcher aus deiner Disc `legacyrecomp-game`, und `legacyrecomp run` startet den rekompilierten Einstiegspunkt. Der Spielcode läuft bis zu seinem ersten Aufruf in den Xbox-Kernel, den die Laufzeitumgebung noch nicht bereitstellt, `NtAllocateVirtualMemory`, und beendet sich dann mit Code 3 und einem Bericht, der diesen Aufruf nennt. Das Spiel importiert 459 Kernel-Funktionen, und bisher ist keine davon implementiert. Das ist die Aufgabe von M2.
+Mit M1 macht der Launcher aus deiner Disc `legacyrecomp-game`, und `legacyrecomp run` startet den rekompilierten Einstiegspunkt. Der Spielcode läuft bis zu seinem ersten Aufruf in den Xbox-Kernel, den die Laufzeitumgebung noch nicht bereitstellt, `NtAllocateVirtualMemory`, und beendet sich dann mit Code 3 und einem Bericht, der diesen Aufruf nennt. Das Spiel importiert 459 Systemfunktionen aus xboxkrnl (dem Kernel) und XAM, und bisher ist keine davon implementiert. Das ist die Aufgabe von M2.
 
 Ein Hindernis für die späteren Meilensteine ist schon bekannt: Die festgelegte XenonRecomp-Version unterstützt einige PowerPC-Befehle nicht, die das Spiel verwendet (`bdzf`, `stfsu`, `lfsu`, `vsel128` und weitere). Beim Rekompilieren zeigt sich das in 3.279 Warnungen.
 
@@ -62,7 +62,7 @@ flowchart TD
     clang --> game["legacyrecomp-game"]
 ```
 
-Die `Default.xex` auf der Disc ist nur ein kleiner Loader. Das eigentliche Spiel steckt in einem XBLA-Paket auf der Disc, und auch das Title Update 1 liegt auf der Disc. XenonAnalyse findet in dieser Programmdatei keine einzige Sprungtabelle (Jump Table), deshalb nutzt die Pipeline einen eigenen Scanner, der 221 findet. Das Kompilieren des generierten Codes dauert etwa 4,5 Minuten und braucht bis zu rund 2,6 GiB RAM; die komplette erste Installation dauert ungefähr 5,5 Minuten.
+Die `Default.xex` auf der Disc ist nur ein kleiner Loader. Das eigentliche Spiel steckt in einem XBLA-Paket auf der Disc, und auch das Title Update 1 liegt auf der Disc. XenonAnalyse findet in dieser Programmdatei keine einzige Sprungtabelle (Jump Table), deshalb nutzt die Pipeline einen eigenen Scanner, der 221 findet. Auf einem Rechner mit 12 Threads dauert das Kompilieren des generierten Codes etwa 4,5 Minuten, die komplette erste Installation ungefähr 5,5. Der Speicherbedarf hängt davon ab, wie viele Dateien gleichzeitig kompiliert werden: Der Launcher startet höchstens einen Compile-Job pro CPU-Thread und pro 2 GiB RAM, und mit `--jobs` legst du die Zahl selbst fest.
 
 ## Erste Schritte
 
@@ -70,7 +70,7 @@ Du brauchst eine x86-64-CPU mit AVX, etwa 8 GB freien Speicherplatz und ein Abbi
 
 ### AppImage
 
-Das AppImage bringt seinen eigenen Compiler mit, es muss also nichts installiert werden. Releases werden auf der Release-Seite des Projekts veröffentlicht; bisher ist noch keines erschienen.
+Das AppImage ist noch in Arbeit und noch nicht veröffentlicht. Es wird seinen eigenen Compiler mitbringen, es muss also nichts installiert werden, und es erscheint auf der Release-Seite des Projekts. Sobald es da ist, funktioniert es so:
 
 ```sh
 chmod +x LegacyRecomp-x86_64.AppImage
@@ -120,7 +120,7 @@ build/release/bin/legacyrecomp-gui                                 # der grafisc
 | Recompiler | XenonRecomp, XenonAnalyse und XenonUtils von hedge-dev |
 | Launcher-Oberfläche | SDL2, Dear ImGui, Schriften Inter und JetBrains Mono |
 | Konfiguration und Tests | toml++, Catch2 |
-| Paketierung | AppImage mit mitgelieferter Zig-Toolchain |
+| Paketierung | AppImage mit mitgelieferter Zig-Toolchain (in Arbeit) |
 | Selbst geschrieben | Leser für XDVDFS, STFS und XEX2, die Installations-Pipeline, die Laufzeitumgebung |
 
 ## Projektstruktur
