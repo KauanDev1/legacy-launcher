@@ -39,8 +39,8 @@ Precedência: `--root` > variável `LEGACYRECOMP_ROOT` > `$XDG_DATA_HOME/legacyr
 ```
 
 **Não use um tmpfs (disco em RAM, como `/tmp` em várias distros) como pasta de dados.** O código gerado e a
-compilação ocupam vários GiB e o RAM que a máquina precisa para compilar já é o gargalo; coloque a pasta num
-disco com pelo menos 8 GiB livres.
+compilação ocupam vários GiB; num tmpfs isso consome a mesma RAM de que o compilador precisa e a
+instalação falha por falta de memória. Use um disco com pelo menos 8 GiB livres.
 
 ## `state.toml`, cache e `--force`
 
