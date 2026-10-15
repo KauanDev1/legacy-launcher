@@ -101,7 +101,6 @@ TEST_CASE("resolve_toolchain falls back to clang/cmake/ninja on PATH", "[unit]")
   CHECK(tc.cmake == bin / "cmake");
   CHECK(tc.ninja == bin / "ninja");
   CHECK_FALSE(tc.sdl2_prefix.has_value());
-  CHECK(tc.extra_cxx_flags.empty());
 }
 
 TEST_CASE("resolve_toolchain reports a system tool missing from PATH with the install hint", "[unit]") {

@@ -170,11 +170,6 @@ class BuildStage : public Stage {
                       "-DCMAKE_MAKE_PROGRAM=" + tc.ninja.string(),
                       "-DLR_RESOURCES=" + resources.string(), "-DLR_GENERATED=" + p.generated.string()};
     if (tc.sdl2_prefix) configure.args.push_back("-DCMAKE_PREFIX_PATH=" + tc.sdl2_prefix->string());
-    if (!tc.extra_cxx_flags.empty()) {
-      std::string flags;
-      for (const auto& f : tc.extra_cxx_flags) flags += (flags.empty() ? "" : " ") + f;
-      configure.args.push_back("-DCMAKE_CXX_FLAGS=" + flags);
-    }
     configure.log_file = log;
     configure.cancelled = [&] { return ctx.sink.cancelled(); };
     configure.on_line = [&](std::string_view line) { ctx.sink.on_log(line); };

@@ -3,9 +3,7 @@
 
 #include <filesystem>
 #include <optional>
-#include <string>
 #include <string_view>
-#include <vector>
 
 #include "common/result.h"
 
@@ -14,7 +12,6 @@ namespace lr::pipeline {
 // Compiler, CMake and Ninja the build stage uses to compile the game.
 struct Toolchain {
   std::filesystem::path cc, cxx, cmake, ninja;
-  std::vector<std::string> extra_cxx_flags;          // appended to CMAKE_CXX_FLAGS of the game template
   std::optional<std::filesystem::path> sdl2_prefix;  // CMAKE_PREFIX_PATH for find_package(SDL2)
   bool bundled = false;
 };
