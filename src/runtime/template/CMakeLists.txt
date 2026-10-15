@@ -2,7 +2,10 @@
 # Game template: builds legacyrecomp-game from the XenonRecomp output and the prebuilt runtime.
 # Configured by the pipeline's build stage (src/pipeline/stages/build_stage.cpp), never by the main project:
 #   cmake -S <resources>/runtime/template -B <root>/work/build -G Ninja -DCMAKE_BUILD_TYPE=Release
-#         -DCMAKE_CXX_COMPILER=clang++ -DLR_RESOURCES=<resources> -DLR_GENERATED=<root>/work/generated
+#         -DCMAKE_CXX_COMPILER=<clang++> -DCMAKE_MAKE_PROGRAM=<ninja> [-DCMAKE_PREFIX_PATH=<SDL2 prefix>]
+#         -DLR_RESOURCES=<resources> -DLR_GENERATED=<root>/work/generated
+# Compiler, ninja and SDL2 come from lr::pipeline::resolve_toolchain: the system clang++ and SDL2, or, in the
+# AppImage, <resources>/toolchain (zig c++ targeting glibc 2.31 and a static SDL2, see docs/packaging.md).
 # Inputs: LR_GENERATED holds ppc_config.h, ppc_context.h (copied there by XenonRecomp), ppc_recomp_shared.h,
 # ppc_recomp.*.cpp, ppc_func_mapping.cpp and import_stubs.cpp (written by the build stage).
 cmake_minimum_required(VERSION 3.25)

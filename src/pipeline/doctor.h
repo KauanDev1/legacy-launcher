@@ -37,8 +37,11 @@ struct DoctorReport {
   std::vector<std::string> warnings;
 };
 
-// Requires a CPU with AVX (InsufficientResources), clang++ >= 18, cmake >= 3.25, ninja, pkg-config sdl2 and 8 GiB
-// free at root (or its nearest existing parent). Less than 8 GiB of RAM only produces a warning.
-Result<DoctorReport> run_doctor(DoctorProbe& probe, const std::filesystem::path& root);
+// Requires a CPU with AVX (InsufficientResources), a toolchain and 8 GiB free at root (or its nearest existing
+// parent). Less than 8 GiB of RAM only produces a warning. Toolchain: when <resources>/toolchain exists (the
+// AppImage, see resolve_toolchain) every bundled file must be present, else ToolMissing with a "corrupted AppImage"
+// hint; otherwise clang++ >= 18, cmake >= 3.25, ninja and pkg-config sdl2 from the system (probe).
+Result<DoctorReport> run_doctor(DoctorProbe& probe, const std::filesystem::path& root,
+                                const std::filesystem::path& resources = {});
 
 }  // namespace lr::pipeline

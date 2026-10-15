@@ -8,16 +8,27 @@ fica em `work/state.toml`. Tudo roda na máquina do usuário e nada do jogo sai 
 
 | # | Etapa | O que faz | Saídas (relativas à pasta de dados) |
 |---|---|---|---|
-| 1 | `doctor` | Confere ferramentas (clang, lld, cmake, ninja, SDL2), CPU com AVX, 8 GiB livres e RAM | nenhuma |
+| 1 | `doctor` | Confere ferramentas (clang, lld, cmake, ninja, SDL2; no AppImage, os arquivos do toolchain embutido), CPU com AVX, 8 GiB livres e RAM | nenhuma |
 | 2 | `extract` | Lê a ISO (XDVDFS), acha o pacote STFS do jogo e o do TU1 e extrai `default.xex`, `default.xexp` e os dados do jogo | `work/input/package.xex`, `work/input/tu.xexp`, `game/.extracted` |
 | 3 | `verify` | Compara o SHA-256 dos arquivos extraídos com `config/minecraft-tu1/game.toml` | nenhuma |
 | 4 | `patch` | Aplica o `.xexp` ao XEX (XenonUtils `XexPatcher`), gerando um XEX2 sem criptografia e sem compressão | `work/image/default_tu1.xex` |
 | 5 | `analyse` | Roda o XenonAnalyse e a varredura de `switch` própria (jump tables) | `work/analysis/switch_tables.toml`, `work/analysis/functions.toml` |
 | 6 | `recompile` | Roda o XenonRecomp com `config/minecraft-tu1/recomp.toml`; falha se houver qualquer linha `ERROR:` (o XenonRecomp sai com 0 mesmo gerando código errado) | `work/generated/ppc_recomp_shared.h`, `ppc_func_mapping.cpp`, `ppc_config.h` (mais ~215 `ppc_recomp.*.cpp`) |
-| 7 | `build` | Gera os stubs de importação, compila o C++ gerado com o `main.cpp` e as bibliotecas do runtime (template CMake/Ninja) e instala o binário | `bin/legacyrecomp-game` |
+| 7 | `build` | Gera os stubs de importação, compila o C++ gerado com o `main.cpp` e as bibliotecas do runtime (template CMake/Ninja) e instala o binário. Usa o clang/cmake/ninja do sistema ou, no AppImage, o toolchain embutido (ver "Toolchain") | `bin/legacyrecomp-game` |
 
 O código gerado tem cerca de 160 MB, o `recompile` + `build` levam alguns minutos e usam bastante RAM por
 job (use `--jobs <n>` para limitar).
+
+## Toolchain
+
+`lr::pipeline::resolve_toolchain` (`src/pipeline/toolchain.h`) escolhe o compilador da etapa `build`:
+
+- **Embutido** (AppImage): se existe `share/legacyrecomp/toolchain/`, usa `toolchain/bin/c++` (`zig c++
+  -target x86_64-linux-gnu.2.31`), `toolchain/cmake/bin/cmake`, `toolchain/bin/ninja` e o SDL2 estático de
+  `toolchain/sdl2/`. O `doctor` só confere se esses arquivos estão lá; se faltar algum, o erro é `ToolMissing`
+  com a dica de que o AppImage está corrompido. Detalhes em `docs/packaging.md`.
+- **Sistema** (instalação a partir do código-fonte): `clang`, `clang++`, `cmake` e `ninja` do `PATH` e o SDL2
+  do sistema. O `doctor` confere as versões (clang++ ≥ 18, cmake ≥ 3.25) e o `pkg-config sdl2`.
 
 ## Layout da pasta de dados
 
@@ -91,7 +102,7 @@ fingerprint = "..."
 
 | `ErrorCode` | Causa comum | O que fazer |
 |---|---|---|
-| `ToolMissing` | clang, lld, cmake, ninja ou SDL2 ausentes (etapa `doctor` ou etapas que usam a ferramenta) | `sudo pacman -S --needed clang lld llvm cmake ninja sdl2` (equivalente na sua distro) |
+| `ToolMissing` | clang, lld, cmake, ninja ou SDL2 ausentes (etapa `doctor` ou etapas que usam a ferramenta); no AppImage, arquivo do toolchain embutido ausente | `sudo pacman -S --needed clang lld llvm cmake ninja sdl2` (equivalente na sua distro); no AppImage, baixe-o de novo |
 | `InsufficientResources` | CPU sem AVX, ou menos de 8 GiB livres na pasta de dados | O jogo é compilado com `-march=sandybridge`: precisa de AVX. Libere disco ou use `--root` em outro volume |
 | `NotFound` | ISO ou arquivo esperado ausente; `build`/`run` antes de instalar | `legacyrecomp install --iso <arquivo>` |
 | `InvalidFormat` | ISO não é XDVDFS, pacote STFS ou XEX inválido, `state.toml` corrompido | Confira a ISO; apague `work/state.toml` para recomeçar |

@@ -19,7 +19,7 @@ class DoctorStage : public Stage {
   Result<std::string> fingerprint(StageContext&) override { return std::string(kFingerprint); }
   std::vector<fs::path> outputs(StageContext&) const override { return {}; }
   Result<void> execute(StageContext& ctx) override {
-    LR_TRY_ASSIGN(report, run_doctor(probe_, ctx.paths.root));
+    LR_TRY_ASSIGN(report, run_doctor(probe_, ctx.paths.root, ctx.resources));
     for (auto& w : report.warnings) ctx.sink.on_log("warning: " + w);
     return {};
   }

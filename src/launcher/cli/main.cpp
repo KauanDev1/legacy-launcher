@@ -234,7 +234,9 @@ int run_inspect(const std::vector<std::string>& a) {
 
 int run_doctor_cmd(const fs::path& root) {
   lr::pipeline::SystemDoctorProbe probe;
-  auto report = lr::pipeline::run_doctor(probe, root);
+  // Resources decide between the bundled toolchain (AppImage) and the system one; without them, check the system.
+  auto resources = lr::pipeline::find_resources();
+  auto report = lr::pipeline::run_doctor(probe, root, resources ? resources.value() : fs::path{});
   if (!report) return report_error(report.error());
   for (const auto& w : report.value().warnings) std::printf("warning: %s\n", w.c_str());
   std::printf("doctor: all checks passed (data root: %s)\n", root.c_str());

@@ -17,6 +17,7 @@
 #include "common/sha256.h"
 #include "pipeline/import_stubs.h"
 #include "pipeline/process.h"
+#include "pipeline/toolchain.h"
 
 namespace lr::pipeline {
 
@@ -160,11 +161,20 @@ class BuildStage : public Stage {
     const fs::path template_dir = resources / "runtime" / "template";
     LR_TRY_ASSIGN(reset, reset_stale_build_dir(p.build, template_dir));
     if (reset) ctx.sink.on_log("removed " + p.build.string() + ": it was configured from another template directory");
+    // System clang/cmake/ninja, or the toolchain bundled under <resources>/toolchain (AppImage).
+    LR_TRY_ASSIGN(tc, resolve_toolchain(resources));
     ToolInvocation configure;
-    configure.program = "cmake";
+    configure.program = tc.cmake;
     configure.args = {"-S", template_dir.string(), "-B", p.build.string(), "-G", "Ninja",
-                      "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_CXX_COMPILER=clang++",
+                      "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_CXX_COMPILER=" + tc.cxx.string(),
+                      "-DCMAKE_MAKE_PROGRAM=" + tc.ninja.string(),
                       "-DLR_RESOURCES=" + resources.string(), "-DLR_GENERATED=" + p.generated.string()};
+    if (tc.sdl2_prefix) configure.args.push_back("-DCMAKE_PREFIX_PATH=" + tc.sdl2_prefix->string());
+    if (!tc.extra_cxx_flags.empty()) {
+      std::string flags;
+      for (const auto& f : tc.extra_cxx_flags) flags += (flags.empty() ? "" : " ") + f;
+      configure.args.push_back("-DCMAKE_CXX_FLAGS=" + flags);
+    }
     configure.log_file = log;
     configure.cancelled = [&] { return ctx.sink.cancelled(); };
     configure.on_line = [&](std::string_view line) { ctx.sink.on_log(line); };
@@ -173,7 +183,7 @@ class BuildStage : public Stage {
 
     const unsigned jobs = build_jobs(ctx.options.jobs, std::thread::hardware_concurrency(), total_ram());
     ToolInvocation build;
-    build.program = "cmake";
+    build.program = tc.cmake;
     build.args = {"--build", p.build.string(), "-j", std::to_string(jobs)};
     build.log_file = log;
     build.cancelled = configure.cancelled;

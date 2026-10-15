@@ -12,6 +12,7 @@
 #include <system_error>
 
 #include "pipeline/process.h"
+#include "pipeline/toolchain.h"
 
 namespace lr::pipeline {
 namespace fs = std::filesystem;
@@ -19,10 +20,7 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr uint64_t kGiB = 1024ull * 1024 * 1024;
-constexpr const char* kInstallHint =
-    "sudo pacman -S --needed clang lld llvm cmake ninja sdl2\n"
-    "sudo apt install clang lld llvm cmake ninja-build libsdl2-dev pkg-config\n"
-    "sudo dnf install clang lld llvm cmake ninja-build SDL2-devel pkgconf";
+const std::string kInstallHint(system_toolchain_hint());
 
 Error missing(std::string_view what) {
   return Error{ErrorCode::ToolMissing, std::string(what) + " not found", kInstallHint};
@@ -103,17 +101,22 @@ bool SystemDoctorProbe::cpu_supports_avx() {
 #endif
 }
 
-Result<DoctorReport> run_doctor(DoctorProbe& probe, const fs::path& root) {
+Result<DoctorReport> run_doctor(DoctorProbe& probe, const fs::path& root, const fs::path& resources) {
   // Checked first: no toolchain install can fix it. InsufficientResources (a property of the machine, like RAM/disk).
   if (!probe.cpu_supports_avx())
     return Error{ErrorCode::InsufficientResources, "CPU without AVX support",
                  "the recompiled game is built for x86-64 with AVX (-march=sandybridge, as UnleashedRecomp does) and "
                  "would crash with SIGILL on this CPU; an Intel Sandy Bridge / AMD Bulldozer (2011) or newer CPU is "
                  "required"};
-  LR_TRY(check_tool(probe, "clang++", 18, 0));
-  LR_TRY(check_tool(probe, "cmake", 3, 25));
-  LR_TRY(check_tool(probe, "ninja", 0, 0));
-  if (!probe.pkg_config_exists("sdl2")) return missing("SDL2 development files (pkg-config sdl2)");
+  if (has_bundled_toolchain(resources)) {
+    // AppImage: the bundled zig/cmake/ninja/SDL2 are pinned versions; only check that they are all there.
+    LR_TRY(resolve_toolchain(resources));
+  } else {
+    LR_TRY(check_tool(probe, "clang++", 18, 0));
+    LR_TRY(check_tool(probe, "cmake", 3, 25));
+    LR_TRY(check_tool(probe, "ninja", 0, 0));
+    if (!probe.pkg_config_exists("sdl2")) return missing("SDL2 development files (pkg-config sdl2)");
+  }
 
   std::error_code ec;
   fs::path probe_path = fs::absolute(root, ec);
