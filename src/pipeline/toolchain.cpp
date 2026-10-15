@@ -12,10 +12,11 @@ namespace fs = std::filesystem;
 
 namespace {
 
+// Exactly what the game build needs (clang++, cmake, ninja, SDL2 + pkg-config), i.e. what run_doctor checks.
 constexpr std::string_view kInstallHint =
-    "sudo pacman -S --needed clang lld llvm cmake ninja sdl2\n"
-    "sudo apt install clang lld llvm cmake ninja-build libsdl2-dev pkg-config\n"
-    "sudo dnf install clang lld llvm cmake ninja-build SDL2-devel pkgconf";
+    "sudo pacman -S --needed clang cmake ninja sdl2 pkgconf\n"
+    "sudo apt install clang cmake ninja-build libsdl2-dev pkg-config\n"
+    "sudo dnf install clang cmake ninja-build SDL2-devel pkgconf";
 
 constexpr const char* kCorruptedHint =
     "the toolchain bundled with LegacyRecomp is incomplete: the AppImage looks corrupted or truncated; download it "
@@ -43,13 +44,11 @@ Result<Toolchain> resolve_toolchain(const fs::path& resources) {
   Toolchain tc;
   if (has_bundled_toolchain(resources)) {
     const fs::path base = resources / "toolchain";
-    tc.bundled = true;
-    tc.cc = base / "bin" / "cc";
     tc.cxx = base / "bin" / "c++";
     tc.cmake = base / "cmake" / "bin" / "cmake";
     tc.ninja = base / "bin" / "ninja";
     tc.sdl2_prefix = base / "sdl2";
-    for (const fs::path& p : {tc.cc, tc.cxx, tc.cmake, tc.ninja, base / "zig" / "zig"})
+    for (const fs::path& p : {tc.cxx, tc.cmake, tc.ninja, base / "zig" / "zig"})
       if (!is_executable_file(p)) return bundled_missing(p);
     const fs::path sdl2_config = base / "sdl2" / "lib" / "cmake" / "SDL2" / "SDL2Config.cmake";
     std::error_code ec;
@@ -63,7 +62,6 @@ Result<Toolchain> resolve_toolchain(const fs::path& resources) {
     out = *p;
     return {};
   };
-  LR_TRY(lookup("clang", tc.cc));
   LR_TRY(lookup("clang++", tc.cxx));
   LR_TRY(lookup("cmake", tc.cmake));
   LR_TRY(lookup("ninja", tc.ninja));

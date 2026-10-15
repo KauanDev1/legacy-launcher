@@ -166,7 +166,7 @@ class BuildStage : public Stage {
     const fs::path template_dir = resources / "runtime" / "template";
     LR_TRY_ASSIGN(reset, reset_stale_build_dir(p.build, template_dir));
     if (reset) ctx.sink.on_log("removed " + p.build.string() + ": it was configured from another template directory");
-    // System clang/cmake/ninja, or the toolchain bundled under <resources>/toolchain (AppImage).
+    // System clang++/cmake/ninja, or the toolchain bundled under <resources>/toolchain (AppImage).
     LR_TRY_ASSIGN(tc, resolve_toolchain(resources));
     ToolInvocation configure;
     configure.program = tc.cmake;

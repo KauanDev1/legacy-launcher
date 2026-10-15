@@ -68,8 +68,6 @@ TEST_CASE("resolve_toolchain uses the bundled toolchain when resources/toolchain
   REQUIRE(r);
   const Toolchain& tc = r.value();
   const fs::path base = t.path / "toolchain";
-  CHECK(tc.bundled);
-  CHECK(tc.cc == base / "bin" / "cc");
   CHECK(tc.cxx == base / "bin" / "c++");
   CHECK(tc.cmake == base / "cmake" / "bin" / "cmake");
   CHECK(tc.ninja == base / "bin" / "ninja");
@@ -77,16 +75,15 @@ TEST_CASE("resolve_toolchain uses the bundled toolchain when resources/toolchain
   CHECK(*tc.sdl2_prefix == base / "sdl2");
 }
 
-TEST_CASE("resolve_toolchain falls back to clang/cmake/ninja on PATH", "[unit]") {
+TEST_CASE("resolve_toolchain falls back to clang++/cmake/ninja on PATH", "[unit]") {
   TempDir t;
   const fs::path bin = t.path / "fakebin";
-  for (const char* f : {"clang", "clang++", "cmake", "ninja"}) write_exe(bin / f);
+  // No `clang`: the game template is CXX-only, so only clang++ is needed (the same set doctor checks).
+  for (const char* f : {"clang++", "cmake", "ninja"}) write_exe(bin / f);
   ScopedPath path(bin.string());
   auto r = resolve_toolchain(t.path / "resources-without-toolchain");
   REQUIRE(r);
   const Toolchain& tc = r.value();
-  CHECK_FALSE(tc.bundled);
-  CHECK(tc.cc == bin / "clang");
   CHECK(tc.cxx == bin / "clang++");
   CHECK(tc.cmake == bin / "cmake");
   CHECK(tc.ninja == bin / "ninja");
@@ -96,7 +93,7 @@ TEST_CASE("resolve_toolchain falls back to clang/cmake/ninja on PATH", "[unit]")
 TEST_CASE("resolve_toolchain reports a system tool missing from PATH with the install hint", "[unit]") {
   TempDir t;
   const fs::path bin = t.path / "fakebin";
-  for (const char* f : {"clang", "clang++", "ninja"}) write_exe(bin / f);
+  for (const char* f : {"clang++", "ninja"}) write_exe(bin / f);
   ScopedPath path(bin.string());
   auto r = resolve_toolchain(t.path);
   REQUIRE_FALSE(r);

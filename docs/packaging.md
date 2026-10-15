@@ -92,6 +92,7 @@ depende da glibc.
 ```
 usr/share/legacyrecomp/toolchain/
   bin/cc, bin/c++          scripts sh: exec ../zig/zig cc|c++ -target x86_64-linux-gnu.2.31 "$@"
+                           (o build do jogo usa só o c++; o cc serve ao build.sh e não é conferido)
   bin/ar, bin/ranlib       scripts sh: zig ar / zig ranlib
   bin/ninja                Ninja 1.13.2
   cmake/bin/cmake          CMake 4.4.4, com cmake/share/cmake-4.4/{Modules,Templates,Licenses}
