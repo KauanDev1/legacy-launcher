@@ -39,3 +39,9 @@ A janela abre com 1100×720 vezes a escala, limitada a 90% da área útil da tel
 Inter (interface) e JetBrains Mono (registro), licença SIL OFL 1.1, em `assets/fonts/` (origem e SHA-256
 em `assets/fonts/fonts.lock`), instaladas em `share/legacyrecomp/fonts/`. Sem elas, a GUI usa a fonte
 padrão do ImGui e avisa no terminal.
+
+## Encerrar
+
+Fechar a janela, encerrar a sessão (SIGHUP) ou mandar SIGTERM fecham a GUI do mesmo jeito: uma instalação
+em andamento é cancelada e as ferramentas que ela rodava são encerradas antes de o processo sair. As
+etapas já concluídas ficam em cache.

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <SDL.h>
+#include <signal.h>
 
 #include <algorithm>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -54,6 +56,21 @@ SDL_Point scaled_size(int display, int w, int h, float scale) {
   return p;
 }
 
+// Set by SIGHUP/SIGTERM (closing the session, `kill`): the main loop then quits normally, so ~App cancels the
+// install and joins its threads (which stop the tool process groups) instead of leaving them orphaned.
+volatile std::sig_atomic_t g_quit_signal = 0;
+
+void on_quit_signal(int) { g_quit_signal = 1; }
+
+void install_quit_handlers() {
+  struct sigaction sa {};
+  sa.sa_handler = on_quit_signal;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESTART;
+  sigaction(SIGHUP, &sa, nullptr);
+  sigaction(SIGTERM, &sa, nullptr);  // replaces SDL's own handler, if any, with the same effect
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -77,6 +94,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   // Created at the unscaled size first: the UI scale depends on the renderer's framebuffer scale.
+  install_quit_handlers();
   const SDL_Point initial = scaled_size(0, 1100, 720, 1.0f);
   SDL_Window* window = SDL_CreateWindow("LegacyRecomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, initial.x,
                                         initial.y, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
@@ -146,6 +164,7 @@ int main(int argc, char** argv) {
       // Idle: sleep until input (or 100 ms, to pick up worker/dialog results); animating: one frame per vsync.
       if (!screenshot && pending_frames == 0 && !app.animating() && SDL_WaitEventTimeout(&ev, 100)) handle(ev);
       while (SDL_PollEvent(&ev)) handle(ev);
+      if (g_quit_signal) running = false;
       if (pending_frames > 0) --pending_frames;
       ImGui_ImplSDLRenderer2_NewFrame();
       ImGui_ImplSDL2_NewFrame();
