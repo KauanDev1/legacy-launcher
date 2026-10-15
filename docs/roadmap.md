@@ -19,7 +19,7 @@ Fonte: spec do M1 (`docs/superpowers/specs/2026-10-14-legacyrecomp-m1-design.md`
   (mais `lhzu`, `sthu`, `eqv` etc.); 3 279 ocorrências "Unrecognized instruction" que deixam funções
   incompletas no C++ gerado. Detalhes e contagens em `docs/reverse-engineering/addresses.md`. Precisa de
   patch ou correção upstream antes de o jogo passar do início.
-- **23 jump tables a confirmar no Ghidra**: o `analyse` as acha por varredura própria, mas a confirmação
+- **23 jump tables a confirmar no Ghidra** (de 221 `switch` detectados): o `analyse` as acha por varredura própria, mas a confirmação
   manual ainda não foi feita.
 - **Endereços dos helpers (prólogo/epílogo etc.) não confirmados no Ghidra**: aceitos por evidência
   estrutural (ruling R13); um endereço errado quebraria em tempo de execução.
