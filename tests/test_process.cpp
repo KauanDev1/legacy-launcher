@@ -11,18 +11,18 @@
 #include <unistd.h>
 
 #include "pipeline/process.h"
+#include "support/temp_dir.h"
 
 using namespace lr;
 using namespace lr::pipeline;
 namespace fs = std::filesystem;
 
 namespace {
+// One private directory per test-binary process: ctest runs each case in its own process, so cases never
+// share it; removed at exit.
 fs::path tmp_log(const char* name) {
-  fs::path d = fs::temp_directory_path() / "lr_test_process";
-  fs::create_directories(d);
-  fs::path p = d / name;
-  fs::remove(p);
-  return p;
+  static const lr::testing::TempDir dir{"lr_test_process"};
+  return dir.path / name;
 }
 std::string slurp(const fs::path& p) {
   std::ifstream f(p);

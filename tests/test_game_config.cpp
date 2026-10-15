@@ -5,6 +5,7 @@
 #include <fstream>
 
 #include "pipeline/game_config.h"
+#include "support/temp_dir.h"
 
 using namespace lr;
 using namespace lr::pipeline;
@@ -26,8 +27,8 @@ TEST_CASE("load_game_config error cases", "[unit]") {
   REQUIRE_FALSE(missing);
   CHECK(missing.error().code == ErrorCode::NotFound);
 
-  const auto tmp = std::filesystem::temp_directory_path() / "lr_gc_test";
-  std::filesystem::create_directories(tmp);
+  lr::testing::TempDir tmp_dir{"lr_gc_test"};
+  const auto& tmp = tmp_dir.path;
   { std::ofstream(tmp / "game.toml") << "title_id = = 3"; }
   auto bad = load_game_config(tmp);
   REQUIRE_FALSE(bad);
@@ -38,5 +39,4 @@ TEST_CASE("load_game_config error cases", "[unit]") {
   REQUIRE_FALSE(partial);
   CHECK(partial.error().code == ErrorCode::InvalidFormat);
   CHECK(partial.error().message.find("title_update") != std::string::npos);
-  std::filesystem::remove_all(tmp);
 }

@@ -8,6 +8,7 @@
 #include "formats/reader.h"
 #include "formats/xdvdfs.h"
 #include "support/xdvdfs_builder.h"
+#include "support/temp_dir.h"
 
 using namespace lr;
 using namespace lr::formats;
@@ -117,7 +118,8 @@ TEST_CASE("readers", "[unit]") {
   CHECK(buf[0] == std::byte{'3'});
   CHECK(sub.read(2, buf).error().code == ErrorCode::OutOfRange);
 
-  auto path = std::filesystem::temp_directory_path() / "lr_test_filereader.bin";
+  lr::testing::TempDir tmp{"lr_test_filereader"};
+  const auto path = tmp.path / "file.bin";
   { std::ofstream(path, std::ios::binary) << "0123456789"; }
   auto fr = FileReader::open(path);
   REQUIRE(fr.ok());

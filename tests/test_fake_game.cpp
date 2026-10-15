@@ -17,6 +17,7 @@
 
 #include "pipeline/pipeline.h"
 #include "support/elf_builder.h"
+#include "support/temp_dir.h"
 
 extern char** environ;
 
@@ -29,18 +30,9 @@ struct RunResult {
   std::string out;  // stdout + stderr
 };
 
-// One private directory per test case (mkdtemp) so `ctest -j` cannot race on shared file names.
-struct TempDir {
-  fs::path path;
-  TempDir() {
-    std::string t = (fs::temp_directory_path() / "lr_fake_game_XXXXXX").string();
-    REQUIRE(mkdtemp(t.data()) != nullptr);
-    path = t;
-  }
-  ~TempDir() {
-    std::error_code ec;
-    fs::remove_all(path, ec);
-  }
+// One private directory per test case so `ctest -j` cannot race on shared file names.
+struct TempDir : lr::testing::TempDir {
+  TempDir() : lr::testing::TempDir("lr_fake_game") {}
 };
 
 RunResult run_game(const fs::path& dir, const std::vector<std::string>& args) {

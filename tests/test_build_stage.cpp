@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <catch2/catch_test_macros.hpp>
 
-#include <stdlib.h>
-
 #include <filesystem>
 #include <fstream>
 #include <string>
 
 #include "pipeline/pipeline.h"
 #include "pipeline/stages/build_stage.h"
+#include "support/temp_dir.h"
 
 using namespace lr;
 using namespace lr::pipeline;
@@ -16,17 +15,8 @@ namespace fs = std::filesystem;
 
 namespace {
 
-struct TempDir {
-  fs::path path;
-  TempDir() {
-    std::string t = (fs::temp_directory_path() / "lr_build_stage_XXXXXX").string();
-    REQUIRE(mkdtemp(t.data()) != nullptr);
-    path = t;
-  }
-  ~TempDir() {
-    std::error_code ec;
-    fs::remove_all(path, ec);
-  }
+struct TempDir : lr::testing::TempDir {
+  TempDir() : lr::testing::TempDir("lr_build_stage") {}
 };
 
 void write(const fs::path& p, const std::string& text) {

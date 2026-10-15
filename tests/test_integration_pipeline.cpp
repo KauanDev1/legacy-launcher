@@ -16,6 +16,7 @@
 #include "pipeline/runner.h"
 #include "pipeline/stages/stages.h"
 #include "pipeline/state.h"
+#include "support/temp_dir.h"
 
 using namespace lr;
 using namespace lr::pipeline;
@@ -62,8 +63,7 @@ TEST_CASE("real ISO: pipeline doctor..recompile", "[integration]") {
 
   const char* root_env = std::getenv("LEGACYRECOMP_TEST_ROOT");
   const bool temp_root = !(root_env && *root_env);
-  const fs::path root = temp_root ? fs::temp_directory_path() / "lr_integration_pipeline" : fs::path(root_env);
-  if (temp_root) fs::remove_all(root);
+  const fs::path root = temp_root ? lr::testing::make_temp_dir("lr_integration_pipeline") : fs::path(root_env);
   fs::create_directories(root);
 
   const fs::path resources = LR_RESOURCES_DIR;

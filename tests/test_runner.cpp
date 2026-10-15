@@ -10,6 +10,7 @@
 #include "pipeline/runner.h"
 #include "pipeline/stage.h"
 #include "pipeline/state.h"
+#include "support/temp_dir.h"
 
 using namespace lr;
 using namespace lr::pipeline;
@@ -53,19 +54,15 @@ struct FakeStage : Stage {
 };
 
 struct Fixture {
-  fs::path dir = fs::temp_directory_path() / "lr_runner_test";
+  lr::testing::TempDir tmp{"lr_runner_test"};
+  fs::path dir = tmp.path;
   Options opts;
   GameConfig game{};
   RecSink sink;
   FakeStage s1{StageId::Doctor, dir / "o1"}, s2{StageId::Extract, dir / "o2"},
       s3{StageId::Verify, dir / "o3"};
   Stage* stages[3] = {&s1, &s2, &s3};
-  Fixture() {
-    fs::remove_all(dir);
-    fs::create_directories(dir);
-    opts.root = dir;
-  }
-  ~Fixture() { fs::remove_all(dir); }
+  Fixture() { opts.root = dir; }
   Result<void> run() {
     auto st = StateStore::load(dir / "state.toml");
     REQUIRE(st);
@@ -160,8 +157,8 @@ TEST_CASE("failed or cancelled stage is not marked complete", "[unit]") {
 }
 
 TEST_CASE("state survives reload", "[unit]") {
-  const auto p = fs::temp_directory_path() / "lr_state_test" / "state.toml";
-  fs::remove_all(p.parent_path());
+  lr::testing::TempDir tmp{"lr_state_test"};
+  const auto p = tmp.path / "state.toml";
   {
     auto st = StateStore::load(p);
     REQUIRE(st);
@@ -179,5 +176,4 @@ TEST_CASE("state survives reload", "[unit]") {
   auto bad = StateStore::load(p);
   REQUIRE_FALSE(bad);
   CHECK(bad.error().code == ErrorCode::InvalidFormat);
-  fs::remove_all(p.parent_path());
 }

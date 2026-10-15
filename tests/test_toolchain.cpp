@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <catch2/catch_test_macros.hpp>
 
-#include <stdlib.h>
-
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -11,6 +9,7 @@
 
 #include "pipeline/doctor.h"
 #include "pipeline/toolchain.h"
+#include "support/temp_dir.h"
 
 using namespace lr;
 using namespace lr::pipeline;
@@ -18,17 +17,8 @@ namespace fs = std::filesystem;
 
 namespace {
 
-struct TempDir {
-  fs::path path;
-  TempDir() {
-    std::string t = (fs::temp_directory_path() / "lr_toolchain_XXXXXX").string();
-    REQUIRE(mkdtemp(t.data()) != nullptr);
-    path = t;
-  }
-  ~TempDir() {
-    std::error_code ec;
-    fs::remove_all(path, ec);
-  }
+struct TempDir : lr::testing::TempDir {
+  TempDir() : lr::testing::TempDir("lr_toolchain") {}
 };
 
 void write_exe(const fs::path& p) {

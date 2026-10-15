@@ -4,6 +4,7 @@
 #include <filesystem>
 
 #include "common/paths.h"
+#include "support/temp_dir.h"
 
 namespace fs = std::filesystem;
 
@@ -29,8 +30,8 @@ TEST_CASE("DataPaths::from_root", "[unit]") {
 }
 
 TEST_CASE("resources_dir", "[unit]") {
-  auto dir = fs::temp_directory_path() / "lr_test_res";
-  fs::remove_all(dir);
+  lr::testing::TempDir tmp{"lr_test_res"};
+  const auto& dir = tmp.path;
   fs::create_directories(dir / "share" / "legacyrecomp");
   fs::create_directories(dir / "bin");
   auto env = dir / "envres";
@@ -52,7 +53,6 @@ TEST_CASE("resources_dir", "[unit]") {
   auto d = lr::resources_dir(dir / "x" / "bin" / "lr", nullptr);
   REQUIRE(!d.ok());
   CHECK(d.error().code == lr::ErrorCode::NotFound);
-  fs::remove_all(dir);
 }
 
 TEST_CASE("data root precedence is flag, env, XDG default", "[unit]") {

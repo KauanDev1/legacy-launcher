@@ -10,6 +10,7 @@
 #include "pipeline/stages/extract_stage.h"
 #include "pipeline/stages/verify_stage.h"
 #include "support/stfs_builder.h"
+#include "support/temp_dir.h"
 #include "support/xdvdfs_builder.h"
 
 using namespace lr;
@@ -39,13 +40,13 @@ struct Sink : ProgressSink {
 };
 
 struct Fixture {
-  fs::path dir = fs::temp_directory_path() / "lr_extract_test";
+  testing::TempDir tmp{"lr_extract_test"};
+  fs::path dir = tmp.path;
   fs::path iso = dir / "game.iso";
   Options opts;
   GameConfig game{};
   Sink sink;
   Fixture() {
-    fs::remove_all(dir);
     fs::create_directories(dir / "cfg");
     std::ofstream(dir / "cfg" / "game.toml") << "title_id = 1\n";
     game.package = "Content/pkg";
@@ -56,7 +57,6 @@ struct Fixture {
     opts.iso = iso;
     opts.root = dir / "data";
   }
-  ~Fixture() { fs::remove_all(dir); }
   void write_iso(const std::vector<std::byte>& pkg, const std::vector<std::byte>& tu) {
     auto img = testing::XdvdfsBuilder().add("Content/pkg", pkg).add("tu/tu1", tu).build();
     std::ofstream f(iso, std::ios::binary);
@@ -155,18 +155,17 @@ TEST_CASE("extract fails when the xex is missing", "[unit]") {
 
 namespace {
 struct VerifyFixture {
-  fs::path dir = fs::temp_directory_path() / "lr_verify_test";
+  testing::TempDir tmp{"lr_verify_test"};
+  fs::path dir = tmp.path;
   Options opts;
   GameConfig game{};
   Sink sink;
   VerifyFixture() {
-    fs::remove_all(dir);
     fs::create_directories(dir / "work" / "input");
     std::ofstream(dir / "work" / "input" / "package.xex") << "xex";
     std::ofstream(dir / "work" / "input" / "tu.xexp") << "xexp";
     opts.root = dir;
   }
-  ~VerifyFixture() { fs::remove_all(dir); }
   StageContext ctx() { return StageContext{opts, DataPaths::from_root(dir), dir, game, sink}; }
 };
 }  // namespace

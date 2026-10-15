@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "pipeline/pipeline.h"
+#include "support/temp_dir.h"
 
 using namespace lr;
 using namespace lr::pipeline;
@@ -91,9 +92,7 @@ TEST_CASE("real ISO: install, launch until the first unimplemented import, cache
   const bool temp_root = !(root_env && *root_env);
   fs::path root;
   if (temp_root) {
-    std::string t = (fs::temp_directory_path() / "lr_integration_e2e_XXXXXX").string();
-    REQUIRE(mkdtemp(t.data()) != nullptr);
-    root = t;
+    root = lr::testing::make_temp_dir("lr_integration_e2e");
   } else {
     root = root_env;
     fs::create_directories(root);

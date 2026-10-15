@@ -8,6 +8,7 @@
 
 #include "common/fs_util.h"
 #include "common/sha256.h"
+#include "support/temp_dir.h"
 
 namespace fs = std::filesystem;
 
@@ -28,9 +29,8 @@ TEST_CASE("sha256 known vectors", "[unit]") {
 }
 
 TEST_CASE("sha256_file", "[unit]") {
-  auto dir = fs::temp_directory_path() / "lr_test_sha_file";
-  fs::remove_all(dir);
-  fs::create_directories(dir);
+  lr::testing::TempDir tmp{"lr_test_sha_file"};
+  const auto& dir = tmp.path;
   { std::ofstream(dir / "a") << "abc"; }
   auto r = lr::sha256_file(dir / "a");
   REQUIRE(r.ok());
@@ -38,24 +38,21 @@ TEST_CASE("sha256_file", "[unit]") {
   auto bad = lr::sha256_file(dir / "missing");
   REQUIRE(!bad.ok());
   CHECK(bad.error().code == lr::ErrorCode::IoError);
-  fs::remove_all(dir);
 }
 
 TEST_CASE("atomic_write round-trips and leaves no tmp", "[unit]") {
-  auto dir = fs::temp_directory_path() / "lr_test_atomic";
-  fs::remove_all(dir);
-  fs::create_directories(dir);
+  lr::testing::TempDir tmp{"lr_test_atomic"};
+  const auto& dir = tmp.path;
   const std::byte data[] = {std::byte{'h'}, std::byte{'i'}};
   REQUIRE(lr::atomic_write(dir / "f.bin", data).ok());
   CHECK(fs::exists(dir / "f.bin"));
   CHECK(!fs::exists(dir / "f.bin.tmp"));
   CHECK(fs::file_size(dir / "f.bin") == 2);
-  fs::remove_all(dir);
 }
 
 TEST_CASE("atomic_copy_from", "[unit]") {
-  auto dir = fs::temp_directory_path() / "lr_test_atomic_copy";
-  fs::remove_all(dir);
+  lr::testing::TempDir tmp{"lr_test_atomic_copy"};
+  const auto& dir = tmp.path;
   auto dst = dir / "sub" / "out.txt";
   auto fail = lr::atomic_copy_from(dst, [](std::ostream& os) -> lr::Result<void> {
     os << "partial";
@@ -71,5 +68,4 @@ TEST_CASE("atomic_copy_from", "[unit]") {
   REQUIRE(ok.ok());
   CHECK(fs::file_size(dst) == 5);
   CHECK(!fs::exists(dst.string() + ".tmp"));
-  fs::remove_all(dir);
 }
