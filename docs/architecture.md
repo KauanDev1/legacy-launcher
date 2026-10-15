@@ -1,0 +1,87 @@
+# Arquitetura
+
+## Unidades e direção das dependências
+
+```mermaid
+flowchart TD
+  cli[launcher/cli<br/>legacyrecomp]
+  gui[launcher/gui<br/>legacyrecomp-gui]
+  pipeline[pipeline<br/>doctor, extract, verify, patch,<br/>analyse, recompile, build]
+  runtime[runtime<br/>memória do convidado, loader,<br/>kernel/, threads, falhas]
+  formats[formats<br/>xdvdfs, stfs, xex2]
+  common[common<br/>Result/Error, log, sha256, paths, fs_util]
+  third[thirdparty<br/>XenonRecomp, Catch2, imgui]
+  cli --> pipeline
+  gui --> pipeline
+  cli --> runtime
+  pipeline --> formats
+  pipeline --> third
+  formats --> common
+  runtime --> common
+  runtime --> third
+```
+
+A seta aponta de quem depende para quem é dependido; nada em `common` conhece as camadas acima. Namespaces:
+`lr`, `lr::formats`, `lr::pipeline`, `lr::runtime`, `lr::kernel`.
+
+| Unidade | Responsabilidade |
+|---|---|
+| `common` | `Result<T>`/`Error`, log, SHA-256, caminhos da pasta de dados, utilitários de arquivo |
+| `formats` | Leitores de XDVDFS (ISO), STFS (pacotes LIVE/CON) e cabeçalhos XEX2; sem I/O além de `IReader` |
+| `pipeline` | As sete etapas, o executor com cache (`state.toml`), execução de ferramentas externas (`posix_spawn`, grupo de processos próprio), gerador de stubs de importação |
+| `runtime` | Memória do convidado, carregador da imagem, tabela de funções, threads, handler de falhas, registro de importações do kernel |
+| `launcher/cli`, `launcher/gui` | Frentes de uso: ambas chamam `pipeline::run` e `pipeline::launch` |
+
+Regras: APIs públicas devolvem `lr::Result<T>` e nenhuma exceção atravessa módulos (única exceção:
+`lr::kernel::UnimplementedImport`, lançada e capturada dentro do runtime).
+
+## O runtime e o binário do jogo
+
+O `legacyrecomp-game` é um executável compilado na máquina do usuário na etapa `build`. Ele junta:
+
+- o C++ gerado pelo XenonRecomp (`work/generated/`);
+- os stubs das importações (um por nome `__imp__*`, gerado a partir de `ppc_recomp_shared.h`);
+- as bibliotecas pré-compiladas do runtime (`lr_runtime_core`, XenonUtils), numa variante sem sanitizers;
+- o `main.cpp` do runtime, copiado como **fonte** e compilado junto do código gerado.
+
+O `main.cpp` não pode ser uma biblioteca pré-compilada porque usa `PPC_IMAGE_BASE`, `PPC_CODE_SIZE`,
+`PPC_CODE_BASE` e `PPCFuncMappings`, que só existem depois do `recompile`, e constrói o `PPCContext` com o
+layout definido no `ppc_config.h` gerado (rulings R2 e R16, `docs/adr/0003-m1-plan-deviations.md`). O resto do
+runtime nunca toca `PPCContext`: `run_guest(mem, body, user)` não conhece o layout.
+
+Linha de comando do jogo: `legacyrecomp-game --image <xex> [--data <dir>] [--headless] [--coverage]`.
+`--coverage` imprime a tabela de importações (ver `docs/kernel-coverage.md`); `--headless` não inicia SDL.
+
+## Mapa de memória do convidado
+
+Um único mapeamento anônimo `MAP_NORESERVE` leitura/escrita de `4 GiB + 2 x PPC_CODE_SIZE` bytes. O endereço
+convidado `G` fica em `base() + G`. Constantes em `src/runtime/guest_thread.h` e nas macros geradas:
+
+| Região | Endereço | Tamanho | Observação |
+|---|---|---|---|
+| Imagem do jogo | `0x82000000` (`PPC_IMAGE_BASE`) | `0x032D0000` (`PPC_IMAGE_SIZE`) | seções do XEX carregadas pelo `loader`; código em `0x82200000`, `PPC_CODE_SIZE = 0x0096428C` |
+| Tabela de funções | `PPC_IMAGE_BASE + PPC_IMAGE_SIZE` = `0x852D0000` | `2 x PPC_CODE_SIZE` | um slot de 8 bytes por instrução de 4 bytes; chamadas indiretas do código gerado consultam aqui |
+| Pilha do convidado | `0x70000000` | `0x100000` (1 MiB) | `r1` = topo - `0x80` |
+| TLS | `0x7FFE0000` | | endereço guardado em `tls_ptr` do KPCR |
+| KPCR | `0x7FFF0000` | | `r13`; campos escritos por `init_guest_pcr` |
+| KTHREAD falso | `0x7FFD0000` | bloco zerado | `current_thread` (KPCR + `0x100`) |
+
+KPCR mínimo (verificado contra o `X_KPCR` do Xenia): `tls_ptr` `+0x00`, `pcr_ptr` `+0x30`, base da pilha
+`+0x70`, fim da pilha `+0x74`, `current_thread` `+0x100`, `current_cpu` `+0x10C`. Emulação completa de
+slots TLS e KTHREAD é trabalho do M2.
+
+Valores em big-endian (formato do convidado); o código gerado converte nos acessos.
+
+## Threads
+
+`run_guest` executa o corpo do jogo numa thread do host nova, com pilha de 16 MiB (`kHostStackSize`) e uma
+pilha alternativa de sinal instalada por `install_thread_altstack()`. No M1 só existe essa thread. Retorno
+normal dá saída 0; `UnimplementedImport` imprime o relatório e dá 3; qualquer outra exceção ou falha de
+preparação dá 4. Falha real (SIGSEGV, SIGILL) é tratada pelo handler de sinais, que imprime o endereço e
+chama `_exit(4)`. Threads do jogo criadas por `ExCreateThread` e sincronização entram no M2.
+
+## Kernel
+
+`runtime/kernel/registry` mantém a tabela de importações implementadas. Cada nome importado tem um stub
+gerado que chama a implementação, ou lança `UnimplementedImport` com o nome. `--coverage` lista todas as 459
+importações com seu estado.
