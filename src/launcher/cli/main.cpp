@@ -250,9 +250,10 @@ int run_install(const lr::cli::CliArgs& args, const fs::path& root) {
   opts.force = args.force;
   opts.jobs = args.jobs;
 
-  // Tools run in their own process group and never see the terminal's Ctrl+C; the handler sets the flag that
-  // ProgressBar::cancelled() reports, and the pipeline stops (killing the running tool) at its next check.
-  lr::cli::ProgressBar::install_sigint_handler();
+  // Tools run in their own process group and never see the terminal's Ctrl+C (or SIGHUP); the handlers set the
+  // flag that ProgressBar::cancelled() reports, and the pipeline stops (killing the running tool) at its next
+  // check. A second signal kills the tool's group and then the launcher.
+  lr::cli::ProgressBar::install_signal_handlers();
   lr::cli::ProgressBar bar(std::cout, ::isatty(STDOUT_FILENO) != 0);
   auto r = lr::pipeline::run(opts, bar);
   bar.finish();

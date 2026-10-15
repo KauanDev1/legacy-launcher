@@ -71,6 +71,10 @@ do spec, ou que preencheu uma lacuna dele. Formato: o quê, por quê, custo se e
 - O quê: SIGTERM, depois SIGKILL após 3 s. As ferramentas não recebem mais o Ctrl+C do terminal, então o
   handler de SIGINT da CLI/GUI marca `cancelled`.
 - Por quê: sem isso filhos órfãos continuariam compilando. Custo: Ctrl+C difere de um shell (documentado).
+- Complemento (revisão final): a CLI trata SIGTERM e SIGHUP como SIGINT. `run_tool` publica o pgid da
+  ferramenta em execução num `std::atomic<pid_t>` (`lr::pipeline::current_tool_pgid()`); no segundo sinal o
+  handler faz `kill(-pgid, SIGKILL)` antes de restaurar `SIG_DFL` e re-levantar o sinal, então fechar o
+  terminal ou um Ctrl+C duplo não deixa o build órfão.
 
 ### R9. `extract` rejeita caminhos STFS com `..` ou `/` inicial; `game.toml` fica ao lado do `recomp.toml`
 - Por quê: evitar path traversal a partir de um pacote malicioso. (A parte "doctor sempre re-executa" foi

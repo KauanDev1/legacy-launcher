@@ -87,7 +87,13 @@ fingerprint = "..."
 | 0 | sucesso |
 | 1 | erro de pipeline (qualquer `ErrorCode` abaixo) |
 | 2 | erro de uso (argumentos inválidos) |
-| 130 | cancelado (Ctrl+C); etapas concluídas continuam em cache, rode de novo para continuar |
+| 130 | cancelado (Ctrl+C, SIGTERM ou SIGHUP); etapas concluídas continuam em cache, rode de novo para continuar |
+
+Cancelamento na CLI (`install`/`build`): as ferramentas rodam em grupo de processos próprio e não recebem o
+Ctrl+C do terminal. O primeiro SIGINT, SIGTERM ou SIGHUP (terminal fechado) marca o cancelamento: a etapa em
+curso manda SIGTERM ao grupo da ferramenta (SIGKILL após 3 s) e a CLI sai com 130. Um segundo sinal mata o
+grupo da ferramenta com SIGKILL e encerra a CLI na hora, pelo próprio sinal; nenhum cmake/ninja/clang fica
+órfão.
 
 `legacyrecomp run` devolve o código do jogo:
 

@@ -52,7 +52,8 @@ std::string_view usage_text() {
          "  --help                     show this text\n"
          "\n"
          "exit codes: 0 ok, 1 pipeline error, 2 usage; `run` returns the game's exit code.\n"
-         "Ctrl+C during install/build cancels cleanly; completed stages stay cached.\n";
+         "Ctrl+C (or SIGTERM/SIGHUP) during install/build cancels cleanly; completed stages stay cached.\n"
+         "A second one kills the running tool and exits at once.\n";
 }
 
 Result<CliArgs> parse_args(std::span<const std::string_view> args) {

@@ -10,7 +10,7 @@ namespace lr::cli {
 
 // Console progress. tty: one redrawn line `\r[stage] [####....] 45% message`. Non-tty: one line each time the
 // stage changes or the percentage enters a new 10% step.
-// Cancellation: a process-wide flag set by request_cancel() (async-signal-safe; see install_sigint_handler()).
+// Cancellation: a process-wide flag set by request_cancel() (async-signal-safe; see install_signal_handlers()).
 class ProgressBar : public pipeline::ProgressSink {
  public:
   ProgressBar(std::ostream& out, bool is_tty);
@@ -23,10 +23,11 @@ class ProgressBar : public pipeline::ProgressSink {
 
   static void request_cancel();
   static void reset_cancel();
-  // First Ctrl+C: sets the cancel flag (tools run in their own process groups, so only we see it) and the
-  // pipeline stops at the next check, killing the running tool. Second Ctrl+C: default action restored and the
-  // signal re-raised, so the launcher dies immediately.
-  static void install_sigint_handler();
+  // SIGINT, SIGTERM and SIGHUP. First signal: sets the cancel flag (tools run in their own process groups, so
+  // only we see it) and the pipeline stops at the next check, killing the running tool. Second signal (any of
+  // the three): SIGKILL to the running tool's process group (pipeline::current_tool_pgid()), then the default
+  // action is restored and the signal re-raised, so the launcher dies immediately without orphaning the tool.
+  static void install_signal_handlers();
 
  private:
   void draw_tty(const pipeline::Progress& p);

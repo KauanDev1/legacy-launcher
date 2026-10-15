@@ -8,6 +8,8 @@
 #include <csignal>
 #include <ostream>
 
+#include "pipeline/process.h"
+
 namespace lr::cli {
 namespace {
 
@@ -16,14 +18,14 @@ static_assert(std::atomic<bool>::is_always_lock_free);
 
 constexpr int kBarWidth = 40;
 
-extern "C" void on_sigint(int sig) {
-  if (g_cancel.load(std::memory_order_relaxed)) {
-    // Second Ctrl+C: give up on a clean stop.
-    ::signal(sig, SIG_DFL);
-    ::raise(sig);
-    return;
-  }
-  g_cancel.store(true, std::memory_order_relaxed);
+// Async-signal-safe: lock-free atomics, kill, signal and raise only.
+extern "C" void on_cancel_signal(int sig) {
+  if (!g_cancel.exchange(true, std::memory_order_relaxed)) return;  // first signal: clean cancel
+  // Second signal: give up on a clean stop. The tool tree lives in its own process group and would outlive us.
+  const pid_t pgid = pipeline::current_tool_pgid();
+  if (pgid > 0) ::kill(-pgid, SIGKILL);  // never kill(0) / kill(-0): that is our own group
+  ::signal(sig, SIG_DFL);
+  ::raise(sig);
 }
 
 }  // namespace
@@ -34,11 +36,13 @@ void ProgressBar::request_cancel() { g_cancel.store(true, std::memory_order_rela
 void ProgressBar::reset_cancel() { g_cancel.store(false, std::memory_order_relaxed); }
 bool ProgressBar::cancelled() const { return g_cancel.load(std::memory_order_relaxed); }
 
-void ProgressBar::install_sigint_handler() {
+void ProgressBar::install_signal_handlers() {
   struct sigaction sa{};
-  sa.sa_handler = on_sigint;
+  sa.sa_handler = on_cancel_signal;
   sigemptyset(&sa.sa_mask);
-  ::sigaction(SIGINT, &sa, nullptr);
+  // Block the other two while one runs, so a SIGHUP racing a SIGTERM cannot interleave the two handlers.
+  for (int s : {SIGINT, SIGTERM, SIGHUP}) sigaddset(&sa.sa_mask, s);
+  for (int s : {SIGINT, SIGTERM, SIGHUP}) ::sigaction(s, &sa, nullptr);
 }
 
 void ProgressBar::draw_tty(const pipeline::Progress& p) {

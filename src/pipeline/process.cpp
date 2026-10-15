@@ -8,6 +8,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstdlib>
@@ -23,6 +24,10 @@ namespace fs = std::filesystem;
 namespace {
 
 using Clock = std::chrono::steady_clock;
+
+// The running tool's process group (== its pid, see POSIX_SPAWN_SETPGROUP below); 0 when none.
+std::atomic<pid_t> g_tool_pgid{0};
+static_assert(std::atomic<pid_t>::is_always_lock_free);
 
 void ignore_sigpipe() {
   static std::once_flag once;
@@ -113,13 +118,16 @@ Result<Child> spawn_child(const fs::path& program, const std::vector<std::string
     ::close(fds[0]);
     return Error{ErrorCode::IoError, "cannot start " + exe_s + ": " + std::strerror(rc), ""};
   }
+  g_tool_pgid.store(pid, std::memory_order_relaxed);
   return Child{pid, fds[0]};
 }
 
+// Reaps the child and withdraws its published process group.
 int wait_status(pid_t pid) {
   int st = 0;
   while (::waitpid(pid, &st, 0) < 0 && errno == EINTR) {
   }
+  g_tool_pgid.store(0, std::memory_order_relaxed);
   return st;
 }
 
@@ -131,6 +139,8 @@ Error exit_error(const fs::path& program, int st) {
 }
 
 }  // namespace
+
+pid_t current_tool_pgid() noexcept { return g_tool_pgid.load(std::memory_order_relaxed); }
 
 std::optional<fs::path> find_program(std::string_view name) {
   if (name.empty()) return std::nullopt;

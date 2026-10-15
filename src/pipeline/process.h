@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <sys/types.h>
+
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -27,6 +29,11 @@ struct ToolInvocation {
 // caller's SIGINT handler must set the `cancelled` flag. Children get default SIGPIPE and an empty signal mask.
 // SIGPIPE is set to SIG_IGN process-wide on first use (writes to a dead pipe return EPIPE instead).
 Result<void> run_tool(const ToolInvocation& inv);
+
+// Process group of the tool run_tool/capture_output is running right now, or 0 (published after the spawn,
+// cleared after the reap). Async-signal-safe (a lock-free atomic load): a signal handler that is about to kill
+// the launcher uses it to take the tool tree down too, since that tree does not share our process group.
+pid_t current_tool_pgid() noexcept;
 
 // Captures stdout only (stderr and stdin go to /dev/null). Non-zero exit -> ToolFailed.
 Result<std::string> capture_output(const std::filesystem::path& program, const std::vector<std::string>& args);
