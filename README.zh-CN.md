@@ -66,7 +66,7 @@ flowchart TD
 
 ## 快速开始
 
-你需要一颗支持 AVX 的 x86-64 CPU、大约 8 GB 的可用磁盘空间，以及你自己的 Minecraft: Xbox 360 Edition 光盘镜像（title ID `584111F7`）。游戏数据默认存放在 `~/.local/share/legacyrecomp`，可以用 `--root` 指定其他位置。不要把这个目录放在基于内存的 tmpfs 上，构建过程会往里面写入好几 GB 的数据。
+你需要一颗支持 AVX 的 x86-64 CPU、大约 8 GB 的可用磁盘空间，以及你自己的 Minecraft: Xbox 360 Edition 光盘镜像（title ID `584111F7`）。游戏数据默认存放在 `~/.local/share/legacyrecomp`（设置了 `XDG_DATA_HOME` 时为 `$XDG_DATA_HOME/legacyrecomp`），可以用 `--root <目录>` 或环境变量 `LEGACYRECOMP_ROOT` 指定其他位置（`--root` 优先）。不要把这个目录放在基于内存的 tmpfs 上，构建过程会往里面写入好几 GB 的数据。
 
 ### AppImage
 

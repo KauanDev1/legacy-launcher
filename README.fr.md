@@ -66,7 +66,7 @@ Le `Default.xex` du disque n'est qu'un petit chargeur. Le vrai jeu se trouve dan
 
 ## Démarrage
 
-Il vous faut un processeur x86-64 avec AVX, environ 8 Go d'espace disque libre et une image de votre propre disque de Minecraft: Xbox 360 Edition (title ID `584111F7`). Les données du jeu vont dans `~/.local/share/legacyrecomp`, sauf si vous passez `--root`. Ne mettez pas ce dossier sur un tmpfs en RAM : la compilation y écrit plusieurs gigaoctets.
+Il vous faut un processeur x86-64 avec AVX, environ 8 Go d'espace disque libre et une image de votre propre disque de Minecraft: Xbox 360 Edition (title ID `584111F7`). Les données du jeu vont dans `~/.local/share/legacyrecomp` (ou `$XDG_DATA_HOME/legacyrecomp` si `XDG_DATA_HOME` est définie) ; choisissez un autre dossier avec `--root <dossier>` ou la variable d'environnement `LEGACYRECOMP_ROOT` (`--root` est prioritaire). Ne mettez pas ce dossier sur un tmpfs en RAM : la compilation y écrit plusieurs gigaoctets.
 
 ### AppImage
 

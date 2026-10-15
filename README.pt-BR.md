@@ -66,7 +66,7 @@ O `Default.xex` do disco é só um carregador pequeno. O jogo de verdade fica nu
 
 ## Primeiros passos
 
-Você precisa de uma CPU x86-64 com AVX, cerca de 8 GB livres em disco e uma imagem do seu próprio disco do Minecraft: Xbox 360 Edition (title ID `584111F7`). Os dados do jogo vão para `~/.local/share/legacyrecomp`, a não ser que você passe `--root`. Não coloque essa pasta num tmpfs em RAM: a compilação grava vários gigabytes nela.
+Você precisa de uma CPU x86-64 com AVX, cerca de 8 GB livres em disco e uma imagem do seu próprio disco do Minecraft: Xbox 360 Edition (title ID `584111F7`). Os dados do jogo vão para `~/.local/share/legacyrecomp` (ou `$XDG_DATA_HOME/legacyrecomp`, se `XDG_DATA_HOME` estiver definida); escolha outra pasta com `--root <pasta>` ou com a variável de ambiente `LEGACYRECOMP_ROOT` (`--root` tem precedência). Não coloque essa pasta num tmpfs em RAM: a compilação grava vários gigabytes nela.
 
 ### AppImage
 
