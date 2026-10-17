@@ -30,7 +30,7 @@ That translation happens on your computer. The launcher reads your own disc imag
 
 ## Open source
 
-LegacyRecomp is free software under the MIT license. Contributions are welcome, from bug reports and reverse-engineering notes to code. [AGENTS.md](AGENTS.md) has the build commands and the project rules, and [docs/](docs/) has the design notes, file format notes and decision records (written in Portuguese).
+LegacyRecomp is free software under the MIT license. Contributions are welcome, from bug reports and reverse-engineering notes to code. [AGENTS.md](AGENTS.md) has the build commands and the project rules (on Windows or macOS, [docs/development.md](docs/development.md) explains the Docker dev container), and [docs/](docs/) has the design notes, file format notes and decision records (written in Portuguese).
 
 ## Status
 

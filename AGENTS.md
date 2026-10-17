@@ -12,6 +12,8 @@ ctest --preset dev -L unit                                # fast tests, no game 
 LEGACYRECOMP_ISO=/path/to/game.iso ctest --preset dev -L integration
 ```
 
+On Windows or macOS (or without a local toolchain) use the Docker dev container: `tools/dev/container.sh test` runs the unit tests, and `shell`, `build`, `install --iso`, `run` are also available (see `docs/development.md`).
+
 Requirements: x86-64 CPU with AVX (the game is compiled with `-march=sandybridge`; `doctor` checks it), Clang ≥ 18, CMake ≥ 3.25, Ninja, SDL2, 8 GiB free disk.
 
 Release build and usage:

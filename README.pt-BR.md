@@ -30,7 +30,7 @@ Essa tradução acontece no seu computador. O launcher lê a imagem do seu próp
 
 ## Código aberto
 
-O LegacyRecomp é software livre, sob a licença MIT. Contribuições são bem-vindas, de relatos de bugs e anotações de engenharia reversa a código. O [AGENTS.md](AGENTS.md) traz os comandos de build e as regras do projeto, e a pasta [docs/](docs/) tem as notas de design, as notas sobre formatos de arquivo e os registros de decisão (em português).
+O LegacyRecomp é software livre, sob a licença MIT. Contribuições são bem-vindas, de relatos de bugs e anotações de engenharia reversa a código. O [AGENTS.md](AGENTS.md) traz os comandos de build e as regras do projeto (no Windows ou macOS, o [docs/development.md](docs/development.md) explica o container Docker de desenvolvimento), e a pasta [docs/](docs/) tem as notas de design, as notas sobre formatos de arquivo e os registros de decisão (em português).
 
 ## Estado atual
 
