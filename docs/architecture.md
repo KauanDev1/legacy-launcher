@@ -33,8 +33,9 @@ A seta aponta de quem depende para quem é dependido; nada em `common` conhece a
 | `runtime` | Memória do convidado, carregador da imagem, tabela de funções, threads, handler de falhas, registro de importações do kernel, variáveis do kernel; lê o cabeçalho XEX2 via `formats/xex2` (o único código de `formats` que entra na biblioteca do jogo) |
 | `launcher/cli`, `launcher/gui` | Frentes de uso: ambas chamam `pipeline::run` e `pipeline::launch` |
 
-Regras: APIs públicas devolvem `lr::Result<T>` e nenhuma exceção atravessa módulos (única exceção:
-`lr::kernel::UnimplementedImport`, lançada e capturada dentro do runtime).
+Regras: APIs públicas devolvem `lr::Result<T>` e nenhuma exceção atravessa módulos (só duas exceções,
+lançadas e capturadas dentro do runtime: `lr::kernel::UnimplementedImport` e `lr::kernel::GuestThreadExit`, ver
+ADR 0004).
 
 ## O runtime e o binário do jogo
 
@@ -48,7 +49,8 @@ O `legacyrecomp-game` é um executável compilado na máquina do usuário na eta
 O `main.cpp` não pode ser uma biblioteca pré-compilada porque usa `PPC_IMAGE_BASE`, `PPC_CODE_SIZE`,
 `PPC_CODE_BASE` e `PPCFuncMappings`, que só existem depois do `recompile`, e constrói o `PPCContext` com o
 layout definido no `ppc_config.h` gerado (rulings R2 e R16, `docs/adr/0003-m1-plan-deviations.md`). O resto do
-runtime nunca toca `PPCContext`: `run_guest(mem, body, user)` não conhece o layout.
+runtime nunca toca `PPCContext`: as threads do convidado (inclusive a principal, `run_main_thread`) entram no código
+recompilado pela cola `GuestGlue` que o `main.cpp` instala (ver "Kernel").
 
 Linha de comando do jogo: `legacyrecomp-game --image <xex> [--data <dir>] [--headless] [--coverage] [--strict-memory]`.
 `--coverage` imprime a tabela de importações (ver `docs/kernel-coverage.md`); `--headless` não inicia SDL;
@@ -70,17 +72,17 @@ convidado `G` fica em `base() + G`. Regiões fixas (spec M2 §6.1; constantes em
 | `0x82000000`–`~0x8659FFFF` | Imagem do jogo (`PPC_IMAGE_BASE`, `PPC_IMAGE_SIZE = 0x032D0000`, código em `0x82200000`) e tabela de funções em `PPC_IMAGE_BASE + PPC_IMAGE_SIZE` (`2 x PPC_CODE_SIZE`, um slot de 8 bytes por instrução). Nunca entregue por um heap |
 | `0xA0000000`–`0xFFFFFFFF` | Vistas físicas: `0xA0` (64 KiB), `0xC0` (16 MiB), `0xE0` (4 KiB) |
 
-Enquanto as threads do M2 não chegam, a thread principal ainda usa os blocos fixos do M1 (constantes em
-`src/runtime/guest_thread.h`): pilha em `0x70000000` (1 MiB, `r1` = topo - `0x80`), KTHREAD falso zerado em
-`0x7FFD0000`, TLS em `0x7FFE0000` e KPCR em `0x7FFF0000` (`r13`). KPCR mínimo (verificado contra o `X_KPCR` do
-Xenia): `tls_ptr` `+0x00`, `pcr_ptr` `+0x30`, base da pilha `+0x70`, fim da pilha `+0x74`, `current_thread`
-`+0x100`, `current_cpu` `+0x10C`.
+Os blocos fixos do M1 em `0x7FFD0000`–`0x7FFF0000` (KTHREAD, TLS e KPCR da única thread) não existem mais: essa
+faixa é da GPU. KPCR, KTHREAD e TLS são alocados por thread no pool do kernel e as pilhas vêm do heap de pilhas
+(ver "Threads").
 
 Valores em big-endian (formato do convidado); o código gerado converte nos acessos.
 
 ### Alocadores e importações de memória
 
-O `Kernel` tem três alocadores: `heap4k()` e `heap64k()` (`PageHeap`, só contabilidade de endereços) e
+O `Kernel` tem quatro alocadores: `heap4k()` e `heap64k()` (`PageHeap`, só contabilidade de endereços),
+`stacks()` (`PageHeap` de páginas de 4 KiB sobre `0x70000000`–`0x7EFFFFFF`, as pilhas das threads; as importações
+de memória também o consultam, então `NtQueryVirtualMemory`/`MmQueryAddressProtect` respondem por pilhas) e
 `physical()` (`PhysicalHeap`, 512 MiB de páginas físicas, sem espelhamento entre vistas). As importações ficam em
 `src/runtime/kernel/exports/memory.cpp`, com a semântica do `xboxkrnl_memory.cc` do Xenia (só referência):
 `NtAllocateVirtualMemory`/`NtFreeVirtualMemory`/`NtProtectVirtualMemory`/`NtQueryVirtualMemory` (ponteiros de
@@ -92,7 +94,7 @@ O gancho de confirmação dos heaps virtuais zera as páginas recém-confirmadas
 `GuestMemory::zero`, que devolve páginas inteiras ao host com `madvise(MADV_DONTNEED)` em vez de escrevê-las.
 Memória física também é zerada ao ser alocada.
 
-**Modo estrito** (`--strict-memory`): no `init_kernel` os dois heaps virtuais ficam `PROT_NONE`
+**Modo estrito** (`--strict-memory`): no `init_kernel` os dois heaps virtuais e o de pilhas ficam `PROT_NONE`
 (`GuestMemory::protect`, `mprotect` por página de 4 KiB do host); o gancho deixa leitura/escrita as páginas
 confirmadas e volta a `PROT_NONE` as desconfirmadas ou liberadas. Assim um acesso perdido falha com o endereço do
 convidado (`SIGSEGV at guest 0x...`, saída 4) em vez de ler zeros. Sem o modo estrito, só a guarda de ponteiro
@@ -101,11 +103,59 @@ nulo é `PROT_NONE`. Proteções do convidado (`PAGE_READONLY` etc.) não viram 
 
 ## Threads
 
-`run_guest` executa o corpo do jogo numa thread do host nova, com pilha de 16 MiB (`kHostStackSize`) e uma
-pilha alternativa de sinal instalada por `install_thread_altstack()`. No M1 só existe essa thread. Retorno
-normal dá saída 0; `UnimplementedImport` imprime o relatório e dá 3; qualquer outra exceção ou falha de
-preparação dá 4. Falha real (SIGSEGV, SIGILL) é tratada pelo handler de sinais, que imprime o endereço e
-chama `_exit(4)`. Threads do jogo criadas por `ExCreateThread` e sincronização entram no M2.
+Cada thread do convidado, inclusive a principal, é uma thread do host (`runtime/kernel/threads.h`): pilha de
+16 MiB (`kHostStackSize`, criada por `start_host_thread` em `runtime/guest_thread.h`) e pilha alternativa de sinal
+(`install_thread_altstack()`). Na memória do convidado ela tem (layouts `X_KPCR`/`X_KTHREAD` do Xenia, conferidos
+com `static_assert` em `guest_structs.h`; semântica do `xthread.cc`, só referência):
+
+- um bloco do pool do kernel com KTHREAD (`0xAB0` bytes; cabeçalho de despachante tipo 6, pilha `+0x5C`/`+0x60`,
+  TLS `+0x68`, id `+0x14C`, endereço de início `+0x150`, último erro `+0x160`), KPCR (`0x2D8` bytes, o `r13`:
+  `tls_ptr` `+0x00`, `pcr_ptr` `+0x30`, topo da pilha `+0x70`, fundo `+0x74`, `current_thread` `+0x100`,
+  `current_cpu` `+0x10C`) e o bloco TLS: cópia do modelo TLS do XEX (cabeçalho `0x00020104`: dados brutos de
+  `raw_data_address`, completados com zeros até `data_size`) seguida dos slots de `KeTlsAlloc` (`be<uint32_t>`,
+  no mínimo 64, ou o `slot_count` do cabeçalho se maior; bitmap de slots do processo). `tls_ptr` e
+  `tls_address` apontam para a cópia do modelo, como o `tls_static_address` do Xenia;
+- uma pilha do heap de pilhas (`Kernel::stacks()`), arredondada a 4 KiB, mínimo 16 KiB, com uma página de guarda
+  reservada e `PROT_NONE` logo abaixo. A thread começa com `r1` = topo - `0x80`.
+
+O KTHREAD é o objeto da thread: é o `guest_header()` do `KObject`, então `ObReferenceObjectByHandle`, as esperas
+por handle e `KeWaitForSingleObject` no KTHREAD funcionam. A identidade da thread no despachante
+(`current_thread_token`) é o endereço do KTHREAD, e o pseudo-handle `kCurrentThread` resolve para a thread atual.
+Ids são inteiros crescentes a partir de 1 (a principal). A memória (bloco do pool e pilha) é liberada quando sai a
+última referência (handles, referências do kernel, a própria thread do host em execução).
+
+Início: toda thread entra no código recompilado pela cola (`call_guest_on_frame(início, args, r1, r13)`), que
+carrega o `fpscr` do host. Com rotina de início XAPI chama `xapi(início, contexto)` e o código de saída é 0; sem
+ela, `início(contexto)` e o código de saída é o r3 devolvido. `ExTerminateThread(código)` lança
+`GuestThreadExit`, capturada no topo da thread (a segunda e última exceção permitida, ADR 0004). Ao terminar, o
+`signal_state` do KTHREAD vira 1 e `Dispatcher::signal` acorda quem espera; APCs pendentes são descartadas.
+
+No topo de cada thread: `UnimplementedImport` imprime o relatório com uma linha `Thread: <id>` (spec §11) e
+encerra o processo inteiro com `_exit(3)`; qualquer outra exceção dá `_exit(4)`; falha real (SIGSEGV, SIGILL,
+inclusive estouro de pilha na página de guarda) é tratada pelo handler de sinais (saída 4). `run_main_thread(entrada,
+tamanho_da_pilha)` cria a thread principal pelo mesmo caminho (tamanho de pilha do cabeçalho XEX `0x00020200`,
+256 KiB por padrão) e espera seu KTHREAD; quando ela termina, o `main.cpp` sai com 0 via `_exit`, derrubando as
+outras threads. Com janela, o SDL roda na thread principal do host e a espera numa thread auxiliar, como antes.
+
+Suspensão: o contador fica na `GuestThread`. Criação suspensa (bit 0 das flags) e auto-suspensão
+(`NtSuspendThread` na própria thread) bloqueiam na hora; suspender outra thread em execução é cooperativo: o
+gancho de entrada de importação (`set_import_entry_hook`, chamado por `trace` em todo thunk; uma leitura atômica)
+bloqueia a thread na próxima importação. `NtResumeThread`/`KeResumeThread` decrementam. Prioridade e afinidade
+(`KeSetBasePriorityThread`, `KeSetAffinityThread`, máscara de CPU no byte alto das flags, gravada em
+`current_cpu`) são registradas, não aplicadas.
+
+APCs: `NtQueueApcThread(handle, rotina, contexto, arg1, arg2)` põe `(rotina, contexto, arg1, arg2)` na fila da
+thread e chama `Dispatcher::wake_for_apc`. Uma espera alertável (`KeWaitFor*`, `NtWaitFor*Ex`,
+`NtSignalAndWaitForSingleObjectEx`, `KeDelayExecutionThread`) que volta com `STATUS_USER_APC` executa antes as APCs
+da fila com `call_guest(rotina, {contexto, arg1, arg2})`, salvo dentro de `KeEnterCriticalRegion` (contador de
+APCs desabilitadas; ao sair da região, APCs pendentes rearmam a próxima espera alertável). `NtAlertThread` não é
+importado pelo jogo, então `STATUS_ALERTED` nunca é produzido.
+
+Outras importações (`exports/threads.cpp`): `KeTlsAlloc`/`KeTlsFree`/`KeTlsGetValue`/`KeTlsSetValue`,
+`ObLookupThreadByThreadId` (KTHREAD com referência do kernel), `KeGetCurrentProcessType`/`KeSetCurrentProcessType`
+(padrão 1), `ExRegisterTitleTerminateNotification` (registrada, nunca chamada no M2), `NtYieldExecution`,
+`KiApcNormalRoutineNop`; stubs: `KeSetDisableBoostThread`, `KeSaveFloatingPointState`,
+`KeRestoreFloatingPointState`, `KeEnableFpuExceptions`.
 
 Códigos de saída do jogo (`runtime/guest_thread.h`): 0 normal, 2 uso/carga (`kExitUsage`), 3 importação
 faltando (`kExitUnimplementedImport`), 4 falha (`kExitFault`), 5 erro fatal do convidado (`kExitGuestFatal`,
@@ -156,7 +206,7 @@ confere primeiro se o endereço está em `[PPC_CODE_BASE, PPC_CODE_BASE + PPC_CO
 então lê a entrada da tabela de funções (não nula). `call_guest(endereço, args)` usa o quadro atual da thread
 (gravado pelo thunk): a função chamada roda com `r1 = (r1 atual - 0x100) & ~0xF` e o mesmo r13, e o quadro
 de quem chamou é restaurado na volta, inclusive quando uma exceção atravessa a chamada. O `PPCContext` novo
-(e o da thread principal, em `guest_body`) carrega o `fpscr` do MXCSR real do host (`loadFromHost`), com
+(também o da entrada de cada thread do convidado) carrega o `fpscr` do MXCSR real do host (`loadFromHost`), com
 todas as exceções SSE mascaradas; a cola restaura o MXCSR de quem chamou depois do callback. Endereço sem função recompilada (ou mais de 8 argumentos, ou thread
 sem quadro) termina com `guest_fatal` citando o endereço do convidado, nunca com salto para o endereço 0 do
 host.
@@ -188,7 +238,7 @@ semáforo (5, limite em `+0x10`), thread (6) e timers (8, 9 = reset automático)
 Tempo limite: nulo = infinito, 0 = consulta, negativo = relativo em 100 ns, positivo = FILETIME absoluto contra o
 relógio real; as esperas usam prazos do `steady_clock`. `wake_for_apc(thread)` faz uma espera alertável devolver
 `STATUS_USER_APC` (ou a próxima, se a thread não está esperando). A identidade da thread vem de
-`current_thread_token()`: um número por thread do host até a tarefa de threads instalar o endereço do KTHREAD.
+`current_thread_token()`: o endereço do KTHREAD numa thread do convidado, um número por thread do host nas outras.
 `snapshot()` lista as esperas em curso para o detector de impasse. Um convidado que muda `signal_state` com
 escrita comum, sem importação, só acorda alguém na próxima operação do despachante naquele cabeçalho.
 

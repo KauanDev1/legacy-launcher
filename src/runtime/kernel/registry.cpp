@@ -2,6 +2,7 @@
 #include "runtime/kernel/registry.h"
 
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -18,6 +19,8 @@ struct Trail {
   size_t count = 0;  // total traced; slot = count % kTrailSize
 };
 thread_local Trail t_trail;
+
+std::atomic<void (*)()> g_entry_hook{nullptr};
 
 // Function-local statics: LR_KERNEL / LR_KERNEL_STUB register from static initializers in other TUs. Both are
 // intentionally leaked (never destroyed), so a thread still calling a thunk while the process exits never touches
@@ -53,7 +56,10 @@ ImportEntry find_import(std::string_view name) {
 void trace(const char* name) {
   t_trail.names[t_trail.count % kTrailSize].assign(name);
   ++t_trail.count;
+  if (auto* hook = g_entry_hook.load(std::memory_order_acquire)) hook();
 }
+
+void set_import_entry_hook(void (*hook)()) { g_entry_hook.store(hook, std::memory_order_release); }
 
 std::vector<std::string> current_trail() {
   std::vector<std::string> out;
@@ -80,6 +86,13 @@ std::string format_report(const UnimplementedImport& e) {
   char caller[16];
   std::snprintf(caller, sizeof caller, "%08X", e.caller);
   return "Unimplemented import: " + e.name + "\nCalled from: 0x" + caller + "\n" + format_trail(e.trail);
+}
+
+std::string format_report(const UnimplementedImport& e, uint32_t thread_id) {
+  char caller[16];
+  std::snprintf(caller, sizeof caller, "%08X", e.caller);
+  return "Unimplemented import: " + e.name + "\nCalled from: 0x" + caller + "\nThread: " + std::to_string(thread_id) +
+         "\n" + format_trail(e.trail);
 }
 
 }  // namespace lr::kernel

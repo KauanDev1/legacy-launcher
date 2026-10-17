@@ -17,7 +17,9 @@
 
 namespace lr::kernel {
 
-// Thrown by a thunk whose import is missing; caught by run_guest. The only exception that crosses runtime internals.
+// Thrown by a thunk whose import is missing; caught at the top of the guest thread (runtime/kernel/threads.h), which
+// prints the report and ends the process with exit code 3. One of the two exceptions that cross runtime internals
+// (the other is GuestThreadExit).
 struct UnimplementedImport {
   std::string name;
   uint32_t caller;                 // guest LR at the call
@@ -39,8 +41,12 @@ ImportEntry find_import(std::string_view name);
 // Throws UnimplementedImport carrying the calling thread's current trail.
 [[noreturn]] void unimplemented_import(const char* name, uint32_t caller_lr);
 
-// Records an import call in a per-thread ring buffer (last 32). Every thunk calls it before dispatching.
+// Records an import call in a per-thread ring buffer (last 32). Every thunk calls it before dispatching. It then
+// runs the import entry hook, if one is set (the thread module uses it to block a thread suspended by another one).
 void trace(const char* name);
+
+// Installs the hook trace() runs on every import entry (nullptr: none). Process-wide; one atomic load per call.
+void set_import_entry_hook(void (*hook)());
 
 // The calling thread's traced imports (last 32), oldest first.
 std::vector<std::string> current_trail();
@@ -50,6 +56,9 @@ std::string format_trail(const std::vector<std::string>& trail);
 
 // "Unimplemented import: <name>\nCalled from: 0x<caller>\n" + format_trail(e.trail)
 std::string format_report(const UnimplementedImport& e);
+
+// The same report with a "Thread: <id>" line before the trail (spec section 11): what a guest thread prints.
+std::string format_report(const UnimplementedImport& e, uint32_t thread_id);
 
 namespace detail {
 // KernelFn of LR_KERNEL_STUB: returns the constant V in r3 with marshal's return rules.

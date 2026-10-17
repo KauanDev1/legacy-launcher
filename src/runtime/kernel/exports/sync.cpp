@@ -16,6 +16,7 @@
 #include "runtime/kernel/objects.h"
 #include "runtime/kernel/registry.h"
 #include "runtime/kernel/status.h"
+#include "runtime/kernel/threads.h"
 
 namespace lr::kernel {
 namespace {
@@ -81,9 +82,15 @@ uint32_t create(const GuestCall& c, U32Ptr handle_out, ObjectKind kind, uint32_t
   return STATUS_SUCCESS;
 }
 
+// An alertable wait woken for an APC runs the calling thread's queued APCs before returning STATUS_USER_APC.
+uint32_t after_wait(uint32_t status) {
+  if (status == STATUS_USER_APC) deliver_current_apcs();
+  return status;
+}
+
 uint32_t wait_one(uint32_t header, uint32_t alertable, TimeoutPtr timeout) {
   const uint32_t h[1] = {header};
-  return kernel().dispatcher().wait(h, WaitType::Any, timeout_from_guest(timeout), alertable != 0);
+  return after_wait(kernel().dispatcher().wait(h, WaitType::Any, timeout_from_guest(timeout), alertable != 0));
 }
 
 }  // namespace
@@ -198,8 +205,8 @@ uint32_t KeWaitForMultipleObjects(GuestCall& c, uint32_t count, U32Ptr objects, 
     headers[i] = objects.get(c.base)[i];
     if (!valid_header(headers[i])) return STATUS_INVALID_PARAMETER;
   }
-  return kernel().dispatcher().wait(headers, static_cast<WaitType>(wait_type), timeout_from_guest(timeout),
-                                    alertable != 0);
+  return after_wait(kernel().dispatcher().wait(headers, static_cast<WaitType>(wait_type), timeout_from_guest(timeout),
+                                              alertable != 0));
 }
 
 // NtWaitForSingleObjectEx(handle, wait_mode, alertable, timeout*).
@@ -219,8 +226,8 @@ uint32_t NtWaitForMultipleObjectsEx(GuestCall& c, uint32_t count, U32Ptr handles
   std::vector<uint32_t> headers(count);
   for (uint32_t i = 0; i < count; ++i)
     if (uint32_t s = resolve(handles.get(c.base)[i], objs[i], headers[i]); s != STATUS_SUCCESS) return s;
-  return kernel().dispatcher().wait(headers, static_cast<WaitType>(wait_type), timeout_from_guest(timeout),
-                                    alertable != 0);
+  return after_wait(kernel().dispatcher().wait(headers, static_cast<WaitType>(wait_type), timeout_from_guest(timeout),
+                                              alertable != 0));
 }
 
 // NtSignalAndWaitForSingleObjectEx(signal_handle, wait_handle, alertable, unused, timeout*): signals (event set,
@@ -231,7 +238,8 @@ uint32_t NtSignalAndWaitForSingleObjectEx(uint32_t signal_handle, uint32_t wait_
   uint32_t sig_header = 0, wait_header = 0;
   if (uint32_t s = resolve(signal_handle, sig, sig_header); s != STATUS_SUCCESS) return s;
   if (uint32_t s = resolve(wait_handle, wt, wait_header); s != STATUS_SUCCESS) return s;
-  return kernel().dispatcher().signal_and_wait(sig_header, wait_header, timeout_from_guest(timeout), alertable != 0);
+  return after_wait(
+      kernel().dispatcher().signal_and_wait(sig_header, wait_header, timeout_from_guest(timeout), alertable != 0));
 }
 
 }  // namespace exports

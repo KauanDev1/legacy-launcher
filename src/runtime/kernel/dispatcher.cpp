@@ -45,7 +45,8 @@ Timeout timeout_from_guest(GuestPtr<be<int64_t>> p) {
 }
 
 uint32_t Dispatcher::current_thread_token() const {
-  if (auto* hook = token_hook_.load(std::memory_order_acquire)) return hook();
+  if (auto* hook = token_hook_.load(std::memory_order_acquire))
+    if (const uint32_t t = hook(); t != 0) return t;
   return default_token();
 }
 

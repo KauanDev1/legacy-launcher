@@ -29,6 +29,7 @@
 #include "runtime/kernel/glue.h"
 #include "runtime/kernel/kernel.h"
 #include "runtime/kernel/registry.h"
+#include "runtime/kernel/threads.h"
 #include "runtime/kernel/variables.h"
 #include "runtime/loader.h"
 #include "runtime/xex_imports.h"
@@ -133,21 +134,10 @@ int print_coverage(const std::string& image) {
   return 0;
 }
 
-// The PPCContext is built here, in the TU compiled with the game's real generated ppc_config.h, so its layout
-// always matches the recompiled code; the prebuilt runtime never touches it.
-void guest_body(uint8_t* base, void* user) {
-  auto* fn = reinterpret_cast<PPCFunc*>(user);
-  PPCContext ctx{};
-  ctx.r1.u64 = kGuestStackBase + kGuestStackSize - kGuestStackTopSlack;
-  ctx.r13.u64 = kGuestPcrAddress;
-  // fpscr caches the host MXCSR: start from the real one (all SSE exceptions masked). A zeroed cache would make the
-  // first enableFlushMode() write MXCSR = FTZ|DAZ with every exception unmasked, and the next inexact result
-  // would raise SIGFPE.
-  ctx.fpscr.loadFromHost();
-  fn(ctx, base);
-}
-
 // --- Guest-call glue (lr::kernel::call_guest): the prebuilt kernel cannot build a PPCContext, this TU can. ---
+// The PPCContext is built here, in the TU compiled with the game's real generated ppc_config.h, so its layout
+// always matches the recompiled code. Every guest thread (the main one included) starts through this glue too
+// (lr::kernel::call_guest_on_frame with its own stack top and KPCR).
 uint8_t* g_guest_base = nullptr;  // set in main() before set_guest_glue
 
 // Restores the host FP control word on scope exit (also when the callee unwinds), so the caller's cached
@@ -163,7 +153,10 @@ uint64_t glue_call(uint8_t* base, uint32_t fn, const uint64_t* args, int nargs, 
   PPCContext ctx{};
   ctx.r1.u64 = r1;
   ctx.r13.u64 = r13;
-  ctx.fpscr.loadFromHost();  // see guest_body
+  // fpscr caches the host MXCSR: start from the real one (all SSE exceptions masked). A zeroed cache would make the
+  // first enableFlushMode() write MXCSR = FTZ|DAZ with every exception unmasked, and the next inexact result
+  // would raise SIGFPE.
+  ctx.fpscr.loadFromHost();
   PPCRegister* const gpr[8] = {&ctx.r3, &ctx.r4, &ctx.r5, &ctx.r6, &ctx.r7, &ctx.r8, &ctx.r9, &ctx.r10};
   for (int i = 0; i < nargs && i < 8; ++i) gpr[i]->u64 = args[i];
   PPCFunc* const target = PPC_LOOKUP_FUNC(base, fn);
@@ -178,8 +171,8 @@ bool glue_has_function(uint32_t fn) {
   return target != nullptr;
 }
 
-// Runs the guest on a helper thread and keeps the SDL window alive on the main thread.
-int run_with_window(GuestMemory& mem, PPCFunc* fn) {
+// Runs the main guest thread (waited for on a helper thread) and keeps the SDL window alive on the main thread.
+int run_with_window(uint32_t entry, uint32_t stack_size) {
   if (SDL_Init(SDL_INIT_VIDEO) != 0) {
     std::fprintf(stderr, "error: SDL_Init failed: %s (use --headless to run without a window)\n", SDL_GetError());
     return kExitUsage;
@@ -193,7 +186,7 @@ int run_with_window(GuestMemory& mem, PPCFunc* fn) {
   std::atomic<bool> done{false};
   std::atomic<int> rc{0};
   std::thread runner([&] {
-    rc = run_guest(mem, guest_body, reinterpret_cast<void*>(fn));
+    rc = lr::kernel::run_main_thread(entry, stack_size);
     done = true;
   });
   bool closed = false;
@@ -295,10 +288,15 @@ int main(int argc, char** argv) {
     return kExitUsage;
   }
 
-  init_guest_pcr(mem.value());
   g_guest_base = mem.value().base();
   lr::kernel::set_guest_glue({glue_call, glue_has_function});
+  // Every guest thread gets a copy of the XEX TLS template; ExCreateThread with stack size 0 uses the image's.
+  lr::kernel::kernel().threads().set_image(img.value().tls, img.value().stack_size);
 
-  if (opt.headless) return run_guest(mem.value(), guest_body, reinterpret_cast<void*>(entry_fn));
-  return run_with_window(mem.value(), entry_fn);
+  const uint32_t entry = img.value().entry, stack_size = img.value().stack_size;
+  const int rc = opt.headless ? lr::kernel::run_main_thread(entry, stack_size) : run_with_window(entry, stack_size);
+  // The main guest thread has returned (or the window failed): end the process now, taking any other guest threads
+  // down with it, without running static destructors under their feet.
+  std::fflush(nullptr);
+  _exit(rc);
 }

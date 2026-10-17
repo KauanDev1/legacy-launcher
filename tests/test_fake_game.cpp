@@ -76,7 +76,7 @@ TEST_CASE("fake game --coverage lists three states", "[unit]") {
   CHECK(r.out.find("| FakeStub | function | stub |") != std::string::npos);
   CHECK(r.out.find("| FakeCallback | function | implemented |") != std::string::npos);
   CHECK(r.out.find("| FakeMissing | function | missing |") != std::string::npos);
-  CHECK(r.out.find("Implemented: 2, stub: 1, missing: 1 / 4 functions + 0 variables") != std::string::npos);
+  CHECK(r.out.find("Implemented: 4, stub: 1, missing: 1 / 6 functions + 0 variables") != std::string::npos);
 }
 
 TEST_CASE("fake game --coverage --image adds the XEX's variable imports", "[unit]") {
@@ -105,7 +105,7 @@ TEST_CASE("fake game --coverage --image adds the XEX's variable imports", "[unit
   CHECK(r.out.find("| XboxKrnlVersion4Digit | variable | missing |") != std::string::npos);
   CHECK(r.out.find("DbgPrint") == std::string::npos);  // a function: its row comes from the generated thunks
   CHECK(r.out.find("| KeTimeStampBundle | variable | stub |") != std::string::npos);
-  CHECK(r.out.find("Implemented: 3, stub: 2, missing: 2 / 4 functions + 3 variables") != std::string::npos);
+  CHECK(r.out.find("Implemented: 5, stub: 2, missing: 2 / 6 functions + 3 variables") != std::string::npos);
 }
 
 // sub_82000280 calls FakeCallback(sub_82000200, 41); the callback checks the frame call_guest built and returns
@@ -160,6 +160,27 @@ TEST_CASE("fake game exits 0 when the entry point returns normally", "[unit]") {
   TempDir td;
   auto r = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x82000180)});
   CHECK(r.code == 0);
+}
+
+// sub_820001E0 runs sub_82000170(41) on a second guest thread through ExCreateThread, waits on its handle and
+// checks the value the thread stored (a mismatch calls FakeMissing, exit 3).
+TEST_CASE("fake game runs a guest thread created by ExCreateThread", "[unit][threads]") {
+  TempDir td;
+  auto r = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x820001E0)});
+  INFO(r.out);
+  CHECK(r.code == 0);
+  CHECK(r.out.empty());
+}
+
+// sub_820001C0 starts sub_82000160 (calls FakeMissing) on thread 2 and blocks waiting for it: the whole process
+// exits 3 from that thread, and the report names it (spec section 11).
+TEST_CASE("missing import on a secondary guest thread exits 3 with a Thread line", "[unit][threads]") {
+  TempDir td;
+  auto r = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x820001C0)});
+  INFO(r.out);
+  CHECK(r.code == 3);
+  CHECK(r.out.find("Unimplemented import: FakeMissing\nCalled from: 0x82000164\nThread: 2\n") != std::string::npos);
+  CHECK(r.out.find("Trail (last 1): FakeMissing") != std::string::npos);
 }
 
 TEST_CASE("fake game usage and load errors exit 2", "[unit]") {

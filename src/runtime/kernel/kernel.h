@@ -13,6 +13,7 @@
 #include "runtime/guest_memory.h"
 #include "runtime/kernel/dispatcher.h"
 #include "runtime/kernel/objects.h"
+#include "runtime/kernel/threads.h"
 #include "runtime/memory/page_heap.h"
 #include "runtime/memory/physical_heap.h"
 
@@ -42,7 +43,9 @@ class Kernel {
   runtime::PageHeap& heap4k() { return heap4k_; }
   runtime::PageHeap& heap64k() { return heap64k_; }
   runtime::PhysicalHeap& physical() { return physical_; }
-  // The virtual heap containing addr, or nullptr.
+  // Guest thread stacks [kStacksBase, kStacksEnd), 4 KiB pages (runtime/kernel/threads.h).
+  runtime::PageHeap& stacks() { return stacks_; }
+  // The virtual heap containing addr (the stacks heap included), or nullptr.
   runtime::PageHeap* virtual_heap_for(uint32_t addr);
 
   // Kernel pool (ExAllocatePool*, XamAlloc): page-granular, committed read/write and zeroed, in the 4 KiB heap.
@@ -73,6 +76,9 @@ class Kernel {
   // The wait engine (runtime/kernel/dispatcher.h) over this kernel's guest memory.
   Dispatcher& dispatcher() { return dispatcher_; }
 
+  // Guest thread state (runtime/kernel/threads.h).
+  Threads& threads() { return threads_; }
+
   // Kernel variable name -> guest address of its block (filled by resolve_variable_imports).
   std::map<std::string, uint32_t, std::less<>>& variable_blocks() { return variable_blocks_; }
 
@@ -89,6 +95,8 @@ class Kernel {
   runtime::PageHeap heap4k_;
   runtime::PageHeap heap64k_;
   runtime::PhysicalHeap physical_;
+  runtime::PageHeap stacks_;
+  Threads threads_;
   // After the heaps: objects are destroyed first, so objects backed by pool memory can still free it.
   ObjectTable objects_;
   Dispatcher dispatcher_;
@@ -104,7 +112,8 @@ Result<void> init_kernel(runtime::GuestMemory& mem, KernelConfig cfg);
 Kernel& kernel();
 
 // TEST ONLY (tests/support/kernel_fixture.h): destroys the current instance, if any, so the next init_kernel
-// succeeds again. Never call it while guest code may be running.
+// succeeds again. It first waits for every guest host thread to finish (runtime/kernel/threads.h), so a test must
+// let all the guest threads it started end. Never call it while guest code may be running.
 void reset_kernel_for_tests();
 
 // Ends the process for a condition the guest cannot recover from (KeBugCheck, an unhandled guest exception, a

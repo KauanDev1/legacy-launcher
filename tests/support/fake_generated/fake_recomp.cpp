@@ -29,12 +29,13 @@ PPC_FUNC(sub_82000180) {
   }
 }
 
-// Guest callback run by FakeCallback through call_guest: returns r3 + 1 when it runs on the frame call_guest must
-// build for it (r1 = (caller r1 - 0x100) & ~0xF, caller r1 = 0x700FFF80 set by guest_body; r13 = the PCR),
-// otherwise 0.
+// Guest callback run by FakeCallback through call_guest: returns r3 + 1 when it runs on a frame call_guest built
+// for it on the main guest thread (r1 16-aligned inside that thread's stack, between the KPCR's stack_end +0x74
+// and stack_base +0x70; r13 = the thread's KPCR, whose pcr_ptr +0x30 points at itself), otherwise 0.
 PPC_FUNC(sub_82000200) {
-  (void)base;
-  const bool frame_ok = ctx.r1.u64 == 0x700FFE80 && ctx.r13.u64 == 0x7FFF0000;
+  const uint32_t r1 = uint32_t(ctx.r1.u64), r13 = uint32_t(ctx.r13.u64);
+  const bool frame_ok = r13 != 0 && PPC_LOAD_U32(r13 + 0x30) == r13 && r1 % 16 == 0 &&
+                        r1 < PPC_LOAD_U32(r13 + 0x70) && r1 > PPC_LOAD_U32(r13 + 0x74);
   ctx.r3.u64 = frame_ok ? ctx.r3.u64 + 1 : 0;
 }
 
@@ -91,6 +92,54 @@ PPC_FUNC(sub_820002A0) {
   __imp__FakeCallback(ctx, base);
   if (ctx.r3.u64 != 1 || ctx.fpscr.getcsr() != before) {
     ctx.lr = 0x820002A8;
+    __imp__FakeMissing(ctx, base);
+  }
+}
+
+// ExCreateThread(handle*, 0, id*, 0, start, context, 0) followed by NtWaitForSingleObjectEx(handle) on the result.
+// The handle and id slots live in this guest frame (below r1). Returns the wait status in r3, or calls nothing
+// more when the creation failed (r3 = its status).
+static void create_and_wait(PPCContext& ctx, uint8_t* base, uint32_t start, uint32_t context, uint32_t lr) {
+  const uint32_t slots = uint32_t(ctx.r1.u64) - 0x40;
+  ctx.r3.u64 = slots;
+  ctx.r4.u64 = 0;
+  ctx.r5.u64 = slots + 4;
+  ctx.r6.u64 = 0;
+  ctx.r7.u64 = start;
+  ctx.r8.u64 = context;
+  ctx.r9.u64 = 0;
+  ctx.lr = lr;
+  __imp__ExCreateThread(ctx, base);
+  if (ctx.r3.u32 != 0) return;
+  ctx.r3.u64 = PPC_LOAD_U32(slots);
+  ctx.r4.u64 = 0;
+  ctx.r5.u64 = 0;
+  ctx.r6.u64 = 0;
+  ctx.lr = lr + 4;
+  __imp__NtWaitForSingleObjectEx(ctx, base);
+}
+
+// Secondary thread body: calls the missing import (exit 3, report names thread 2).
+PPC_FUNC(sub_82000160) {
+  ctx.lr = 0x82000164;
+  __imp__FakeMissing(ctx, base);
+}
+
+// Secondary thread body: stores context + 1 at guest 0x82000008 and returns.
+PPC_FUNC(sub_82000170) {
+  PPC_STORE_U32(0x82000008, ctx.r3.u32 + 1);
+  ctx.r3.u64 = 0;
+}
+
+// Entry point: runs sub_82000160 on a new guest thread and waits for it (never returns: exit 3 from that thread).
+PPC_FUNC(sub_820001C0) { create_and_wait(ctx, base, 0x82000160, 0, 0x820001C4); }
+
+// Entry point: runs sub_82000170(41) on a new guest thread, waits, and checks the value it stored (42); a mismatch
+// or a failed create/wait calls the missing import (exit 3).
+PPC_FUNC(sub_820001E0) {
+  create_and_wait(ctx, base, 0x82000170, 41, 0x820001E4);
+  if (ctx.r3.u32 != 0 || PPC_LOAD_U32(0x82000008) != 42) {
+    ctx.lr = 0x820001EC;
     __imp__FakeMissing(ctx, base);
   }
 }

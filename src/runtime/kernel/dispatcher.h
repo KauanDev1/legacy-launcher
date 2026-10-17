@@ -98,7 +98,8 @@ class Dispatcher {
   std::vector<WaitInfo> snapshot() const;
 
   // Identity of the calling thread for mutant ownership and wake_for_apc: the hook's value when one is set (the
-  // thread task sets the current KTHREAD guest address), else a non-zero token unique per host thread.
+  // thread task sets the current KTHREAD guest address; 0 from the hook means "not a guest thread"), else a non-zero
+  // token unique per host thread.
   uint32_t current_thread_token() const;
   void set_thread_token_hook(uint32_t (*hook)()) { token_hook_.store(hook, std::memory_order_release); }
 

@@ -26,6 +26,7 @@ Kernel::Kernel(runtime::GuestMemory& mem, KernelConfig cfg)
       data_next_(runtime::kKernelDataBase),
       heap4k_(runtime::kHeap4kBase, runtime::kHeap4kEnd, 0x1000),
       heap64k_(runtime::kHeap64kBase, runtime::kHeap64kEnd, 0x10000),
+      stacks_(runtime::kStacksBase, runtime::kStacksEnd, 0x1000),
       dispatcher_(mem.base()) {}
 
 Result<void> Kernel::setup_memory() {
@@ -36,10 +37,12 @@ Result<void> Kernel::setup_memory() {
   if (cfg_.strict_memory) {
     LR_TRY(mem_.protect(runtime::kHeap4kBase, runtime::kHeap4kEnd - runtime::kHeap4kBase, PROT_NONE));
     LR_TRY(mem_.protect(runtime::kHeap64kBase, runtime::kHeap64kEnd - runtime::kHeap64kBase, PROT_NONE));
+    LR_TRY(mem_.protect(runtime::kStacksBase, runtime::kStacksEnd - runtime::kStacksBase, PROT_NONE));
   }
   auto hook = [this](uint32_t addr, uint32_t size, bool committed, bool zero) { on_commit(addr, size, committed, zero); };
   heap4k_.set_commit_hook(hook);
   heap64k_.set_commit_hook(hook);
+  stacks_.set_commit_hook(hook);
   return {};
 }
 
@@ -59,6 +62,7 @@ void Kernel::on_commit(uint32_t addr, uint32_t size, bool committed, bool zero) 
 runtime::PageHeap* Kernel::virtual_heap_for(uint32_t addr) {
   if (addr >= runtime::kHeap4kBase && addr < runtime::kHeap4kEnd) return &heap4k_;
   if (addr >= runtime::kHeap64kBase && addr < runtime::kHeap64kEnd) return &heap64k_;
+  if (addr >= runtime::kStacksBase && addr < runtime::kStacksEnd) return &stacks_;
   return nullptr;
 }
 
@@ -96,6 +100,7 @@ Result<void> init_kernel(runtime::GuestMemory& mem, KernelConfig cfg) {
     delete k;
     return r;
   }
+  install_thread_hooks(*k);
   return {};
 }
 
@@ -106,7 +111,10 @@ Kernel& kernel() {
   return *k;
 }
 
-void reset_kernel_for_tests() { delete g_kernel.exchange(nullptr, std::memory_order_acq_rel); }
+void reset_kernel_for_tests() {
+  wait_for_guest_threads_for_tests();
+  delete g_kernel.exchange(nullptr, std::memory_order_acq_rel);
+}
 
 void guest_fatal(std::string_view what) {
   const std::string msg = "Guest fatal: " + std::string(what) + "\n" + format_trail(current_trail());

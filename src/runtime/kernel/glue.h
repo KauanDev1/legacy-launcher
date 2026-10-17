@@ -36,4 +36,9 @@ void set_current_frame(uint32_t r1, uint32_t r13);
 // (the message names the guest address: never a jump to host address 0).
 uint64_t call_guest(uint32_t fn, std::span<const uint64_t> args);
 
+// Like call_guest, but on an explicit frame: the callee runs with exactly r1 and r13, which also become the
+// calling thread's current frame while it runs (restored afterwards). Used to start a guest thread on its own
+// stack and PCR. Same guest_fatal conditions as call_guest, except that no current frame is needed.
+uint64_t call_guest_on_frame(uint32_t fn, std::span<const uint64_t> args, uint32_t r1, uint32_t r13);
+
 }  // namespace lr::kernel

@@ -35,21 +35,34 @@ void set_guest_glue(const GuestGlue& g) {
 
 void set_current_frame(uint32_t r1, uint32_t r13) { t_frame = {r1, r13}; }
 
-uint64_t call_guest(uint32_t fn, std::span<const uint64_t> args) {
+namespace {
+// Restores the caller's frame on return and when the callee unwinds (a thunk inside it moves t_frame).
+struct FrameGuard {
+  Frame saved = t_frame;
+  ~FrameGuard() { t_frame = saved; }
+};
+
+uint64_t call_on(uint32_t fn, std::span<const uint64_t> args, uint32_t r1, uint32_t r13) {
   const auto call = g_call.load(std::memory_order_acquire);
   const auto has_function = g_has_function.load(std::memory_order_acquire);
   if (call == nullptr || has_function == nullptr) fatal_for("no guest glue installed, calling guest", fn);
   if (args.size() > 8) fatal_for("more than 8 arguments for guest", fn);
-  if (t_frame.r1 == 0) fatal_for("no current guest frame on this thread, calling guest", fn);
   if (!has_function(fn)) fatal_for("no recompiled function at guest", fn);
+  return call(kernel().memory().base(), fn, args.data(), static_cast<int>(args.size()), r1, r13);
+}
+}  // namespace
 
-  // Restores the caller's frame on return and when the callee unwinds (a thunk inside it moves t_frame).
-  struct FrameGuard {
-    Frame saved = t_frame;
-    ~FrameGuard() { t_frame = saved; }
-  } const guard;
+uint64_t call_guest(uint32_t fn, std::span<const uint64_t> args) {
+  if (t_frame.r1 == 0) fatal_for("no current guest frame on this thread, calling guest", fn);
+  const FrameGuard guard;
   const uint32_t r1 = (guard.saved.r1 - kCalleeFrameGap) & ~uint32_t{0xF};
-  return call(kernel().memory().base(), fn, args.data(), static_cast<int>(args.size()), r1, guard.saved.r13);
+  return call_on(fn, args, r1, guard.saved.r13);
+}
+
+uint64_t call_guest_on_frame(uint32_t fn, std::span<const uint64_t> args, uint32_t r1, uint32_t r13) {
+  const FrameGuard guard;
+  t_frame = {r1, r13};
+  return call_on(fn, args, r1, r13);
 }
 
 }  // namespace lr::kernel

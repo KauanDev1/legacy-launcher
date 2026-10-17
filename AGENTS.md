@@ -37,7 +37,7 @@ launcher (cli, gui)
    |-> pipeline  (stages: doctor, extract, verify, patch, analyse, recompile, build)
    |-> runtime   (guest memory, loader, kernel/ imports, threads)
 pipeline -> formats (xdvdfs, stfs, xex2) -> common
-runtime  -> common
+runtime  -> formats (xex2 only), common
 common: Result/Error, log, sha256, paths, fs_util
 thirdparty: XenonRecomp (and its bundled tomlplusplus/fmt/xxHash), Catch2, imgui
 ```
@@ -46,7 +46,7 @@ Namespaces: `lr`, `lr::formats`, `lr::pipeline`, `lr::runtime`, `lr::kernel`.
 
 ## Inviolable rules
 
-- Public APIs return `lr::Result<T>`; no exceptions cross module boundaries (sole exception: `lr::kernel::UnimplementedImport`, thrown and caught inside the runtime).
+- Public APIs return `lr::Result<T>`; no exceptions cross module boundaries (only two exceptions, both thrown and caught inside the runtime: `lr::kernel::UnimplementedImport` for a missing import, and `lr::kernel::GuestThreadExit`, thrown by `ExTerminateThread` and caught at the top of the guest thread; see `docs/adr/0004-m2-plan-deviations.md`).
 - Never commit `*.iso`, `*.xex`, `*.xexp`, `private/`, `work/`, generated `ppc_*` files. Before every commit: `git status --short` must show none of them.
 - Every commit passes `ctest --preset dev -L unit`. Conventional Commits, one commit per task step marked "Commit", ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - External tools are launched with `posix_spawn` and an argv vector, never through a shell.
