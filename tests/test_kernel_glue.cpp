@@ -107,7 +107,7 @@ TEST_CASE("init_kernel is once per process and kernel() exposes memory and confi
 }
 
 TEST_CASE("init_kernel keeps the configuration", "[unit]") {
-  auto m = lr::runtime::GuestMemory::reserve(0x10000);
+  auto m = lr::runtime::GuestMemory::reserve(0x1'0000'0000ull);
   REQUIRE(m);
   lr::kernel::reset_kernel_for_tests();
   lr::kernel::KernelConfig cfg;

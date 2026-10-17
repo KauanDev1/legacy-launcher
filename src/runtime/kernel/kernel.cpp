@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: MIT
 #include "runtime/kernel/kernel.h"
 
+#include <sys/mman.h>
 #include <unistd.h>
 
 #include <atomic>
 #include <cstdio>
+#include <optional>
 #include <string>
 
 #include "runtime/guest_thread.h"
 #include "runtime/kernel/registry.h"
+#include "runtime/memory_map.h"
 
 namespace lr::kernel {
 
@@ -17,6 +20,58 @@ namespace {
 std::atomic<Kernel*> g_kernel{nullptr};
 }  // namespace
 
+Kernel::Kernel(runtime::GuestMemory& mem, KernelConfig cfg)
+    : mem_(mem),
+      cfg_(std::move(cfg)),
+      heap4k_(runtime::kHeap4kBase, runtime::kHeap4kEnd, 0x1000),
+      heap64k_(runtime::kHeap64kBase, runtime::kHeap64kEnd, 0x10000) {}
+
+Result<void> Kernel::setup_memory() {
+  if (mem_.size() < (uint64_t{1} << 32))
+    return Error{ErrorCode::OutOfRange, "guest memory must span the whole 4 GiB guest space", ""};
+  // The null guard catches guest null-pointer accesses (reported by the fault handler as "at guest 0x0000....").
+  LR_TRY(mem_.protect(0, runtime::kNullGuardEnd, PROT_NONE));
+  if (cfg_.strict_memory) {
+    LR_TRY(mem_.protect(runtime::kHeap4kBase, runtime::kHeap4kEnd - runtime::kHeap4kBase, PROT_NONE));
+    LR_TRY(mem_.protect(runtime::kHeap64kBase, runtime::kHeap64kEnd - runtime::kHeap64kBase, PROT_NONE));
+  }
+  auto hook = [this](uint32_t addr, uint32_t size, bool committed, bool zero) { on_commit(addr, size, committed, zero); };
+  heap4k_.set_commit_hook(hook);
+  heap64k_.set_commit_hook(hook);
+  return {};
+}
+
+// Runs under the heap's operation mutex (PageHeap::set_commit_hook), so it never races a later operation on the
+// same pages. Released/decommitted pages keep their contents unless strict: the next commit zeroes them anyway.
+void Kernel::on_commit(uint32_t addr, uint32_t size, bool committed, bool zero) {
+  Result<void> r;
+  if (committed) {
+    if (cfg_.strict_memory) r = mem_.protect(addr, size, PROT_READ | PROT_WRITE);
+    if (r && zero) r = mem_.zero(addr, size);
+  } else if (cfg_.strict_memory) {
+    r = mem_.protect(addr, size, PROT_NONE);
+  }
+  if (!r) guest_fatal("guest memory commit hook failed: " + r.error().message);
+}
+
+runtime::PageHeap* Kernel::virtual_heap_for(uint32_t addr) {
+  if (addr >= runtime::kHeap4kBase && addr < runtime::kHeap4kEnd) return &heap4k_;
+  if (addr >= runtime::kHeap64kBase && addr < runtime::kHeap64kEnd) return &heap64k_;
+  return nullptr;
+}
+
+uint32_t Kernel::pool_alloc(uint32_t bytes, uint32_t /*tag*/) {
+  auto base = heap4k_.reserve(bytes == 0 ? 1 : bytes, 0, false, std::nullopt, runtime::kPageReadWrite);
+  if (!base) return 0;
+  if (!heap4k_.commit(base.value(), bytes == 0 ? 1 : bytes, runtime::kPageReadWrite, true)) {
+    (void)heap4k_.release(base.value());
+    return 0;
+  }
+  return base.value();
+}
+
+void Kernel::pool_free(uint32_t addr) { (void)heap4k_.release(addr); }
+
 Result<void> init_kernel(runtime::GuestMemory& mem, KernelConfig cfg) {
   auto* k = new Kernel(mem, std::move(cfg));
   Kernel* expected = nullptr;
@@ -24,8 +79,14 @@ Result<void> init_kernel(runtime::GuestMemory& mem, KernelConfig cfg) {
     delete k;
     return Error{ErrorCode::Internal, "init_kernel called twice", "the kernel is initialized once per process"};
   }
+  if (auto r = k->setup_memory(); !r) {
+    g_kernel.store(nullptr, std::memory_order_release);
+    delete k;
+    return r;
+  }
   return {};
 }
+
 
 Kernel& kernel() {
   Kernel* k = g_kernel.load(std::memory_order_acquire);

@@ -136,4 +136,49 @@ struct X_LARGE_INTEGER {
 };
 static_assert(sizeof(X_LARGE_INTEGER) == 8);
 
+// NtQueryVirtualMemory output. Field order from Xenia xboxkrnl_memory.cc (NtQueryVirtualMemory fills base_address,
+// allocation_base, allocation_protect, region_size, state, protect, type), all u32.
+struct X_MEMORY_BASIC_INFORMATION {
+  be<uint32_t> base_address;
+  be<uint32_t> allocation_base;
+  be<uint32_t> allocation_protect;
+  be<uint32_t> region_size;
+  be<uint32_t> state;
+  be<uint32_t> protect;
+  be<uint32_t> type;
+};
+static_assert(sizeof(X_MEMORY_BASIC_INFORMATION) == 0x1C);
+static_assert(offsetof(X_MEMORY_BASIC_INFORMATION, allocation_protect) == 8);
+static_assert(offsetof(X_MEMORY_BASIC_INFORMATION, region_size) == 0xC);
+static_assert(offsetof(X_MEMORY_BASIC_INFORMATION, type) == 0x18);
+
+// MmQueryStatistics output, 104 bytes (static-asserted in Xenia xboxkrnl_memory.cc, X_MM_QUERY_STATISTICS_RESULT).
+struct X_MM_QUERY_STATISTICS_SECTION {
+  be<uint32_t> available_pages;
+  be<uint32_t> total_virtual_memory_bytes;
+  be<uint32_t> reserved_virtual_memory_bytes;
+  be<uint32_t> physical_pages;
+  be<uint32_t> pool_pages;
+  be<uint32_t> stack_pages;
+  be<uint32_t> image_pages;
+  be<uint32_t> heap_pages;
+  be<uint32_t> virtual_pages;
+  be<uint32_t> page_table_pages;
+  be<uint32_t> cache_pages;
+};
+static_assert(sizeof(X_MM_QUERY_STATISTICS_SECTION) == 0x2C);
+
+struct X_MM_QUERY_STATISTICS_RESULT {
+  be<uint32_t> size;
+  be<uint32_t> total_physical_pages;
+  be<uint32_t> kernel_pages;
+  X_MM_QUERY_STATISTICS_SECTION title;
+  X_MM_QUERY_STATISTICS_SECTION system;
+  be<uint32_t> highest_physical_page;
+};
+static_assert(sizeof(X_MM_QUERY_STATISTICS_RESULT) == 104);
+static_assert(offsetof(X_MM_QUERY_STATISTICS_RESULT, title) == 0xC);
+static_assert(offsetof(X_MM_QUERY_STATISTICS_RESULT, system) == 0x38);
+static_assert(offsetof(X_MM_QUERY_STATISTICS_RESULT, highest_physical_page) == 0x64);
+
 }  // namespace lr::kernel

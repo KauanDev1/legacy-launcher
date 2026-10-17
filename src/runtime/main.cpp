@@ -3,7 +3,7 @@
 // generated ppc_config.h / ppc_recomp_*.cpp / ppc_func_mapping.cpp and the generated import thunks, and links
 // lr_runtime_core with --whole-archive so its LR_KERNEL / LR_KERNEL_STUB registrations are kept.
 //
-// Usage: <game> --image <xex> [--data <dir>] [--headless] [--coverage]
+// Usage: <game> --image <xex> [--data <dir>] [--headless] [--coverage] [--strict-memory]
 // Exit codes: 0 ok (also: window closed by the user), 2 usage/load error, 3 unimplemented import, 4 fault,
 // 5 guest fatal (lr::kernel::guest_fatal), 6 deadlock.
 
@@ -44,11 +44,12 @@ struct Options {
   std::string data;
   bool headless = false;
   bool coverage = false;
+  bool strict_memory = false;  // uncommitted heap pages PROT_NONE (lr::kernel::KernelConfig::strict_memory)
 };
 
 int usage(const char* msg) {
   if (msg) std::fprintf(stderr, "error: %s\n", msg);
-  std::fprintf(stderr, "usage: game --image <xex> [--data <dir>] [--headless] [--coverage]\n");
+  std::fprintf(stderr, "usage: game --image <xex> [--data <dir>] [--headless] [--coverage] [--strict-memory]\n");
   return kExitUsage;
 }
 
@@ -166,6 +167,7 @@ int main(int argc, char** argv) {
     const std::string a = argv[i];
     if (a == "--headless") opt.headless = true;
     else if (a == "--coverage") opt.coverage = true;
+    else if (a == "--strict-memory") opt.strict_memory = true;
     else if (a == "--image" || a == "--data") {
       if (i + 1 >= argc) return usage(("missing value for " + a).c_str());
       (a == "--image" ? opt.image : opt.data) = argv[++i];
@@ -222,6 +224,7 @@ int main(int argc, char** argv) {
   lr::kernel::KernelConfig cfg;
   cfg.game_dir = std::filesystem::path(opt.image).parent_path();
   if (!opt.data.empty()) cfg.user_dir = opt.data;
+  cfg.strict_memory = opt.strict_memory;
   if (auto r = lr::kernel::init_kernel(mem.value(), std::move(cfg)); !r) {
     std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
     return kExitUsage;

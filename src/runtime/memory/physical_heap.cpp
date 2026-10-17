@@ -89,6 +89,13 @@ uint32_t PhysicalHeap::physical_address(uint32_t guest_address) {
   return phys;
 }
 
+uint32_t PhysicalHeap::used_pages() const {
+  std::lock_guard<std::mutex> lock(mu_);
+  uint64_t n = 0;
+  for (const auto& [guest, a] : allocs_) n += a.size / kPage;
+  return static_cast<uint32_t>(n);
+}
+
 Result<uint32_t> PhysicalHeap::allocation_size(uint32_t guest_address) const {
   std::lock_guard<std::mutex> lock(mu_);
   auto it = allocs_.upper_bound(guest_address);

@@ -42,6 +42,8 @@ class PhysicalHeap {
   static uint32_t physical_address(uint32_t guest_address);
   // Size of the whole allocation containing guest_address (any address inside it).
   Result<uint32_t> allocation_size(uint32_t guest_address) const;
+  // Number of 4 KiB physical pages currently allocated (MmQueryStatistics).
+  uint32_t used_pages() const;
 
  private:
   struct Alloc {

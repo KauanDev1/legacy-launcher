@@ -49,28 +49,54 @@ O `main.cpp` não pode ser uma biblioteca pré-compilada porque usa `PPC_IMAGE_B
 layout definido no `ppc_config.h` gerado (rulings R2 e R16, `docs/adr/0003-m1-plan-deviations.md`). O resto do
 runtime nunca toca `PPCContext`: `run_guest(mem, body, user)` não conhece o layout.
 
-Linha de comando do jogo: `legacyrecomp-game --image <xex> [--data <dir>] [--headless] [--coverage]`.
-`--coverage` imprime a tabela de importações (ver `docs/kernel-coverage.md`); `--headless` não inicia SDL.
+Linha de comando do jogo: `legacyrecomp-game --image <xex> [--data <dir>] [--headless] [--coverage] [--strict-memory]`.
+`--coverage` imprime a tabela de importações (ver `docs/kernel-coverage.md`); `--headless` não inicia SDL;
+`--strict-memory` liga o modo estrito de memória (`KernelConfig.strict_memory`, ver abaixo).
 
 ## Mapa de memória do convidado
 
 Um único mapeamento anônimo `MAP_NORESERVE` leitura/escrita de `4 GiB + 2 x PPC_CODE_SIZE` bytes. O endereço
-convidado `G` fica em `base() + G`. Constantes em `src/runtime/guest_thread.h` e nas macros geradas:
+convidado `G` fica em `base() + G`. Regiões fixas (spec M2 §6.1; constantes em `src/runtime/memory_map.h`):
 
-| Região | Endereço | Tamanho | Observação |
-|---|---|---|---|
-| Imagem do jogo | `0x82000000` (`PPC_IMAGE_BASE`) | `0x032D0000` (`PPC_IMAGE_SIZE`) | seções do XEX carregadas pelo `loader`; código em `0x82200000`, `PPC_CODE_SIZE = 0x0096428C` |
-| Tabela de funções | `PPC_IMAGE_BASE + PPC_IMAGE_SIZE` = `0x852D0000` | `2 x PPC_CODE_SIZE` | um slot de 8 bytes por instrução de 4 bytes; chamadas indiretas do código gerado consultam aqui |
-| Pilha do convidado | `0x70000000` | `0x100000` (1 MiB) | `r1` = topo - `0x80` |
-| TLS | `0x7FFE0000` | | endereço guardado em `tls_ptr` do KPCR |
-| KPCR | `0x7FFF0000` | | `r13`; campos escritos por `init_guest_pcr` |
-| KTHREAD falso | `0x7FFD0000` | bloco zerado | `current_thread` (KPCR + `0x100`) |
+| Faixa | Uso |
+|---|---|
+| `0x00000000`–`0x0000FFFF` | Guarda de ponteiro nulo, `PROT_NONE` desde `init_kernel` |
+| `0x00010000`–`0x3FFFFFFF` | Heap virtual de páginas de 4 KiB: `NtAllocateVirtualMemory`, pool do kernel, corpos de objetos, PCR/KTHREAD/TLS |
+| `0x40000000`–`0x6FFFFFFF` | Heap virtual de páginas de 64 KiB (`MEM_LARGE_PAGES`) |
+| `0x70000000`–`0x7EFFFFFF` | Pilhas das threads do convidado, com página de guarda |
+| `0x7F000000`–`0x7FFFFFFF` | Reservada para MMIO e write-back da GPU (M3) |
+| `0x80000000`–`0x81FFFFFF` | Dados do kernel: cópia do cabeçalho XEX, `LDR_DATA_TABLE_ENTRY`, variáveis exportadas, páginas de variáveis faltando |
+| `0x82000000`–`~0x8659FFFF` | Imagem do jogo (`PPC_IMAGE_BASE`, `PPC_IMAGE_SIZE = 0x032D0000`, código em `0x82200000`) e tabela de funções em `PPC_IMAGE_BASE + PPC_IMAGE_SIZE` (`2 x PPC_CODE_SIZE`, um slot de 8 bytes por instrução). Nunca entregue por um heap |
+| `0xA0000000`–`0xFFFFFFFF` | Vistas físicas: `0xA0` (64 KiB), `0xC0` (16 MiB), `0xE0` (4 KiB) |
 
-KPCR mínimo (verificado contra o `X_KPCR` do Xenia): `tls_ptr` `+0x00`, `pcr_ptr` `+0x30`, base da pilha
-`+0x70`, fim da pilha `+0x74`, `current_thread` `+0x100`, `current_cpu` `+0x10C`. Emulação completa de
-slots TLS e KTHREAD é trabalho do M2.
+Enquanto as threads do M2 não chegam, a thread principal ainda usa os blocos fixos do M1 (constantes em
+`src/runtime/guest_thread.h`): pilha em `0x70000000` (1 MiB, `r1` = topo - `0x80`), KTHREAD falso zerado em
+`0x7FFD0000`, TLS em `0x7FFE0000` e KPCR em `0x7FFF0000` (`r13`). KPCR mínimo (verificado contra o `X_KPCR` do
+Xenia): `tls_ptr` `+0x00`, `pcr_ptr` `+0x30`, base da pilha `+0x70`, fim da pilha `+0x74`, `current_thread`
+`+0x100`, `current_cpu` `+0x10C`.
 
 Valores em big-endian (formato do convidado); o código gerado converte nos acessos.
+
+### Alocadores e importações de memória
+
+O `Kernel` tem três alocadores: `heap4k()` e `heap64k()` (`PageHeap`, só contabilidade de endereços) e
+`physical()` (`PhysicalHeap`, 512 MiB de páginas físicas, sem espelhamento entre vistas). As importações ficam em
+`src/runtime/kernel/exports/memory.cpp`, com a semântica do `xboxkrnl_memory.cc` do Xenia (só referência):
+`NtAllocateVirtualMemory`/`NtFreeVirtualMemory`/`NtProtectVirtualMemory`/`NtQueryVirtualMemory` (ponteiros de
+base e tamanho de entrada e saída em big-endian), `MmAllocatePhysicalMemoryEx` e afins, e o pool
+(`ExAllocatePool*`, `XamAlloc*`, `ExFreePool`, `XamFree`), que é feito de alocações inteiras de páginas de 4 KiB,
+confirmadas leitura/escrita e zeradas. `MmMapIoSpace` fica faltando até o M3.
+
+O gancho de confirmação dos heaps virtuais zera as páginas recém-confirmadas (salvo `MEM_NOZERO`) com
+`GuestMemory::zero`, que devolve páginas inteiras ao host com `madvise(MADV_DONTNEED)` em vez de escrevê-las.
+Memória física também é zerada ao ser alocada.
+
+**Modo estrito** (`--strict-memory`): no `init_kernel` os dois heaps virtuais ficam `PROT_NONE`
+(`GuestMemory::protect`, `mprotect` por página de 4 KiB do host); o gancho deixa leitura/escrita as páginas
+confirmadas e volta a `PROT_NONE` as desconfirmadas ou liberadas. Assim um acesso perdido falha com o endereço do
+convidado (`SIGSEGV at guest 0x...`, saída 4) em vez de ler zeros. Sem o modo estrito, só a guarda de ponteiro
+nulo é `PROT_NONE`. Proteções do convidado (`PAGE_READONLY` etc.) não viram proteção do host no M2.
+
 
 ## Threads
 

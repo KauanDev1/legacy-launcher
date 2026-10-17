@@ -21,13 +21,21 @@ namespace lr::testing {
 struct KernelFixture {
   static constexpr uint32_t kStackPointer = 0x30000000;  // r1 of every call()
   static constexpr uint32_t kHeapBase = 0x20000000;      // alloc() bump pointer start
+  // [kHeapBase, kReservedEnd) holds the bump data and the guest stack frames around kStackPointer. It lies inside
+  // the kernel's 4 KiB heap, so the fixture reserves and commits it there at setup: the heap never hands it out
+  // and --strict-memory keeps it accessible.
+  static constexpr uint32_t kReservedEnd = 0x30100000;
 
   // Each fixture instance replaces the process-wide Kernel (reset_kernel_for_tests + init_kernel), so several
   // fixtures in one process (Catch2 sections, several test cases) each get a kernel bound to their own memory.
-  KernelFixture() : mem(reserve()) {
+  explicit KernelFixture(lr::kernel::KernelConfig cfg = {}) : mem(reserve()) {
     lr::kernel::reset_kernel_for_tests();
-    auto r = lr::kernel::init_kernel(mem, {});
+    auto r = lr::kernel::init_kernel(mem, std::move(cfg));
     REQUIRE(r);
+    auto& heap = lr::kernel::kernel().heap4k();
+    constexpr uint32_t kBlock = kReservedEnd - kHeapBase;
+    REQUIRE(heap.reserve(kBlock, 0, false, kHeapBase));
+    REQUIRE(heap.commit(kHeapBase, kBlock, 0x04 /* PAGE_READWRITE */));
   }
   ~KernelFixture() { lr::kernel::reset_kernel_for_tests(); }
   KernelFixture(const KernelFixture&) = delete;
