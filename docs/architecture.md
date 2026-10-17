@@ -80,6 +80,10 @@ normal dá saída 0; `UnimplementedImport` imprime o relatório e dá 3; qualque
 preparação dá 4. Falha real (SIGSEGV, SIGILL) é tratada pelo handler de sinais, que imprime o endereço e
 chama `_exit(4)`. Threads do jogo criadas por `ExCreateThread` e sincronização entram no M2.
 
+Códigos de saída do jogo (`runtime/guest_thread.h`): 0 normal, 2 uso/carga (`kExitUsage`), 3 importação
+faltando (`kExitUnimplementedImport`), 4 falha (`kExitFault`), 5 erro fatal do convidado (`kExitGuestFatal`,
+ver `guest_fatal` abaixo) e 6 impasse (`kExitDeadlock`, reservado para a detecção de impasse).
+
 ## Kernel
 
 O kernel é escrito no `lr_runtime_core` pré-compilado, que nunca vê o `PPCContext` (R16). A ponte entre o
@@ -100,8 +104,33 @@ código gerado e o kernel tem três partes:
   compilados junto com o jogo): um `PPC_FUNC(__imp__Nome)` por importação. Na primeira chamada o thunk
   guarda `find_import("Nome")` num `static` local; em toda chamada registra o nome na trilha (`trace`) e,
   se não há função, chama `unimplemented_import`. Senão copia r3..r10, f1..f13, r1, r13 e lr para um
-  `GuestCall`, chama a função e escreve de volta r3 (e f1). A cópia está num único helper no topo do
+  `GuestCall`, guarda r1/r13 como o quadro atual do convidado nesta thread (`set_current_frame`, usado por
+  `call_guest`), chama a função e escreve de volta r3 (e f1). A cópia está num único helper no topo do
   arquivo, não repetida 459 vezes. É o único código do kernel que toca o `PPCContext`.
+
+**Estado do kernel** (`runtime/kernel/kernel.h`): `init_kernel(memória, KernelConfig)` cria, uma vez por
+processo, a instância única `Kernel` (acessada por `kernel()`), da qual pendem os subsistemas do kernel
+(memória do convidado e configuração: `game_dir`, `user_dir`, `language`, `strict_memory`, `trace_file`).
+Uma segunda chamada devolve `Error{Internal}`. A instância, assim como a tabela do registro e seu mutex, é
+vazada de propósito (nunca destruída), para que threads que ainda chamam thunks durante o fim do processo não
+toquem memória destruída. Só os testes (`tests/support/kernel_fixture.h`) usam `reset_kernel_for_tests()`
+para criar um kernel novo por fixture.
+
+**`guest_fatal(o_quê)`**: erro irrecuperável do convidado (`KeBugCheck`, exceção do convidado sem tratamento,
+chamada a endereço sem função recompilada). Escreve `Guest fatal: <o_quê>` e a linha de trilha da thread
+(mesmo formato `Trail (last N): ...` do relatório de saída 3) em stderr, esvazia o stdio e sai com
+`_exit(5)`. Toda condição fatal que não é importação faltando passa por ela.
+
+**Chamadas do kernel para o convidado** (`runtime/kernel/glue.h`): rotinas de início de thread, APCs, DPCs e
+callbacks são funções recompiladas, mas o `lr_runtime_core` não conhece o `PPCContext`. O `main.cpp`
+(compilado com o jogo) instala no início uma cola `GuestGlue` com dois ponteiros: `call` monta um
+`PPCContext` novo (r3.. = argumentos, r1, r13) e chama a função por `PPC_LOOKUP_FUNC`; `has_function`
+confere primeiro se o endereço está em `[PPC_CODE_BASE, PPC_CODE_BASE + PPC_CODE_SIZE)` e alinhado a 4, e só
+então lê a entrada da tabela de funções (não nula). `call_guest(endereço, args)` usa o quadro atual da thread
+(gravado pelo thunk): a função chamada roda com `r1 = (r1 atual - 0x100) & ~0xF` e o mesmo r13, e o quadro
+de quem chamou é restaurado na volta. Endereço sem função recompilada (ou mais de 8 argumentos, ou thread
+sem quadro) termina com `guest_fatal` citando o endereço do convidado, nunca com salto para o endereço 0 do
+host.
 
 Como todo thunk passa por `trace`, a trilha do relatório de saída 3 (`Trail (last N): ...`, últimas 32
 chamadas da thread) lista todas as importações chamadas antes da que falta, inclusive stubs, terminando

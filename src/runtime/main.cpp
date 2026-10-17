@@ -4,7 +4,8 @@
 // lr_runtime_core with --whole-archive so its LR_KERNEL / LR_KERNEL_STUB registrations are kept.
 //
 // Usage: <game> --image <xex> [--data <dir>] [--headless] [--coverage]
-// Exit codes: 0 ok (also: window closed by the user), 2 usage/load error, 3 unimplemented import, 4 fault.
+// Exit codes: 0 ok (also: window closed by the user), 2 usage/load error, 3 unimplemented import, 4 fault,
+// 5 guest fatal (lr::kernel::guest_fatal), 6 deadlock.
 
 #include <SDL.h>
 #include <unistd.h>
@@ -12,6 +13,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -24,6 +26,8 @@
 #include "runtime/func_table.h"
 #include "runtime/guest_memory.h"
 #include "runtime/guest_thread.h"
+#include "runtime/kernel/glue.h"
+#include "runtime/kernel/kernel.h"
 #include "runtime/kernel/registry.h"
 #include "runtime/loader.h"
 
@@ -82,6 +86,27 @@ void guest_body(uint8_t* base, void* user) {
   ctx.r1.u64 = kGuestStackBase + kGuestStackSize - kGuestStackTopSlack;
   ctx.r13.u64 = kGuestPcrAddress;
   fn(ctx, base);
+}
+
+// --- Guest-call glue (lr::kernel::call_guest): the prebuilt kernel cannot build a PPCContext, this TU can. ---
+uint8_t* g_guest_base = nullptr;  // set in main() before set_guest_glue
+
+uint64_t glue_call(uint8_t* base, uint32_t fn, const uint64_t* args, int nargs, uint32_t r1, uint32_t r13) {
+  PPCContext ctx{};
+  ctx.r1.u64 = r1;
+  ctx.r13.u64 = r13;
+  PPCRegister* const gpr[8] = {&ctx.r3, &ctx.r4, &ctx.r5, &ctx.r6, &ctx.r7, &ctx.r8, &ctx.r9, &ctx.r10};
+  for (int i = 0; i < nargs && i < 8; ++i) gpr[i]->u64 = args[i];
+  PPCFunc* const target = PPC_LOOKUP_FUNC(base, fn);
+  target(ctx, base);
+  return ctx.r3.u64;
+}
+
+// Range and alignment first: the function table is only read for addresses inside the code range.
+bool glue_has_function(uint32_t fn) {
+  if (fn < PPC_CODE_BASE || fn >= PPC_CODE_BASE + PPC_CODE_SIZE || fn % 4 != 0) return false;
+  PPCFunc* const target = PPC_LOOKUP_FUNC(g_guest_base, fn);
+  return target != nullptr;
 }
 
 // Runs the guest on a helper thread and keeps the SDL window alive on the main thread.
@@ -180,6 +205,16 @@ int main(int argc, char** argv) {
   }
 
   init_guest_pcr(mem.value());
+  lr::kernel::KernelConfig cfg;
+  cfg.game_dir = std::filesystem::path(opt.image).parent_path();
+  if (!opt.data.empty()) cfg.user_dir = opt.data;
+  if (auto r = lr::kernel::init_kernel(mem.value(), std::move(cfg)); !r) {
+    std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
+    return kExitUsage;
+  }
+  g_guest_base = mem.value().base();
+  lr::kernel::set_guest_glue({glue_call, glue_has_function});
+
   if (opt.headless) return run_guest(mem.value(), guest_body, reinterpret_cast<void*>(entry_fn));
   return run_with_window(mem.value(), entry_fn);
 }

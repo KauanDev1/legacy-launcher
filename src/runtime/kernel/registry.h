@@ -42,7 +42,13 @@ ImportEntry find_import(std::string_view name);
 // Records an import call in a per-thread ring buffer (last 32). Every thunk calls it before dispatching.
 void trace(const char* name);
 
-// "Unimplemented import: <name>\nCalled from: 0x<caller>\nTrail (last N): a -> b\n"
+// The calling thread's traced imports (last 32), oldest first.
+std::vector<std::string> current_trail();
+
+// "Trail (last N): a -> b\n" — the trail line of the exit-3 report, shared with guest_fatal (exit 5).
+std::string format_trail(const std::vector<std::string>& trail);
+
+// "Unimplemented import: <name>\nCalled from: 0x<caller>\n" + format_trail(e.trail)
 std::string format_report(const UnimplementedImport& e);
 
 namespace detail {

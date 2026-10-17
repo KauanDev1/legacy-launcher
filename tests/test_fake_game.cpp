@@ -60,7 +60,7 @@ RunResult run_game(const fs::path& dir, const std::vector<std::string>& args) {
 std::string write_image(const fs::path& dir, uint32_t entry) {
   const fs::path p = dir / "fake.elf";
   auto elf = lr::test::build_elf(entry, {{".rdata", 0x82000000, std::vector<uint8_t>(16, 0), false},
-                                         {".text", 0x82000100, std::vector<uint8_t>(0x100, 0), true}});
+                                         {".text", 0x82000100, std::vector<uint8_t>(0x200, 0), true}});
   std::ofstream(p, std::ios::binary).write(reinterpret_cast<const char*>(elf.data()), std::streamsize(elf.size()));
   return p.string();
 }
@@ -73,8 +73,31 @@ TEST_CASE("fake game --coverage lists three states", "[unit]") {
   CHECK(r.out.find("| Import | Kind | Status |") != std::string::npos);
   CHECK(r.out.find("| FakeImplemented | function | implemented |") != std::string::npos);
   CHECK(r.out.find("| FakeStub | function | stub |") != std::string::npos);
+  CHECK(r.out.find("| FakeCallback | function | implemented |") != std::string::npos);
   CHECK(r.out.find("| FakeMissing | function | missing |") != std::string::npos);
-  CHECK(r.out.find("Implemented: 1, stub: 1, missing: 1 / 3") != std::string::npos);
+  CHECK(r.out.find("Implemented: 2, stub: 1, missing: 1 / 4") != std::string::npos);
+}
+
+// sub_82000280 calls FakeCallback(sub_82000200, 41); the callback checks the frame call_guest built and returns
+// 42, which sub_82000280 checks (a mismatch calls FakeMissing, exit 3).
+TEST_CASE("call_guest runs a recompiled callback", "[unit]") {
+  TempDir td;
+  auto r = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x82000280)});
+  CHECK(r.code == 0);
+  CHECK(r.out.empty());
+}
+
+TEST_CASE("call_guest to an address without function is guest fatal", "[unit]") {
+  TempDir td;
+  auto r = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x820002C0)});
+  CHECK(r.code == 5);
+  CHECK(r.out.find("Guest fatal: call_guest: no recompiled function at guest 0x82000240") != std::string::npos);
+  CHECK(r.out.find("Trail (last 1): FakeCallback") != std::string::npos);
+
+  // Outside [PPC_CODE_BASE, PPC_CODE_BASE + PPC_CODE_SIZE): rejected before the function table is read.
+  auto o = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x820002E0)});
+  CHECK(o.code == 5);
+  CHECK(o.out.find("no recompiled function at guest 0x12345678") != std::string::npos);
 }
 
 TEST_CASE("fake game stops at the first unimplemented import with exit 3 and a report", "[unit]") {

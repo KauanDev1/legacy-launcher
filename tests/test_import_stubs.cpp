@@ -37,6 +37,9 @@ TEST_CASE("render_import_thunks emits a cached lookup per import", "[unit]") {
   CHECK(src.find("lr::kernel::trace(name)") != std::string::npos);
   CHECK(src.find("unimplemented_import(name, uint32_t(ctx.lr))") != std::string::npos);
   CHECK(src.find("c.gpr[7] = ctx.r10.u64;") != std::string::npos);
+  // The guest frame of the call is recorded for call_guest before the import runs.
+  CHECK(src.find("#include \"runtime/kernel/glue.h\"") != std::string::npos);
+  CHECK(src.find("lr::kernel::set_current_frame(c.r1, c.r13);\n  e.fn(c);") != std::string::npos);
   CHECK(src.find("c.fpr[12] = ctx.f13.f64;") != std::string::npos);
   CHECK(src.find("ctx.r3.u64 = c.ret_gpr;") != std::string::npos);
   CHECK(src.find("if (c.has_fpr_return) ctx.f1.f64 = c.ret_fpr;") != std::string::npos);

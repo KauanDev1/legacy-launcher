@@ -19,6 +19,8 @@ inline constexpr int kExitOk = 0;
 inline constexpr int kExitUsage = 2;
 inline constexpr int kExitUnimplementedImport = 3;
 inline constexpr int kExitFault = 4;
+inline constexpr int kExitGuestFatal = 5;  // lr::kernel::guest_fatal
+inline constexpr int kExitDeadlock = 6;
 
 // Writes the Xbox 360 KPCR (big-endian guest layout, NOT PPCContext) at kGuestPcrAddress, following Xenia's
 // X_KPCR (xenia-project/xenia, src/xenia/kernel/xthread.h): tls_ptr (+0x00) = kGuestTlsAddress,

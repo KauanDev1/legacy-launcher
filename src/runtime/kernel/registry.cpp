@@ -19,13 +19,15 @@ struct Trail {
 };
 thread_local Trail t_trail;
 
-// Function-local statics: LR_KERNEL / LR_KERNEL_STUB register from static initializers in other TUs.
+// Function-local statics: LR_KERNEL / LR_KERNEL_STUB register from static initializers in other TUs. Both are
+// intentionally leaked (never destroyed), so a thread still calling a thunk while the process exits never touches
+// destroyed storage.
 std::mutex& table_mutex() {
-  static std::mutex m;
+  static auto& m = *new std::mutex;
   return m;
 }
 std::map<std::string, ImportEntry, std::less<>>& table() {
-  static std::map<std::string, ImportEntry, std::less<>> t;
+  static auto& t = *new std::map<std::string, ImportEntry, std::less<>>;
   return t;
 }
 }  // namespace
@@ -53,24 +55,31 @@ void trace(const char* name) {
   ++t_trail.count;
 }
 
-void unimplemented_import(const char* name, uint32_t caller_lr) {
-  UnimplementedImport e{name, caller_lr, {}};
+std::vector<std::string> current_trail() {
+  std::vector<std::string> out;
   const size_t n = t_trail.count < kTrailSize ? t_trail.count : kTrailSize;
-  for (size_t i = t_trail.count - n; i < t_trail.count; ++i) e.trail.emplace_back(t_trail.names[i % kTrailSize]);
-  throw e;
+  for (size_t i = t_trail.count - n; i < t_trail.count; ++i) out.emplace_back(t_trail.names[i % kTrailSize]);
+  return out;
+}
+
+void unimplemented_import(const char* name, uint32_t caller_lr) {
+  throw UnimplementedImport{name, caller_lr, current_trail()};
+}
+
+std::string format_trail(const std::vector<std::string>& trail) {
+  std::string s = "Trail (last " + std::to_string(trail.size()) + "): ";
+  for (size_t i = 0; i < trail.size(); ++i) {
+    if (i) s += " -> ";
+    s += trail[i];
+  }
+  s += "\n";
+  return s;
 }
 
 std::string format_report(const UnimplementedImport& e) {
   char caller[16];
   std::snprintf(caller, sizeof caller, "%08X", e.caller);
-  std::string s = "Unimplemented import: " + e.name + "\nCalled from: 0x" + caller + "\nTrail (last " +
-                  std::to_string(e.trail.size()) + "): ";
-  for (size_t i = 0; i < e.trail.size(); ++i) {
-    if (i) s += " -> ";
-    s += e.trail[i];
-  }
-  s += "\n";
-  return s;
+  return "Unimplemented import: " + e.name + "\nCalled from: 0x" + caller + "\n" + format_trail(e.trail);
 }
 
 }  // namespace lr::kernel
