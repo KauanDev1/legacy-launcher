@@ -19,7 +19,7 @@ uint64_t sum9(uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32
 uint32_t status_fn() { return STATUS_OBJECT_NAME_NOT_FOUND; }
 int32_t neg_fn() { return -2; }
 uint64_t wide(uint64_t a, int64_t b, uint64_t stack64) { return a + static_cast<uint64_t>(b) + stack64; }
-uint64_t wide10(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t s) {
+uint64_t wide9(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t s) {
   return s;
 }
 int mixed(int a, double b, int c) {
@@ -32,6 +32,13 @@ float fret(float a) { return a * 2.0f; }
 double second_double(int, double, float x) { return x; }
 uint32_t ptr_fn(GuestPtr<uint32_t> p) { return p.addr; }
 uint32_t with_call(GuestCall& c, uint32_t a, uint32_t b) { return a + b + c.lr; }
+uint32_t noexcept_fn(uint32_t a) noexcept { return a + 1; }
+enum class Color : uint32_t { Red = 1, Blue = 0xC0000034u };
+Color enum_fn(Color c) { return c == Color::Red ? Color::Blue : Color::Red; }
+uint32_t ten(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
+             uint32_t j) {
+  return j;
+}
 void void_fn(uint32_t a) { (void)a; }
 int small_args(uint8_t a, int16_t b) { return a + b; }
 
@@ -75,7 +82,7 @@ TEST_CASE("marshal keeps 64-bit args", "[unit][kernel_abi]") {
 
   GuestCall d = make_call();
   put_be64(d.r1 + 0x50, 0x1122334455667788ull);
-  marshal<wide10>(d);
+  marshal<wide9>(d);
   CHECK(d.ret_gpr == 0x1122334455667788ull);
 }
 
@@ -165,4 +172,26 @@ TEST_CASE("guest structs are big-endian", "[unit][kernel_abi]") {
   CHECK(raw[0] == 0x01);
   CHECK(raw[1] == 0x02);
   CHECK(STATUS_TIMEOUT == 0x102);
+}
+
+TEST_CASE("marshal accepts noexcept functions", "[unit][kernel_abi]") {
+  GuestCall c = make_call();
+  c.gpr[0] = 4;
+  marshal<noexcept_fn>(c);
+  CHECK(c.ret_gpr == 5);
+}
+
+TEST_CASE("marshal accepts enum parameters and returns", "[unit][kernel_abi]") {
+  GuestCall c = make_call();
+  c.gpr[0] = 1;
+  marshal<enum_fn>(c);
+  CHECK(c.ret_gpr == 0xFFFFFFFFC0000034ull);
+}
+
+TEST_CASE("stack stride is 8 bytes (10th arg at r1+0x5C)", "[unit][kernel_abi]") {
+  GuestCall c = make_call();
+  put_be32(c.r1 + 0x54, 111);
+  put_be32(c.r1 + 0x5C, 222);
+  marshal<ten>(c);
+  CHECK(c.ret_gpr == 222);
 }

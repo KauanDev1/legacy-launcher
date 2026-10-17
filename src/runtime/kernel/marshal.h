@@ -36,12 +36,27 @@ template <class T>
 constexpr bool is_float_v = std::is_same_v<T, float> || std::is_same_v<T, double>;
 
 template <class T>
-constexpr bool is_int_arg_v = (std::is_integral_v<T> && sizeof(T) <= 8) || IsGuestPtr<T>::value;
+constexpr bool is_int_arg_v = (std::is_integral_v<T> && sizeof(T) <= 8) || (std::is_enum_v<T> && sizeof(T) <= 8) ||
+                              IsGuestPtr<T>::value;
+
+template <class T, bool = std::is_enum_v<T>>
+struct RawOf {
+  using type = T;
+};
+template <class T>
+struct RawOf<T, true> {
+  using type = std::underlying_type_t<T>;
+};
 
 template <class F>
 struct FnTraits;
 template <class R, class... A>
 struct FnTraits<R (*)(A...)> {
+  using Ret = R;
+  using Args = std::tuple<A...>;
+};
+template <class R, class... A>
+struct FnTraits<R (*)(A...) noexcept> {
   using Ret = R;
   using Args = std::tuple<A...>;
 };
@@ -68,7 +83,7 @@ struct SkipCall<std::tuple<GuestCall&, A...>> {
 // indexes the first float parameter at f[2]; we use f1 as the ABI says.
 template <class T>
 T read_int_arg(const GuestCall& c, size_t pos) {
-  using Raw = std::conditional_t<IsGuestPtr<T>::value, uint32_t, T>;
+  using Raw = std::conditional_t<IsGuestPtr<T>::value, uint32_t, typename RawOf<T>::type>;
   uint64_t v;
   if (pos < 8) {
     v = c.gpr[pos];
@@ -116,6 +131,8 @@ void write_ret(GuestCall& c, R v) {
     c.has_fpr_return = true;
   } else if constexpr (IsGuestPtr<R>::value) {
     c.ret_gpr = static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(v.addr)));
+  } else if constexpr (std::is_enum_v<R>) {
+    write_ret(c, static_cast<std::underlying_type_t<R>>(v));
   } else {
     static_assert(std::is_integral_v<R> && sizeof(R) <= 8, "unsupported kernel return type");
     if constexpr (sizeof(R) == 8) {
@@ -139,6 +156,7 @@ void marshal(GuestCall& c) {
   using Skip = detail::SkipCall<typename Tr::Args>;
   using Rest = typename Skip::Rest;
   constexpr size_t N = std::tuple_size_v<Rest>;
+  static_assert(detail::fpos_of<Rest, N>() <= 13, "at most 13 float/double parameters (f1..f13)");
   [&]<size_t... I>(std::index_sequence<I...>) {
     auto invoke = [&](auto&&... pre) {
       if constexpr (std::is_void_v<typename Tr::Ret>) {
