@@ -63,18 +63,22 @@ TEST_CASE("physical heap view follows page size", "[unit]") {
 TEST_CASE("physical heap physical_address round trip", "[unit]") {
   CHECK(PhysicalHeap::physical_address(0xA0012345) == 0x12345);
   CHECK(PhysicalHeap::physical_address(0xC1000000) == 0x1000000);
-  CHECK(PhysicalHeap::physical_address(0xE0001000) == 0);
-  CHECK(PhysicalHeap::physical_address(0xE0005000) == 0x4000);
+  CHECK(PhysicalHeap::physical_address(0xE0000000) == 0x1000);
+  CHECK(PhysicalHeap::physical_address(0xE0005000) == 0x6000);
   PhysicalHeap h;
   auto e = h.allocate(0x2000, kRw, 0x40000, 0x41FFF, 0);
   REQUIRE(e);
-  CHECK(e.value() == 0xE0000000 + 0x40000 + 0x1000);
+  CHECK(e.value() == 0xE0000000 + 0x40000 - 0x1000);
   CHECK(PhysicalHeap::physical_address(e.value()) == 0x40000);
-  // E0 allocations are clamped so they never end past 2^32.
+  // Physical page 0 is never handed out through E0.
+  CHECK(h.allocate(0x1000, kRw, 0, 0xFFF, 0).error().code == ErrorCode::OutOfRange);
+  auto lo2 = h.allocate(0x1000, kRw, 0, 0x1FFF, 0);
+  REQUIRE(lo2);
+  CHECK(lo2.value() == 0xE0000000);
+  CHECK(PhysicalHeap::physical_address(lo2.value()) == 0x1000);
   auto top = h.allocate(0x1000, kRw, 0, kAll, 0);
   REQUIRE(top);
-  CHECK(uint64_t{top.value()} + 0x1000 <= (1ull << 32));
-  CHECK(h.allocate(0x1000, kRw, 0x1FFFF000, kAll, 0).error().code == ErrorCode::OutOfRange);
+  CHECK(top.value() == 0xE0000000 + 0x1FFFF000 - 0x1000);
 }
 
 TEST_CASE("physical heap free then reuse", "[unit]") {

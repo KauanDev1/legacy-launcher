@@ -234,7 +234,7 @@ Continua um único mapeamento de 4 GiB (D5). Regiões fixas:
 - Memória física: um alocador de 512 MiB de páginas físicas; `MmAllocatePhysicalMemoryEx(flags, size,
   protect, min, max, align)` escolhe o tamanho de página pelos bits de proteção, aloca de cima para baixo
   dentro de `[min, max]` e devolve vista + deslocamento físico. Cada página física pertence a uma vista
-  só; `MmGetPhysicalAddress` é uma conta (`& 0x1FFFFFFF`, menos `0x1000` na vista `0xE0`).
+  só; `MmGetPhysicalAddress` é uma conta (`& 0x1FFFFFFF`, mais `0x1000` na vista `0xE0` (como o `PhysicalHeap` do Xenia)).
 - **Sem espelhamento entre vistas no M2.** Se o jogo acessar a mesma página física por duas vistas, isso
   aparece como dado divergente; o remédio (memfd com múltiplos mapeamentos) fica para quando acontecer.
 - Modo estrito opcional (`--strict-memory`): páginas não confirmadas ficam `PROT_NONE`, então um acesso

@@ -41,19 +41,16 @@ Result<uint32_t> PhysicalHeap::allocate(uint32_t size, uint32_t protect, uint32_
 
   if (min_phys > max_phys) return err(ErrorCode::OutOfRange, "empty physical range");
   if (min_phys >= kPhysicalSize) return err(ErrorCode::OutOfRange, "min_phys outside physical memory");
-  uint64_t hi = std::min<uint64_t>(max_phys, kPhysicalSize - 1);  // inclusive last byte allowed
-  if (e0) {
-    // guest end = base + phys_end + 0x1000 must stay within 2^32
-    const uint64_t cap = (1ull << 32) - base - kE0Offset;  // exclusive end limit in physical space
-    hi = std::min<uint64_t>(hi, cap - 1);
-  }
-  if (bytes > hi + 1 || hi + 1 - bytes < min_phys) return err(ErrorCode::OutOfRange, "physical range too small");
+  const uint64_t hi = std::min<uint64_t>(max_phys, kPhysicalSize - 1);  // inclusive last byte allowed
+  // Physical 0..0xFFF is unreachable through E0 (guest 0xE0000000 maps to physical 0x1000).
+  const uint64_t lo = e0 ? std::max<uint64_t>(min_phys, kE0Offset) : min_phys;
+  if (bytes > hi + 1 || hi + 1 - bytes < lo) return err(ErrorCode::OutOfRange, "physical range too small");
 
   std::lock_guard<std::mutex> lock(mu_);
   const uint64_t np = bytes / kPage;
   // Highest aligned start such that the allocation ends at or before hi, then walk down.
   int64_t start = static_cast<int64_t>((hi + 1 - bytes) / align * align);
-  while (start >= 0 && static_cast<uint64_t>(start) >= min_phys) {
+  while (start >= 0 && static_cast<uint64_t>(start) >= lo) {
     const uint64_t first = static_cast<uint64_t>(start) / kPage;
     uint64_t conflict = UINT64_MAX;
     for (uint64_t i = np; i-- > 0;) {  // highest used page in the candidate, so we skip the furthest
@@ -65,7 +62,7 @@ Result<uint32_t> PhysicalHeap::allocate(uint32_t size, uint32_t protect, uint32_
     if (conflict == UINT64_MAX) {
       std::fill_n(used_.begin() + static_cast<std::ptrdiff_t>(first), np, uint8_t{1});
       const uint64_t phys = first * kPage;
-      const uint32_t guest = static_cast<uint32_t>(base + phys + (e0 ? kE0Offset : 0));
+      const uint32_t guest = static_cast<uint32_t>(base + phys - (e0 ? kE0Offset : 0));
       allocs_[guest] = Alloc{static_cast<uint32_t>(bytes), static_cast<uint32_t>(first)};
       return guest;
     }
@@ -88,7 +85,7 @@ Result<void> PhysicalHeap::free(uint32_t guest_address) {
 
 uint32_t PhysicalHeap::physical_address(uint32_t guest_address) {
   uint32_t phys = guest_address & (kPhysicalSize - 1);
-  if (guest_address >= kPhysicalViewE0) phys -= static_cast<uint32_t>(kE0Offset);
+  if (guest_address >= kPhysicalViewE0) phys += static_cast<uint32_t>(kE0Offset);
   return phys;
 }
 

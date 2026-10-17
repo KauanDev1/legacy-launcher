@@ -22,11 +22,9 @@ namespace lr::runtime {
 //  - Size and alignment round up to the page size; alignment 0 stays "page size". Search is always top-down.
 //  - min/max are physical addresses; Xenia has no special case for 0 / 0xFFFFFFFF, they simply clamp to the heap
 //    (so 0..0xFFFFFFFF means "everywhere"). max is inclusive (the last byte of the allocation must be <= max).
-//  - Xenia's PhysicalHeap::GetPhysicalAddress adds 0x1000 in the E0 view; the M2 spec (section 6.2) says the
-//    opposite sign: physical = (addr & 0x1FFFFFFF) minus 0x1000 in E0. We follow the spec, so an E0 guest address
-//    is 0xE0000000 + phys + 0x1000. Because of that offset the top 0x1000 of physical space cannot be addressed
-//    by the E0 view; E0 searches are clamped so the allocation ends at or before 2^32 (computed in 64 bits), and
-//    OutOfRange is returned when nothing fits.
+//  - Xenia's PhysicalHeap::GetPhysicalAddress adds 0x1000 in the E0 view (guest 0xE0000000 <-> physical 0x1000):
+//    physical = (addr & 0x1FFFFFFF) + 0x1000 there, so an E0 guest address is 0xE0000000 + phys - 0x1000.
+//    Physical 0..0xFFF is therefore never handed out through E0; the guest end stays below 2^32 (64-bit math).
 //
 // Error contract: InvalidFormat bad argument (size 0, bad protect/alignment); OutOfRange no space or bad range;
 // NotFound free/allocation_size of an address that is not (inside) an allocation. Thread-safe.
