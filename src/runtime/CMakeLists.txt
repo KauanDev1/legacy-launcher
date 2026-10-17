@@ -1,18 +1,21 @@
 # SPDX-License-Identifier: MIT
-set(LR_RUNTIME_CORE_SOURCES guest_memory.cpp fault.cpp func_table.cpp loader.cpp kernel/registry.cpp kernel/kernel.cpp kernel/glue.cpp guest_thread.cpp memory/page_heap.cpp memory/physical_heap.cpp kernel/exports/memory.cpp)
+set(LR_RUNTIME_CORE_SOURCES guest_memory.cpp fault.cpp func_table.cpp loader.cpp xex_imports.cpp kernel/registry.cpp kernel/kernel.cpp kernel/glue.cpp guest_thread.cpp memory/page_heap.cpp memory/physical_heap.cpp kernel/exports/memory.cpp kernel/variables.cpp)
 add_library(lr_runtime_core STATIC ${LR_RUNTIME_CORE_SOURCES})
 target_include_directories(lr_runtime_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
-target_link_libraries(lr_runtime_core PUBLIC lr_common PRIVATE XenonUtils)
+target_link_libraries(lr_runtime_core PUBLIC lr_common lr_formats PRIVATE XenonUtils)
 lr_configure_target(lr_runtime_core)
 
 # --- Staging variant linked by the game template (share/legacyrecomp/runtime/lib/liblr_runtime_core.a) ---
 # Same sources as lr_runtime_core plus lr_common's, but never sanitized and always -O2, whatever the launcher's
 # build type: the template builds the game in Release without sanitizer runtimes (ruling R18). lr_common is folded
-# into the same archive so the template links one --whole-archive library for everything we own.
+# into the same archive so the template links one --whole-archive library for everything we own (with lr_formats'
+# xex2.cpp, the only formats code the runtime uses).
 get_target_property(_lr_common_sources lr_common SOURCES)
 get_target_property(_lr_common_dir lr_common SOURCE_DIR)
 list(TRANSFORM _lr_common_sources PREPEND "${_lr_common_dir}/")
-add_library(lr_runtime_core_staged STATIC ${LR_RUNTIME_CORE_SOURCES} ${_lr_common_sources})
+# formats/xex2.cpp too: the runtime reads the XEX header (loader, variable imports, main.cpp).
+get_target_property(_lr_formats_dir lr_formats SOURCE_DIR)
+add_library(lr_runtime_core_staged STATIC ${LR_RUNTIME_CORE_SOURCES} ${_lr_common_sources} "${_lr_formats_dir}/xex2.cpp")
 target_include_directories(lr_runtime_core_staged PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(lr_runtime_core_staged PRIVATE XenonUtils)
 target_compile_options(lr_runtime_core_staged PRIVATE -Wall -Wextra -Wpedantic -Werror -O2)

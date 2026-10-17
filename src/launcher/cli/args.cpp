@@ -41,6 +41,7 @@ std::string_view usage_text() {
          "  run [-- <game args>]       start the built game; arguments after -- go to the game\n"
          "  inspect --iso <file>       dump the ISO tree and XEX headers\n"
          "  inspect --sections <xex>   print the sections of a loaded XEX\n"
+         "  inspect --imports <xex>    print its imports: library ordinal name kind (function|variable)\n"
          "  inspect --dump-image <xex> <out.bin>\n"
          "\n"
          "options:\n"

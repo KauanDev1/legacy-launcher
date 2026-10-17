@@ -25,6 +25,7 @@
 #include "launcher/cli/progress_bar.h"
 #include "pipeline/doctor.h"
 #include "pipeline/pipeline.h"
+#include "runtime/xex_imports.h"
 
 #include <image.h>
 
@@ -225,6 +226,18 @@ Result<void> inspect_image(const std::string& xex_path, const char* dump_path) {
   return {};
 }
 
+// One line per import of a loaded XEX: "library ordinal name kind", kind function (it has a thunk) or variable.
+// Unknown ordinals print "?" as name.
+Result<void> inspect_imports(const std::string& xex_path) {
+  LR_TRY_ASSIGN(bytes, load_bytes(xex_path));
+  LR_TRY_ASSIGN(imports, lr::runtime::list_imports(std::as_bytes(std::span(bytes))));
+  for (const auto& r : imports) {
+    std::printf("%s 0x%04X %s %s\n", r.library.c_str(), r.ordinal, r.name.empty() ? "?" : r.name.c_str(),
+                r.thunk != 0 ? "function" : "variable");
+  }
+  return {};
+}
+
 int report_error(const lr::Error& e) {
   std::fprintf(stderr, "error: %s\n", e.message.c_str());
   if (!e.hint.empty()) std::fprintf(stderr, "hint: %s\n", e.hint.c_str());
@@ -235,6 +248,7 @@ int run_inspect(const std::vector<std::string>& a) {
   Result<void> r = lr::Error{lr::ErrorCode::InvalidFormat, "bad inspect arguments", "run `legacyrecomp --help` for usage"};
   if (a.size() == 2 && a[0] == "--iso") r = inspect(a[1]);
   else if (a.size() == 2 && a[0] == "--sections") r = inspect_image(a[1], nullptr);
+  else if (a.size() == 2 && a[0] == "--imports") r = inspect_imports(a[1]);
   else if (a.size() == 3 && a[0] == "--dump-image") r = inspect_image(a[1], a[2].c_str());
   else {
     report_error(r.error());

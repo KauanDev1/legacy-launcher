@@ -11,6 +11,8 @@ constexpr uint32_t kKeyEntryPoint = 0x00010100;
 constexpr uint32_t kKeyImageBase = 0x00010201;
 constexpr uint32_t kKeyImportLibraries = 0x000103FF;
 constexpr uint32_t kKeyExecutionInfo = 0x00040006;
+constexpr uint32_t kKeyTlsInfo = 0x00020104;           // 4 u32 (xex2_opt_tls_info)
+constexpr uint32_t kKeyDefaultStackSize = 0x00020200;  // inline
 constexpr size_t kExecutionInfoSize = 24;
 
 uint32_t be32(const std::byte* p) {
@@ -37,14 +39,24 @@ Result<Xex2ExecutionInfo> parse_execution(const std::byte* p) {
   return e;
 }
 
-// `block` spans the whole import-libraries block (already bounds-checked against the buffer).
-Result<std::vector<std::string>> parse_imports(std::span<const std::byte> block) {
+uint16_t be16(const std::byte* p) {
+  return static_cast<uint16_t>((static_cast<uint32_t>(p[0]) << 8) | static_cast<uint32_t>(p[1]));
+}
+
+// Import library record header (xex2_import_library in Xenia's xex2_info.h): size, next import digest[0x14], id,
+// version, min version, u16 name index, u16 record count, then `count` u32 record addresses.
+constexpr size_t kImportLibraryHeader = 0x28;
+
+// `block` spans the whole import-libraries block (already bounds-checked against the buffer): a 12-byte header
+// (block size, string table size, library count), the string table, then the library records back to back.
+Result<void> parse_imports(std::span<const std::byte> block, Xex2Info& info) {
   if (block.size() < 12) return truncated("import libraries block too small");
   const uint32_t table_size = be32(block.data() + 4);
   const uint32_t count = be32(block.data() + 8);
   if (table_size > block.size() - 12) return truncated("import string table runs past its block");
   const std::byte* table = block.data() + 12;
   std::vector<std::string> names;
+  std::vector<Xex2Info::ImportLibrary> libs;
   try {
     size_t pos = 0;
     while (names.size() < count && pos < table_size) {
@@ -54,10 +66,29 @@ Result<std::vector<std::string>> parse_imports(std::span<const std::byte> block)
       names.emplace_back(reinterpret_cast<const char*>(table + pos), end - pos);
       pos = (end + 1 + 3) & ~size_t{3};  // NUL, then pad to 4 bytes
     }
+    // Library records: read while a whole header fits (header-only test inputs may carry none).
+    size_t off = 12 + size_t{table_size};
+    while (libs.size() < count && block.size() - off >= kImportLibraryHeader) {
+      const std::byte* l = block.data() + off;
+      const uint16_t name_index = be16(l + 0x24);
+      const uint16_t n = be16(l + 0x26);
+      const size_t size = kImportLibraryHeader + size_t{n} * 4;
+      if (size > block.size() - off) return truncated("import library records run past their block");
+      if (name_index >= names.size()) return invalid("import library name index out of range");
+      Xex2Info::ImportLibrary lib{names[name_index], {}};
+      lib.records.reserve(n);
+      for (size_t i = 0; i < n; ++i) lib.records.push_back(be32(l + kImportLibraryHeader + i * 4));
+      libs.push_back(std::move(lib));
+      // The declared size covers the records; never step back inside them.
+      const size_t declared = be32(l);
+      off += declared > size && declared <= block.size() - off ? declared : size;
+    }
   } catch (const std::bad_alloc&) {
     return Error{ErrorCode::InsufficientResources, "out of memory reading import libraries", ""};
   }
-  return names;
+  info.import_libraries = std::move(names);
+  info.imports = std::move(libs);
+  return {};
 }
 }  // namespace
 
@@ -87,9 +118,10 @@ Result<Xex2Info> parse_xex2(std::span<const std::byte> bytes) {
     if (low <= 0x01) {  // value is inline
       if (key == kKeyEntryPoint) info.entry_point = value;
       else if (key == kKeyImageBase) info.image_base = value;
+      else if (key == kKeyDefaultStackSize) info.default_stack_size = value;
       continue;
     }
-    if (key != kKeyImportLibraries && key != kKeyExecutionInfo) continue;  // unknown: ignored
+    if (key != kKeyImportLibraries && key != kKeyExecutionInfo && key != kKeyTlsInfo) continue;  // unknown: ignored
 
     const size_t off = value;
     size_t len;
@@ -108,9 +140,11 @@ Result<Xex2Info> parse_xex2(std::span<const std::byte> bytes) {
       if (len < kExecutionInfoSize) return invalid("execution info too small");
       LR_TRY_ASSIGN(ex, parse_execution(b + off));
       info.execution = ex;
+    } else if (key == kKeyTlsInfo) {
+      const std::byte* t = b + off;  // len == 0x10: four u32 (low byte 0x04)
+      info.tls = TlsInfo{be32(t), be32(t + 4), be32(t + 8), be32(t + 12)};
     } else {
-      LR_TRY_ASSIGN(names, parse_imports(bytes.subspan(off, len)));
-      info.import_libraries = std::move(names);
+      LR_TRY(parse_imports(bytes.subspan(off, len), info));
     }
   }
   return info;

@@ -6,7 +6,10 @@
 #include <cstring>
 #include <string>
 
+#include "formats/xex2.h"
 #include "image.h"
+#include "runtime/kernel/guest_structs.h"
+#include "runtime/kernel/kernel.h"
 
 namespace lr::runtime {
 
@@ -15,6 +18,46 @@ std::string hex(uint64_t v) {
   char b[24];
   std::snprintf(b, sizeof b, "0x%08llX", static_cast<unsigned long long>(v));
   return b;
+}
+
+bool is_xex2(std::span<const std::byte> b) {
+  return b.size() >= 4 && b[0] == std::byte{'X'} && b[1] == std::byte{'E'} && b[2] == std::byte{'X'} &&
+         b[3] == std::byte{'2'};
+}
+
+// Copies the XEX header into the kernel data area (first allocation: kKernelDataBase) and builds the executable's
+// LDR entry after it, as the console loader leaves them for RtlImageXexHeaderField / XexExecutableModuleHandle.
+Result<void> map_xex_header(GuestMemory& mem, std::span<const std::byte> xex, LoadedImage& out) {
+  LR_TRY_ASSIGN(header, formats::parse_xex2(xex));
+  const uint32_t header_size = header.pe_data_offset;
+  if (header_size < 0x18 || header_size > xex.size())
+    return Error{ErrorCode::InvalidFormat, "XEX header size " + hex(header_size) + " is outside the file", ""};
+  kernel::Kernel& k = kernel::kernel();
+  const uint32_t copy = k.kernel_data_alloc(header_size, 0x1000);
+  const uint32_t ldr = k.kernel_data_alloc(sizeof(kernel::X_LDR_DATA_TABLE_ENTRY), 0x10);
+  if (copy == 0 || ldr == 0)
+    return Error{ErrorCode::InsufficientResources, "kernel data area exhausted mapping the XEX header", ""};
+  std::memcpy(mem.base() + copy, xex.data(), header_size);
+
+  auto* e = mem.translate<kernel::X_LDR_DATA_TABLE_ENTRY>(ldr);
+  // The only loaded module: every list links back to the entry itself.
+  e->in_load_order_links = {ldr, ldr};
+  e->in_memory_order_links = {ldr + 0x08, ldr + 0x08};
+  e->in_initialization_order_links = {ldr + 0x10, ldr + 0x10};
+  e->dll_base = out.base;
+  e->image_base = out.base;
+  e->image_size = out.size;
+  e->full_image_size = out.size;
+  e->entry_point = out.entry;
+  e->load_count = 1;
+  e->dll_base_original = header.image_base.value_or(out.base);
+  e->xex_header_base = copy;
+
+  out.header_guest = copy;
+  out.ldr_entry = ldr;
+  out.tls = header.tls;
+  out.stack_size = header.default_stack_size.value_or(kDefaultStackSize);
+  return {};
 }
 }  // namespace
 
@@ -42,8 +85,12 @@ Result<LoadedImage> load_image(GuestMemory& mem, std::span<const std::byte> xex)
   for (const Section& s : image.sections) {
     if (s.size && s.data) std::memcpy(mem.base() + s.base, s.data, s.size);
   }
-  return LoadedImage{static_cast<uint32_t>(image.base), static_cast<uint32_t>(end - image.base),
-                     static_cast<uint32_t>(image.entry_point)};
+  LoadedImage out;
+  out.base = static_cast<uint32_t>(image.base);
+  out.size = static_cast<uint32_t>(end - image.base);
+  out.entry = static_cast<uint32_t>(image.entry_point);
+  if (is_xex2(xex)) LR_TRY(map_xex_header(mem, xex, out));
+  return out;
 }
 
 }  // namespace lr::runtime

@@ -5,5 +5,5 @@ target_link_libraries(lr_cli PUBLIC lr_common lr_pipeline)
 lr_configure_target(lr_cli)
 
 add_executable(legacyrecomp main.cpp)
-target_link_libraries(legacyrecomp PRIVATE lr_cli lr_common lr_formats lr_pipeline XenonUtils)
+target_link_libraries(legacyrecomp PRIVATE lr_cli lr_common lr_formats lr_pipeline lr_runtime_core XenonUtils)
 lr_configure_target(legacyrecomp)

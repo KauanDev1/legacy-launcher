@@ -4,7 +4,7 @@
 # game template inputs under runtime/:
 #   runtime/template/CMakeLists.txt   the CMake project the build stage configures
 #   runtime/src/main.cpp              game entry point, compiled by the template with the generated headers
-#   runtime/include/{runtime,common}/ our headers (same include layout as src/)
+#   runtime/include/{runtime,common}/ our headers (same include layout as src/), plus formats/xex2.h
 #   runtime/include/simde/            SIMD Everywhere headers (ppc_context.h includes <x86/avx.h>)
 #   runtime/lib/                      liblr_runtime_core.a (sanitizer-free staged variant, see src/runtime),
 #                                     libXenonUtils.a. Not libdisasm.a: XenonUtils' PowerPC disassembler is
@@ -46,7 +46,8 @@ list(APPEND _lr_staged "${_ctx_dst}")
 # (the template's incremental build would otherwise recompile everything after every launcher build).
 set(_lr_runtime_dir "${LR_RESOURCES_DIR}/runtime")
 file(GLOB _lr_runtime_headers CONFIGURE_DEPENDS RELATIVE "${_lr_src_root}/src"
-  "${_lr_src_root}/src/runtime/*.h" "${_lr_src_root}/src/runtime/kernel/*.h" "${_lr_src_root}/src/common/*.h")
+  "${_lr_src_root}/src/runtime/*.h" "${_lr_src_root}/src/runtime/kernel/*.h" "${_lr_src_root}/src/common/*.h"
+  "${_lr_src_root}/src/formats/xex2.h")
 set(_lr_runtime_files "")
 foreach(_h IN LISTS _lr_runtime_headers)
   list(APPEND _lr_runtime_files "src/${_h}=include/${_h}")

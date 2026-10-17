@@ -29,7 +29,9 @@
 #include "runtime/kernel/glue.h"
 #include "runtime/kernel/kernel.h"
 #include "runtime/kernel/registry.h"
+#include "runtime/kernel/variables.h"
 #include "runtime/loader.h"
+#include "runtime/xex_imports.h"
 
 // Emitted by lr::pipeline::render_import_thunks.
 extern const char* const lr_import_names[];
@@ -53,8 +55,37 @@ int usage(const char* msg) {
   return kExitUsage;
 }
 
-int print_coverage() {
+std::vector<char> read_file(const std::string& path, bool& ok) {
+  std::ifstream f(path, std::ios::binary);
+  ok = static_cast<bool>(f);
+  if (!ok) return {};
+  return std::vector<char>((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+}
+
+bool is_xex2(const std::vector<char>& b) { return b.size() >= 4 && std::memcmp(b.data(), "XEX2", 4) == 0; }
+
+// Function rows come from the generated thunks; with --image <xex>, the XEX's variable imports (type-0 records
+// without a thunk) are added as `variable` rows: implemented when a kernel variable is registered for them.
+int print_coverage(const std::string& image) {
   using lr::kernel::ImportState;
+  std::vector<lr::runtime::ImportRecord> variables;
+  if (!image.empty()) {
+    bool ok = false;
+    const std::vector<char> bytes = read_file(image, ok);
+    if (!ok) {
+      std::fprintf(stderr, "error: cannot read %s\n", image.c_str());
+      return kExitUsage;
+    }
+    if (is_xex2(bytes)) {  // other images (the test ELF) have no import records
+      auto list = list_imports(std::as_bytes(std::span(bytes)));
+      if (!list) {
+        std::fprintf(stderr, "error: cannot list the imports of %s: %s\n", image.c_str(), list.error().message.c_str());
+        return kExitUsage;
+      }
+      for (auto& r : list.value())
+        if (r.thunk == 0) variables.push_back(std::move(r));
+    }
+  }
   size_t implemented = 0, stub = 0, missing = 0;
   std::printf("| Import | Kind | Status |\n|---|---|---|\n");
   for (size_t i = 0; i < lr_import_count; ++i) {
@@ -75,7 +106,16 @@ int print_coverage() {
     // Only function imports get thunks (XenonRecomp creates no symbol for variable imports).
     std::printf("| %s | function | %s |\n", lr_import_names[i], status);
   }
-  std::printf("\nImplemented: %zu, stub: %zu, missing: %zu / %zu\n", implemented, stub, missing, lr_import_count);
+  for (const auto& v : variables) {
+    char ordinal[8];
+    std::snprintf(ordinal, sizeof ordinal, "0x%04X", static_cast<unsigned>(v.ordinal));
+    const std::string name = v.name.empty() ? v.library + "@" + ordinal : v.name;
+    const bool have = !v.name.empty() && lr::kernel::is_variable_registered(v.name);
+    ++(have ? implemented : missing);
+    std::printf("| %s | variable | %s |\n", name.c_str(), have ? "implemented" : "missing");
+  }
+  std::printf("\nImplemented: %zu, stub: %zu, missing: %zu / %zu\n", implemented, stub, missing,
+              lr_import_count + variables.size());
   return 0;
 }
 
@@ -175,22 +215,34 @@ int main(int argc, char** argv) {
       return usage(("unknown argument " + a).c_str());
     }
   }
-  if (opt.coverage) return print_coverage();
+  if (opt.coverage) return print_coverage(opt.image);
   if (opt.image.empty()) return usage("--image is required");
 
-  std::ifstream f(opt.image, std::ios::binary);
-  if (!f) {
+  bool read_ok = false;
+  const std::vector<char> bytes = read_file(opt.image, read_ok);
+  if (!read_ok) {
     std::fprintf(stderr, "error: cannot read %s\n", opt.image.c_str());
     return kExitUsage;
   }
-  const std::vector<char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 
   auto mem = GuestMemory::reserve(0x1'0000'0000ull + PPC_CODE_SIZE * 2);
   if (!mem) {
     std::fprintf(stderr, "error: %s\n", mem.error().message.c_str());
     return kExitUsage;
   }
-  auto img = load_image(mem.value(), std::as_bytes(std::span(bytes)));
+
+  // Kernel first: load_image maps the XEX header and the LDR entry into the kernel data area.
+  lr::kernel::KernelConfig cfg;
+  cfg.game_dir = std::filesystem::path(opt.image).parent_path();
+  if (!opt.data.empty()) cfg.user_dir = opt.data;
+  cfg.strict_memory = opt.strict_memory;
+  if (auto r = lr::kernel::init_kernel(mem.value(), std::move(cfg)); !r) {
+    std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
+    return kExitUsage;
+  }
+
+  const auto image_bytes = std::as_bytes(std::span(bytes));
+  auto img = load_image(mem.value(), image_bytes);
   if (!img) {
     std::fprintf(stderr, "error: cannot load %s: %s\n", opt.image.c_str(), img.error().message.c_str());
     return kExitUsage;
@@ -199,6 +251,15 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "error: image base 0x%08X does not match the recompiled build (0x%08llX)\n", img.value().base,
                  static_cast<unsigned long long>(PPC_IMAGE_BASE));
     return kExitUsage;
+  }
+  if (is_xex2(bytes)) {  // the test ELF images have no import records
+    auto header = lr::formats::parse_xex2(image_bytes);
+    lr::Result<void> r = header ? lr::kernel::resolve_variable_imports(mem.value(), img.value(), header.value())
+                                : lr::Result<void>(header.error());
+    if (!r) {
+      std::fprintf(stderr, "error: cannot resolve the imports of %s: %s\n", opt.image.c_str(), r.error().message.c_str());
+      return kExitUsage;
+    }
   }
 
   std::vector<FuncMapping> maps;
@@ -221,14 +282,6 @@ int main(int argc, char** argv) {
   }
 
   init_guest_pcr(mem.value());
-  lr::kernel::KernelConfig cfg;
-  cfg.game_dir = std::filesystem::path(opt.image).parent_path();
-  if (!opt.data.empty()) cfg.user_dir = opt.data;
-  cfg.strict_memory = opt.strict_memory;
-  if (auto r = lr::kernel::init_kernel(mem.value(), std::move(cfg)); !r) {
-    std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
-    return kExitUsage;
-  }
   g_guest_base = mem.value().base();
   lr::kernel::set_guest_glue({glue_call, glue_has_function});
 

@@ -23,6 +23,7 @@ std::atomic<Kernel*> g_kernel{nullptr};
 Kernel::Kernel(runtime::GuestMemory& mem, KernelConfig cfg)
     : mem_(mem),
       cfg_(std::move(cfg)),
+      data_next_(runtime::kKernelDataBase),
       heap4k_(runtime::kHeap4kBase, runtime::kHeap4kEnd, 0x1000),
       heap64k_(runtime::kHeap64kBase, runtime::kHeap64kEnd, 0x10000) {}
 
@@ -71,6 +72,16 @@ uint32_t Kernel::pool_alloc(uint32_t bytes, uint32_t /*tag*/) {
 }
 
 void Kernel::pool_free(uint32_t addr) { (void)heap4k_.release(addr); }
+
+uint32_t Kernel::kernel_data_alloc(uint32_t size, uint32_t align) {
+  if (align == 0 || (align & (align - 1)) != 0) return 0;
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  const uint64_t start = (uint64_t{data_next_} + align - 1) & ~uint64_t{align - 1};
+  const uint64_t end = start + (size == 0 ? 1 : size);
+  if (end > runtime::kKernelDataEnd) return 0;
+  data_next_ = static_cast<uint32_t>(end);
+  return static_cast<uint32_t>(start);
+}
 
 Result<void> init_kernel(runtime::GuestMemory& mem, KernelConfig cfg) {
   auto* k = new Kernel(mem, std::move(cfg));

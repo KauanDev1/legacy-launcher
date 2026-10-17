@@ -95,6 +95,9 @@ Consequências para o M2:
    nome, para que a spec possa enumerá-las; o cabeçalho do documento "459 importações" deveria dizer "459 function
    imports (+N variables)".
 
+Estado: os itens 2 e 3 foram feitos na Task 14 do M2 (`kernel::resolve_variable_imports`, `inspect --imports`,
+linhas `variable` em `--coverage --image`); detalhes em `docs/formats/xex2.md`.
+
 ## Ordem estimada das chamadas na inicialização (primeiras ~40)
 
 Melhor palpite a partir da inicialização típica de um título XDK (`mainCRTStartup` -> init de processo da XAPI ->

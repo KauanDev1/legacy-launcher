@@ -2,6 +2,8 @@
 #pragma once
 
 #include <filesystem>
+#include <map>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -49,11 +51,33 @@ class Kernel {
   // Called once by init_kernel: null guard, strict-memory protections and the heaps' commit hooks.
   Result<void> setup_memory();
 
+  // Bump allocator over the kernel data area [kKernelDataBase, kKernelDataEnd) (guest read/write, never handed out
+  // by a heap): the XEX header copy (always the first allocation, so it sits at kKernelDataBase), the LDR entry,
+  // kernel variable blocks and missing-variable guard pages. `align` is a power of two. Memory is never freed and
+  // starts zeroed (fresh mapping). Returns 0 when the area is exhausted. Thread-safe.
+  uint32_t kernel_data_alloc(uint32_t size, uint32_t align);
+
+  // The executable's LDR_DATA_TABLE_ENTRY (its module handle) and XEX header copy; set by resolve_variable_imports.
+  uint32_t executable_module() const { return executable_module_; }
+  uint32_t executable_header() const { return executable_header_; }
+  void set_executable_module(uint32_t ldr_entry, uint32_t header) {
+    executable_module_ = ldr_entry;
+    executable_header_ = header;
+  }
+
+  // Kernel variable name -> guest address of its block (filled by resolve_variable_imports).
+  std::map<std::string, uint32_t, std::less<>>& variable_blocks() { return variable_blocks_; }
+
  private:
   void on_commit(uint32_t addr, uint32_t size, bool committed, bool zero);
 
   runtime::GuestMemory& mem_;
   KernelConfig cfg_;
+  std::mutex data_mutex_;
+  uint32_t data_next_;
+  uint32_t executable_module_ = 0;
+  uint32_t executable_header_ = 0;
+  std::map<std::string, uint32_t, std::less<>> variable_blocks_;
   runtime::PageHeap heap4k_;
   runtime::PageHeap heap64k_;
   runtime::PhysicalHeap physical_;

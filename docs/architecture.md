@@ -17,6 +17,7 @@ flowchart TD
   pipeline --> formats
   pipeline --> third
   formats --> common
+  runtime --> formats
   runtime --> common
   runtime --> third
 ```
@@ -29,7 +30,7 @@ A seta aponta de quem depende para quem é dependido; nada em `common` conhece a
 | `common` | `Result<T>`/`Error`, log, SHA-256, caminhos da pasta de dados, utilitários de arquivo |
 | `formats` | Leitores de XDVDFS (ISO), STFS (pacotes LIVE/CON) e cabeçalhos XEX2; sem I/O além de `IReader` |
 | `pipeline` | As sete etapas, o executor com cache (`state.toml`), execução de ferramentas externas (`posix_spawn`, grupo de processos próprio), gerador dos thunks de importação |
-| `runtime` | Memória do convidado, carregador da imagem, tabela de funções, threads, handler de falhas, registro de importações do kernel |
+| `runtime` | Memória do convidado, carregador da imagem, tabela de funções, threads, handler de falhas, registro de importações do kernel, variáveis do kernel; lê o cabeçalho XEX2 via `formats/xex2` (o único código de `formats` que entra na biblioteca do jogo) |
 | `launcher/cli`, `launcher/gui` | Frentes de uso: ambas chamam `pipeline::run` e `pipeline::launch` |
 
 Regras: APIs públicas devolvem `lr::Result<T>` e nenhuma exceção atravessa módulos (única exceção:
@@ -65,7 +66,7 @@ convidado `G` fica em `base() + G`. Regiões fixas (spec M2 §6.1; constantes em
 | `0x40000000`–`0x6FFFFFFF` | Heap virtual de páginas de 64 KiB (`MEM_LARGE_PAGES`) |
 | `0x70000000`–`0x7EFFFFFF` | Pilhas das threads do convidado, com página de guarda |
 | `0x7F000000`–`0x7FFFFFFF` | Reservada para MMIO e write-back da GPU (M3) |
-| `0x80000000`–`0x81FFFFFF` | Dados do kernel: cópia do cabeçalho XEX, `LDR_DATA_TABLE_ENTRY`, variáveis exportadas, páginas de variáveis faltando |
+| `0x80000000`–`0x81FFFFFF` | Dados do kernel (`Kernel::kernel_data_alloc`, alocação sequencial, nunca liberada): cópia do cabeçalho XEX (sempre em `0x80000000`), `LDR_DATA_TABLE_ENTRY`, blocos das variáveis exportadas, páginas `PROT_NONE` de variáveis faltando |
 | `0x82000000`–`~0x8659FFFF` | Imagem do jogo (`PPC_IMAGE_BASE`, `PPC_IMAGE_SIZE = 0x032D0000`, código em `0x82200000`) e tabela de funções em `PPC_IMAGE_BASE + PPC_IMAGE_SIZE` (`2 x PPC_CODE_SIZE`, um slot de 8 bytes por instrução). Nunca entregue por um heap |
 | `0xA0000000`–`0xFFFFFFFF` | Vistas físicas: `0xA0` (64 KiB), `0xC0` (16 MiB), `0xE0` (4 KiB) |
 

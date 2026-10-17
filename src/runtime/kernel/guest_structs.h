@@ -116,6 +116,70 @@ struct X_ANSI_STRING {
 static_assert(sizeof(X_ANSI_STRING) == 8);
 static_assert(offsetof(X_ANSI_STRING, buffer) == 4);
 
+struct X_UNICODE_STRING {
+  be<uint16_t> length;
+  be<uint16_t> maximum_length;
+  be<uint32_t> buffer;
+};
+static_assert(sizeof(X_UNICODE_STRING) == 8);
+static_assert(offsetof(X_UNICODE_STRING, buffer) == 4);
+
+struct X_LIST_ENTRY {
+  be<uint32_t> flink;
+  be<uint32_t> blink;
+};
+static_assert(sizeof(X_LIST_ENTRY) == 8);
+
+// A loaded module; its guest address is the module handle (HMODULE). Field offsets from the comments of Xenia's
+// X_LDR_DATA_TABLE_ENTRY (src/xenia/kernel/xmodule.h); Xenia declares no sizeof, 0x64 is the end of its last field.
+struct X_LDR_DATA_TABLE_ENTRY {
+  X_LIST_ENTRY in_load_order_links;            // 0x00
+  X_LIST_ENTRY in_memory_order_links;          // 0x08
+  X_LIST_ENTRY in_initialization_order_links;  // 0x10
+  be<uint32_t> dll_base;                       // 0x18
+  be<uint32_t> image_base;                     // 0x1C
+  be<uint32_t> image_size;                     // 0x20
+  X_UNICODE_STRING full_dll_name;              // 0x24
+  X_UNICODE_STRING base_dll_name;              // 0x2C
+  be<uint32_t> flags;                          // 0x34
+  be<uint32_t> full_image_size;                // 0x38
+  be<uint32_t> entry_point;                    // 0x3C
+  be<uint16_t> load_count;                     // 0x40
+  be<uint16_t> module_index;                   // 0x42
+  be<uint32_t> dll_base_original;              // 0x44
+  be<uint32_t> checksum;                       // 0x48 (Xenia keeps its kernel handle here)
+  be<uint32_t> load_flags;                     // 0x4C
+  be<uint32_t> time_date_stamp;                // 0x50
+  be<uint32_t> loaded_imports;                 // 0x54
+  be<uint32_t> xex_header_base;                // 0x58: guest copy of the XEX header
+  be<uint32_t> closure_root;                   // 0x5C
+  be<uint32_t> traversal_parent;               // 0x60
+};
+static_assert(sizeof(X_LDR_DATA_TABLE_ENTRY) == 0x64);
+static_assert(offsetof(X_LDR_DATA_TABLE_ENTRY, dll_base) == 0x18);
+static_assert(offsetof(X_LDR_DATA_TABLE_ENTRY, image_size) == 0x20);
+static_assert(offsetof(X_LDR_DATA_TABLE_ENTRY, full_dll_name) == 0x24);
+static_assert(offsetof(X_LDR_DATA_TABLE_ENTRY, flags) == 0x34);
+static_assert(offsetof(X_LDR_DATA_TABLE_ENTRY, entry_point) == 0x3C);
+static_assert(offsetof(X_LDR_DATA_TABLE_ENTRY, load_count) == 0x40);
+static_assert(offsetof(X_LDR_DATA_TABLE_ENTRY, checksum) == 0x48);
+static_assert(offsetof(X_LDR_DATA_TABLE_ENTRY, xex_header_base) == 0x58);
+static_assert(offsetof(X_LDR_DATA_TABLE_ENTRY, traversal_parent) == 0x60);
+
+// Kernel object type descriptor, the block behind Ex*ObjectType / IoFileObjectType. Fields from Xenia's
+// X_OBJECT_TYPE (src/xenia/kernel/xobject.h): seven u32, pool_tag last.
+struct X_OBJECT_TYPE {
+  be<uint32_t> constructor;  // 0x00
+  be<uint32_t> destructor;   // 0x04
+  be<uint32_t> unk_08;
+  be<uint32_t> unk_0c;
+  be<uint32_t> unk_10;
+  be<uint32_t> unk_14;
+  be<uint32_t> pool_tag;  // 0x18
+};
+static_assert(sizeof(X_OBJECT_TYPE) == 0x1C);
+static_assert(offsetof(X_OBJECT_TYPE, pool_tag) == 0x18);
+
 struct X_OBJECT_ATTRIBUTES {
   be<uint32_t> root_directory;
   be<uint32_t> name_ptr;

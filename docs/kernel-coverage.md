@@ -3,7 +3,9 @@
 Estado das 459 importações (`xboxkrnl.exe` e `xam.xex`) que a imagem TU1 do Minecraft usa. Três estados:
 `implemented` (implementação de verdade, `LR_KERNEL`), `stub` (devolve uma constante, `LR_KERNEL_STUB`, com
 um comentário dizendo por que basta) e `missing` (nada registrado; chamar uma delas aborta o jogo com saída
-3). A coluna `Kind` é sempre `function`: só importações de função ganham thunk (ver
+3). A tabela abaixo ainda só tem linhas `function` (só importações de função ganham thunk); desde a Task 14
+do M2, `--coverage --image <xex>` também lista as importações de variável como linhas `variable` (ver
+`docs/formats/xex2.md` e
 `docs/reverse-engineering/kernel-imports.md`). Apenas nomes de importação, nada do jogo.
 
 ## Como regenerar
