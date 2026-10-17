@@ -28,7 +28,7 @@ A seta aponta de quem depende para quem é dependido; nada em `common` conhece a
 |---|---|
 | `common` | `Result<T>`/`Error`, log, SHA-256, caminhos da pasta de dados, utilitários de arquivo |
 | `formats` | Leitores de XDVDFS (ISO), STFS (pacotes LIVE/CON) e cabeçalhos XEX2; sem I/O além de `IReader` |
-| `pipeline` | As sete etapas, o executor com cache (`state.toml`), execução de ferramentas externas (`posix_spawn`, grupo de processos próprio), gerador de stubs de importação |
+| `pipeline` | As sete etapas, o executor com cache (`state.toml`), execução de ferramentas externas (`posix_spawn`, grupo de processos próprio), gerador dos thunks de importação |
 | `runtime` | Memória do convidado, carregador da imagem, tabela de funções, threads, handler de falhas, registro de importações do kernel |
 | `launcher/cli`, `launcher/gui` | Frentes de uso: ambas chamam `pipeline::run` e `pipeline::launch` |
 
@@ -40,7 +40,7 @@ Regras: APIs públicas devolvem `lr::Result<T>` e nenhuma exceção atravessa m�
 O `legacyrecomp-game` é um executável compilado na máquina do usuário na etapa `build`. Ele junta:
 
 - o C++ gerado pelo XenonRecomp (`work/generated/`);
-- os stubs das importações (um por nome `__imp__*`, gerado a partir de `ppc_recomp_shared.h`);
+- os thunks das importações (um por nome `__imp__*`, gerado a partir de `ppc_recomp_shared.h`; ver "Kernel");
 - as bibliotecas pré-compiladas do runtime (`lr_runtime_core`, XenonUtils), numa variante sem sanitizers;
 - o `main.cpp` do runtime, copiado como **fonte** e compilado junto do código gerado.
 
@@ -82,6 +82,30 @@ chama `_exit(4)`. Threads do jogo criadas por `ExCreateThread` e sincronização
 
 ## Kernel
 
-`runtime/kernel/registry` mantém a tabela de importações implementadas. Cada nome importado tem um stub
-gerado que chama a implementação, ou lança `UnimplementedImport` com o nome. `--coverage` lista todas as 459
-importações com seu estado.
+O kernel é escrito no `lr_runtime_core` pré-compilado, que nunca vê o `PPCContext` (R16). A ponte entre o
+código gerado e o kernel tem três partes:
+
+- **ABI fixa** (`runtime/kernel/abi.h`): `GuestCall` tem layout próprio, independente do `ppc_config.h`:
+  `base`, `gpr[8]` (r3..r10), `fpr[13]` (f1..f13), `r1`, `r13`, `lr` e o retorno (`ret_gpr` para r3,
+  `ret_fpr` para f1 quando `has_fpr_return`). Toda implementação tem a forma `KernelFn = void(GuestCall&)`.
+- **Registro** (`runtime/kernel/registry`): nome → (estado, `KernelFn`). Estados (`ImportState`):
+  `Implemented`, `Stub` e `Missing` (nada registrado). `LR_KERNEL(Nome)`, em escopo global num `.cpp`,
+  registra `marshal<&exports::Nome>` como `Implemented`; `marshal` (`runtime/kernel/marshal.h`) converte o
+  `GuestCall` nos parâmetros tipados da função C++ `lr::kernel::exports::Nome` e escreve o retorno.
+  `LR_KERNEL_STUB(Nome, valor)` registra um `Stub` que só devolve a constante em r3 (com a mesma extensão de
+  sinal de `marshal`); cada uso leva um comentário dizendo por que a constante basta. Os registros são
+  inicializadores estáticos; o template liga o `lr_runtime_core` com `--whole-archive` só para que eles não
+  sejam descartados. Registrar o mesmo nome duas vezes aborta na inicialização.
+- **Thunks** (gerados por `lr::pipeline::render_import_thunks` em `work/generated/import_stubs.cpp` e
+  compilados junto com o jogo): um `PPC_FUNC(__imp__Nome)` por importação. Na primeira chamada o thunk
+  guarda `find_import("Nome")` num `static` local; em toda chamada registra o nome na trilha (`trace`) e,
+  se não há função, chama `unimplemented_import`. Senão copia r3..r10, f1..f13, r1, r13 e lr para um
+  `GuestCall`, chama a função e escreve de volta r3 (e f1). A cópia está num único helper no topo do
+  arquivo, não repetida 459 vezes. É o único código do kernel que toca o `PPCContext`.
+
+Como todo thunk passa por `trace`, a trilha do relatório de saída 3 (`Trail (last N): ...`, últimas 32
+chamadas da thread) lista todas as importações chamadas antes da que falta, inclusive stubs, terminando
+nela. `--coverage` imprime `| Import | Kind | Status |` para as 459 importações (tipo `function`; estado
+`implemented`, `stub` ou `missing`) e termina com `Implemented: a, stub: b, missing: c / total` (ver
+`docs/kernel-coverage.md`). Esse modelo substitui o do M1 (`LR_KERNEL_EXPORT` forte contra stub fraco), que
+não funcionava com o runtime pré-compilado: ver `docs/adr/0004-m2-plan-deviations.md`.

@@ -66,7 +66,7 @@ std::string stage_message(pipeline::StageId id, std::string_view raw) {
       break;
     }
     case StageId::Build:
-      if (auto n = between(raw, "wrote ", " import stubs")) return std::string(*n) + " stubs de importação gerados";
+      if (auto n = between(raw, "wrote ", " import thunks")) return std::string(*n) + " thunks de importação gerados";
       if (raw == "configuring the game build") return "Configurando a compilação do jogo";
       if (auto n = between(raw, "compiling with ", " jobs")) return "Compilando com " + std::string(*n) + " processos";
       if (raw.size() > 2 && raw.front() == '[' && raw.back() == ']') {

@@ -3,8 +3,9 @@
 
 #include <array>
 #include <cstdio>
+#include <cstdlib>
+#include <map>
 #include <mutex>
-#include <set>
 #include <string>
 
 namespace lr::kernel {
@@ -18,16 +19,34 @@ struct Trail {
 };
 thread_local Trail t_trail;
 
-// Function-local statics: LR_KERNEL_EXPORT registers from static initializers in other TUs.
-std::mutex& impl_mutex() {
+// Function-local statics: LR_KERNEL / LR_KERNEL_STUB register from static initializers in other TUs.
+std::mutex& table_mutex() {
   static std::mutex m;
   return m;
 }
-std::set<std::string, std::less<>>& impl_set() {
-  static std::set<std::string, std::less<>> s;
-  return s;
+std::map<std::string, ImportEntry, std::less<>>& table() {
+  static std::map<std::string, ImportEntry, std::less<>> t;
+  return t;
 }
 }  // namespace
+
+void register_import(const char* name, ImportState state, KernelFn fn) {
+  if (state == ImportState::Missing || fn == nullptr) {
+    std::fprintf(stderr, "fatal: kernel import %s registered without an implementation\n", name);
+    std::abort();
+  }
+  std::lock_guard<std::mutex> lock(table_mutex());
+  if (!table().emplace(name, ImportEntry{state, fn}).second) {
+    std::fprintf(stderr, "fatal: kernel import %s registered twice\n", name);
+    std::abort();
+  }
+}
+
+ImportEntry find_import(std::string_view name) {
+  std::lock_guard<std::mutex> lock(table_mutex());
+  const auto it = table().find(name);
+  return it == table().end() ? ImportEntry{} : it->second;
+}
 
 void trace(const char* name) {
   t_trail.names[t_trail.count % kTrailSize].assign(name);
@@ -39,16 +58,6 @@ void unimplemented_import(const char* name, uint32_t caller_lr) {
   const size_t n = t_trail.count < kTrailSize ? t_trail.count : kTrailSize;
   for (size_t i = t_trail.count - n; i < t_trail.count; ++i) e.trail.emplace_back(t_trail.names[i % kTrailSize]);
   throw e;
-}
-
-void register_implemented(const char* name) {
-  std::lock_guard<std::mutex> lock(impl_mutex());
-  impl_set().emplace(name);
-}
-
-bool is_implemented(std::string_view name) {
-  std::lock_guard<std::mutex> lock(impl_mutex());
-  return impl_set().find(name) != impl_set().end();
 }
 
 std::string format_report(const UnimplementedImport& e) {

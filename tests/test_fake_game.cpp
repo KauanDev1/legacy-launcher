@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Exercises src/runtime/main.cpp end to end through `lr_fake_game`: main.cpp + a tiny hand-written "generated"
-// set (tests/support/fake_generated) + import stubs rendered by render_import_stubs. The guest image is a
+// set (tests/support/fake_generated) + import thunks rendered by render_import_thunks. The guest image is a
 // synthetic ELF built in memory (XenonUtils parses it like an XEX).
 #include <catch2/catch_test_macros.hpp>
 
@@ -66,14 +66,15 @@ std::string write_image(const fs::path& dir, uint32_t entry) {
 }
 }  // namespace
 
-TEST_CASE("fake game --coverage prints the import table and exits 0", "[unit]") {
+TEST_CASE("fake game --coverage lists three states", "[unit]") {
   TempDir td;
   auto r = run_game(td.path, {"--coverage"});
   CHECK(r.code == 0);
-  CHECK(r.out.find("| Import | Status |") != std::string::npos);
-  CHECK(r.out.find("| FakeImplemented | implemented |") != std::string::npos);
-  CHECK(r.out.find("| FakeMissing | missing |") != std::string::npos);
-  CHECK(r.out.find("Implemented: 1 / 2") != std::string::npos);
+  CHECK(r.out.find("| Import | Kind | Status |") != std::string::npos);
+  CHECK(r.out.find("| FakeImplemented | function | implemented |") != std::string::npos);
+  CHECK(r.out.find("| FakeStub | function | stub |") != std::string::npos);
+  CHECK(r.out.find("| FakeMissing | function | missing |") != std::string::npos);
+  CHECK(r.out.find("Implemented: 1, stub: 1, missing: 1 / 3") != std::string::npos);
 }
 
 TEST_CASE("fake game stops at the first unimplemented import with exit 3 and a report", "[unit]") {
@@ -81,10 +82,18 @@ TEST_CASE("fake game stops at the first unimplemented import with exit 3 and a r
   auto r = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x82000100)});
   CHECK(r.code == 3);
   CHECK(r.out.find("Unimplemented import: FakeMissing") != std::string::npos);
-  CHECK(r.out.find("Called from: 0x82000108") != std::string::npos);
-  CHECK(r.out.find("FakeImplemented") != std::string::npos);  // trail
+  CHECK(r.out.find("Called from: 0x8200010C") != std::string::npos);
 }
 
+TEST_CASE("fake game trail contains every import called before the missing one", "[unit]") {
+  TempDir td;
+  auto r = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x82000100)});
+  CHECK(r.code == 3);
+  // Every thunk traces, stubs and implemented imports alike; the missing import is the last entry.
+  CHECK(r.out.find("Trail (last 3): FakeImplemented -> FakeStub -> FakeMissing") != std::string::npos);
+}
+
+// sub_82000180 checks the values the thunks wrote back to r3 and calls FakeMissing (exit 3) on a mismatch.
 TEST_CASE("fake game exits 0 when the entry point returns normally", "[unit]") {
   TempDir td;
   auto r = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x82000180)});

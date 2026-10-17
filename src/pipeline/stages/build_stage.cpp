@@ -147,17 +147,17 @@ class BuildStage : public Stage {
     if (ec) return Error{ErrorCode::IoError, "cannot resolve " + ctx.resources.string() + ": " + ec.message(), ""};
     const DataPaths p = DataPaths::from_root(root);
 
-    // 1. Weak stubs for every import the generated code declares.
+    // 1. Thunks for every import the generated code declares.
     LR_TRY_ASSIGN(shared, read_text(p.generated / "ppc_recomp_shared.h"));
     const auto names = parse_import_names(shared);
     if (names.empty())
       return Error{ErrorCode::InvalidFormat, "no kernel imports found in " + (p.generated / "ppc_recomp_shared.h").string(),
                    "rerun the recompile stage (--force recompile)"};
-    const std::string stubs = render_import_stubs(names);
+    const std::string stubs = render_import_thunks(names);
     auto current = read_text(p.generated / kStubsFile);
     if (!current || current.value() != stubs)  // unchanged file keeps its mtime: no recompile / 48 MB relink
       LR_TRY(atomic_write(p.generated / kStubsFile, std::as_bytes(std::span<const char>(stubs.data(), stubs.size()))));
-    ctx.sink.on_progress({StageId::Build, 0.0f, "wrote " + std::to_string(names.size()) + " import stubs"});
+    ctx.sink.on_progress({StageId::Build, 0.0f, "wrote " + std::to_string(names.size()) + " import thunks"});
 
     // 2. Configure the template, 3. build it (incremental: work/build is kept between runs, unless it was
     // configured from another resources dir).

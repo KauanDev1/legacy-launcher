@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Game entry point. NOT part of a prebuilt library: the game template compiles this file together with the
-// generated ppc_config.h / ppc_recomp_*.cpp / ppc_func_mapping.cpp and the generated import stubs, and links
-// lr_runtime_core with --whole-archive so strong LR_KERNEL_EXPORT definitions beat the weak stubs.
+// generated ppc_config.h / ppc_recomp_*.cpp / ppc_func_mapping.cpp and the generated import thunks, and links
+// lr_runtime_core with --whole-archive so its LR_KERNEL / LR_KERNEL_STUB registrations are kept.
 //
 // Usage: <game> --image <xex> [--data <dir>] [--headless] [--coverage]
 // Exit codes: 0 ok (also: window closed by the user), 2 usage/load error, 3 unimplemented import, 4 fault.
@@ -27,7 +27,7 @@
 #include "runtime/kernel/registry.h"
 #include "runtime/loader.h"
 
-// Emitted by lr::pipeline::render_import_stubs.
+// Emitted by lr::pipeline::render_import_thunks.
 extern const char* const lr_import_names[];
 extern const size_t lr_import_count;
 
@@ -49,14 +49,28 @@ int usage(const char* msg) {
 }
 
 int print_coverage() {
-  size_t done = 0;
-  std::printf("| Import | Status |\n|---|---|\n");
+  using lr::kernel::ImportState;
+  size_t implemented = 0, stub = 0, missing = 0;
+  std::printf("| Import | Kind | Status |\n|---|---|---|\n");
   for (size_t i = 0; i < lr_import_count; ++i) {
-    const bool impl = lr::kernel::is_implemented(lr_import_names[i]);
-    done += impl;
-    std::printf("| %s | %s |\n", lr_import_names[i], impl ? "implemented" : "missing");
+    const char* status = "missing";
+    switch (lr::kernel::find_import(lr_import_names[i]).state) {
+      case ImportState::Implemented:
+        status = "implemented";
+        ++implemented;
+        break;
+      case ImportState::Stub:
+        status = "stub";
+        ++stub;
+        break;
+      case ImportState::Missing:
+        ++missing;
+        break;
+    }
+    // Only function imports get thunks (XenonRecomp creates no symbol for variable imports).
+    std::printf("| %s | function | %s |\n", lr_import_names[i], status);
   }
-  std::printf("\nImplemented: %zu / %zu\n", done, lr_import_count);
+  std::printf("\nImplemented: %zu, stub: %zu, missing: %zu / %zu\n", implemented, stub, missing, lr_import_count);
   return 0;
 }
 

@@ -70,7 +70,7 @@ do host (não 50 MHz); o LZX usa o `lzxd.c` da libmspack já compilado na `libXe
 A lista **exclui importações de variáveis**. Evidência (do repositório, sem ler dados do jogo):
 `thirdparty/XenonRecomp/XenonUtils/xex.cpp` (`Image::ParseImage`, ~linha 329) percorre todos os descritores de
 importação, mas só cria um símbolo `__imp__<Name>` e reescreve o thunk quando `originalData.type != 0`, isto é,
-para thunks de função. Registros de variável (tipo 0) não ganham símbolo, então `render_import_stubs` /
+para thunks de função. Registros de variável (tipo 0) não ganham símbolo, então `render_import_thunks` /
 `lr_import_names` (459 entradas) nunca os veem. Nenhum de `KeTimeStampBundle`, `XboxHardwareInfo`,
 `XexExecutableModuleHandle`, `ExLoadedImageName`, `KeDebugMonitorData`, `XboxKrnlVersion`, `ExConsoleGameRegion`,
 `Ex*ObjectType`/`Ob*ObjectType`/`IoFileObjectType`, `VdGlobalDevice`, `VdGpuClockInMHz`, `KiBugCheckData` aparece

@@ -14,7 +14,7 @@ fica em `work/state.toml`. Tudo roda na máquina do usuário e nada do jogo sai 
 | 4 | `patch` | Aplica o `.xexp` ao XEX (XenonUtils `XexPatcher`), gerando um XEX2 sem criptografia e sem compressão | `work/image/default_tu1.xex` |
 | 5 | `analyse` | Roda o XenonAnalyse e a varredura de `switch` própria (jump tables) | `work/analysis/switch_tables.toml`, `work/analysis/functions.toml` |
 | 6 | `recompile` | Roda o XenonRecomp com `config/minecraft-tu1/recomp.toml`; falha se houver qualquer linha `ERROR:` (o XenonRecomp sai com 0 mesmo gerando código errado) | `work/generated/ppc_recomp_shared.h`, `ppc_func_mapping.cpp`, `ppc_config.h` (mais ~215 `ppc_recomp.*.cpp`) |
-| 7 | `build` | Gera os stubs de importação, compila o C++ gerado com o `main.cpp` e as bibliotecas do runtime (template CMake/Ninja) e instala o binário. Usa o clang++/cmake/ninja do sistema ou, no AppImage, o toolchain embutido (ver "Toolchain") | `bin/legacyrecomp-game` |
+| 7 | `build` | Gera os thunks de importação (`import_stubs.cpp`, ver `docs/architecture.md`, "Kernel"), compila o C++ gerado com o `main.cpp` e as bibliotecas do runtime (template CMake/Ninja) e instala o binário. Usa o clang++/cmake/ninja do sistema ou, no AppImage, o toolchain embutido (ver "Toolchain") | `bin/legacyrecomp-game` |
 
 O código gerado tem cerca de 160 MB, o `recompile` + `build` levam alguns minutos e usam bastante RAM por
 job (use `--jobs <n>` para limitar).

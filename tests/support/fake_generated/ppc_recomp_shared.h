@@ -8,3 +8,4 @@ PPC_EXTERN_FUNC(sub_82000100);
 PPC_EXTERN_FUNC(sub_82000180);
 PPC_EXTERN_FUNC(__imp__FakeImplemented);
 PPC_EXTERN_FUNC(__imp__FakeMissing);
+PPC_EXTERN_FUNC(__imp__FakeStub);

@@ -2,18 +2,16 @@
 #include <catch2/catch_test_macros.hpp>
 #include <string>
 
-#include "fake_generated/ppc_config.h"
-#include "ppc_context.h"
 #include "runtime/kernel/registry.h"
 
 using namespace lr::kernel;
 
-// The single real implementation in the test target (global scope, as the macro requires): proves
-// LR_KERNEL_EXPORT defines the strong symbol and registers the name.
-LR_KERNEL_EXPORT(LrTestExported) {
-  (void)base;
-  ctx.r3.u32 = 42;
-}
+// Registered at global scope, as the macros require.
+namespace lr::kernel::exports {
+uint32_t LrTestImplemented(uint32_t a, uint32_t b) { return a + b; }
+}  // namespace lr::kernel::exports
+LR_KERNEL(LrTestImplemented);
+LR_KERNEL_STUB(LrTestStub, -1);  // exercises the 32-bit sign extension of the stub's return value
 
 TEST_CASE("unimplemented_import throws with the call trail", "[unit]") {
   trace("X");
@@ -46,12 +44,40 @@ TEST_CASE("trace keeps only the last 32 entries, oldest first", "[unit]") {
   }
 }
 
-TEST_CASE("register_implemented / is_implemented / LR_KERNEL_EXPORT", "[unit]") {
-  CHECK_FALSE(is_implemented("Q"));
-  register_implemented("Q");
-  CHECK(is_implemented("Q"));
-  CHECK(is_implemented("LrTestExported"));
-  PPCContext ctx{};
-  __imp__LrTestExported(ctx, nullptr);
-  CHECK(ctx.r3.u32 == 42);
+TEST_CASE("unregistered import is missing", "[unit]") {
+  const ImportEntry e = find_import("LrTestNeverRegistered");
+  CHECK(e.state == ImportState::Missing);
+  CHECK(e.fn == nullptr);
+}
+
+TEST_CASE("register_import records state and function", "[unit]") {
+  register_import("LrTestDirect", ImportState::Implemented, [](GuestCall& c) { c.ret_gpr = 7; });
+  const ImportEntry e = find_import("LrTestDirect");
+  CHECK(e.state == ImportState::Implemented);
+  REQUIRE(e.fn != nullptr);
+  GuestCall c;
+  e.fn(c);
+  CHECK(c.ret_gpr == 7u);
+}
+
+TEST_CASE("LR_KERNEL registers a marshalled implementation", "[unit]") {
+  const ImportEntry e = find_import("LrTestImplemented");
+  CHECK(e.state == ImportState::Implemented);
+  REQUIRE(e.fn != nullptr);
+  GuestCall c;
+  c.gpr[0] = 40;
+  c.gpr[1] = 2;
+  e.fn(c);
+  CHECK(c.ret_gpr == 42u);
+}
+
+TEST_CASE("registered stub is reported as stub", "[unit]") {
+  const ImportEntry e = find_import("LrTestStub");
+  CHECK(e.state == ImportState::Stub);
+  REQUIRE(e.fn != nullptr);
+  GuestCall c;
+  c.gpr[0] = 5;
+  e.fn(c);
+  CHECK(c.ret_gpr == 0xFFFF'FFFF'FFFF'FFFFull);
+  CHECK_FALSE(c.has_fpr_return);
 }

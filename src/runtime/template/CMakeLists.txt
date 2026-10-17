@@ -7,7 +7,7 @@
 # Compiler, ninja and SDL2 come from lr::pipeline::resolve_toolchain: the system clang++ and SDL2, or, in the
 # AppImage, <resources>/toolchain (zig c++ targeting glibc 2.31 and a static SDL2, see docs/packaging.md).
 # Inputs: LR_GENERATED holds ppc_config.h, ppc_context.h (copied there by XenonRecomp), ppc_recomp_shared.h,
-# ppc_recomp.*.cpp, ppc_func_mapping.cpp and import_stubs.cpp (written by the build stage).
+# ppc_recomp.*.cpp, ppc_func_mapping.cpp and import_stubs.cpp (the import thunks, written by the build stage).
 cmake_minimum_required(VERSION 3.25)
 project(LegacyRecompGame LANGUAGES CXX)
 
@@ -63,7 +63,8 @@ target_compile_options(legacyrecomp-game PRIVATE
   -Wno-null-arithmetic -Wno-null-conversion -Wno-tautological-undefined-compare -Wno-void-pointer-to-int-cast
   -Wno-int-to-void-pointer-cast -Wno-invalid-offsetof -Wno-c++23-extensions)
 
-# --whole-archive: every strong LR_KERNEL_EXPORT in the runtime must win over the weak stubs in import_stubs.cpp,
+# --whole-archive: keeps every kernel object file of the runtime, so its LR_KERNEL / LR_KERNEL_STUB registration
+# statics run and the import thunks in import_stubs.cpp find them by name,
 # even when nothing else references its object file. libdisasm.a (GPL-2.0-or-later binutils disassembler) is
 # deliberately not linked: the game never references it (ADR 0002, tripwire test no_gpl_disassembler_in_binaries).
 target_link_libraries(legacyrecomp-game PRIVATE

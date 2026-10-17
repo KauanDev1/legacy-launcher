@@ -14,6 +14,6 @@ int main(int argc, char** argv) {
   ss << in.rdbuf();
   const auto names = lr::pipeline::parse_import_names(ss.str());
   std::ofstream out(argv[2]);
-  out << lr::pipeline::render_import_stubs(names);
+  out << lr::pipeline::render_import_thunks(names);
   return out ? 0 : 1;
 }
