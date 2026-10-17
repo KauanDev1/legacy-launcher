@@ -52,8 +52,9 @@ bool PageHeap::run_free(size_t first, size_t count) const {
 }
 
 Result<uint32_t> PageHeap::reserve(uint32_t size, uint32_t alignment, bool top_down,
-                                   std::optional<uint32_t> fixed_base) {
+                                   std::optional<uint32_t> fixed_base, uint32_t protect) {
   if (size == 0) return err(ErrorCode::InvalidFormat, "reserve: size is 0");
+  if (!valid_protect(protect)) return err(ErrorCode::InvalidFormat, "reserve: bad protection");
   if (alignment != 0 && (alignment & (alignment - 1)) != 0)
     return err(ErrorCode::InvalidFormat, "reserve: alignment is not a power of two");
   const uint64_t span = static_cast<uint64_t>(end_) - base_;
@@ -62,6 +63,7 @@ Result<uint32_t> PageHeap::reserve(uint32_t size, uint32_t alignment, bool top_d
   const size_t count = static_cast<size_t>(rsize / page_);
   const uint64_t align = std::max<uint64_t>(alignment, page_);
 
+  std::lock_guard<std::mutex> op(op_mu_);
   std::lock_guard<std::mutex> lk(mu_);
   uint64_t start = 0;
   if (fixed_base) {
@@ -119,7 +121,7 @@ Result<uint32_t> PageHeap::reserve(uint32_t size, uint32_t alignment, bool top_d
     protect_[i] = 0;
     alloc_base_[i] = static_cast<uint32_t>(start);
   }
-  allocs_[static_cast<uint32_t>(start)] = Alloc{static_cast<uint32_t>(rsize), kPageReadWrite};
+  allocs_[static_cast<uint32_t>(start)] = Alloc{static_cast<uint32_t>(rsize), protect};
   return static_cast<uint32_t>(start);
 }
 
@@ -140,7 +142,8 @@ Result<void> PageHeap::locate(uint32_t addr, uint32_t size, size_t* first, size_
   return {};
 }
 
-Result<void> PageHeap::commit(uint32_t addr, uint32_t size, uint32_t protect) {
+Result<void> PageHeap::commit(uint32_t addr, uint32_t size, uint32_t protect, bool zero) {
+  std::lock_guard<std::mutex> op(op_mu_);
   if (!valid_protect(protect)) return err(ErrorCode::InvalidFormat, "commit: bad protection");
   Runs runs;
   CommitHook hook;
@@ -158,11 +161,12 @@ Result<void> PageHeap::commit(uint32_t addr, uint32_t size, uint32_t protect) {
     hook = hook_;
   }
   if (hook)
-    for (auto& r : runs) hook(r.first, r.second, true);
+    for (auto& r : runs) hook(r.first, r.second, true, zero);
   return {};
 }
 
 Result<void> PageHeap::decommit(uint32_t addr, uint32_t size) {
+  std::lock_guard<std::mutex> op(op_mu_);
   Runs runs;
   CommitHook hook;
   {
@@ -178,11 +182,12 @@ Result<void> PageHeap::decommit(uint32_t addr, uint32_t size) {
     hook = hook_;
   }
   if (hook)
-    for (auto& r : runs) hook(r.first, r.second, false);
+    for (auto& r : runs) hook(r.first, r.second, false, false);
   return {};
 }
 
 Result<void> PageHeap::release(uint32_t allocation_base) {
+  std::lock_guard<std::mutex> op(op_mu_);
   Runs runs;
   CommitHook hook;
   {
@@ -200,7 +205,7 @@ Result<void> PageHeap::release(uint32_t allocation_base) {
     hook = hook_;
   }
   if (hook)
-    for (auto& r : runs) hook(r.first, r.second, false);
+    for (auto& r : runs) hook(r.first, r.second, false, false);
   return {};
 }
 
@@ -213,12 +218,11 @@ Result<RegionInfo> PageHeap::query(uint32_t addr) const {
     if (state_[at] == kFree) return true;
     return alloc_base_[i] == alloc_base_[at] && protect_[i] == protect_[at];
   };
-  size_t lo = at, hi = at;
-  while (lo > 0 && same(lo - 1)) --lo;
+  size_t hi = at;
   while (hi + 1 < state_.size() && same(hi + 1)) ++hi;
   RegionInfo r;
-  r.base = addr_of(lo);
-  r.size = static_cast<uint32_t>((hi - lo + 1) * static_cast<uint64_t>(page_));
+  r.base = addr_of(at);  // queried address rounded down to a page (Windows BaseAddress)
+  r.size = static_cast<uint32_t>((hi - at + 1) * static_cast<uint64_t>(page_));
   if (state_[at] == kFree) return r;
   r.state = state_[at] == kCommitted ? RegionInfo::Committed : RegionInfo::Reserved;
   r.allocation_base = alloc_base_[at];
@@ -227,14 +231,16 @@ Result<RegionInfo> PageHeap::query(uint32_t addr) const {
   return r;
 }
 
-Result<uint32_t> PageHeap::allocation_size(uint32_t allocation_base) const {
+Result<uint32_t> PageHeap::allocation_size(uint32_t addr) const {
   std::lock_guard<std::mutex> lk(mu_);
-  auto it = allocs_.find(allocation_base);
-  if (it == allocs_.end()) return err(ErrorCode::NotFound, "not an allocation base");
-  return it->second.size;
+  if (addr < base_ || addr >= end_) return err(ErrorCode::OutOfRange, "allocation_size: outside the heap");
+  const size_t at = index(addr);
+  if (state_[at] == kFree) return err(ErrorCode::NotFound, "address not allocated");
+  return allocs_.at(alloc_base_[at]).size;
 }
 
 Result<void> PageHeap::protect(uint32_t addr, uint32_t size, uint32_t protect, uint32_t* old_protect) {
+  std::lock_guard<std::mutex> op(op_mu_);
   if (!valid_protect(protect)) return err(ErrorCode::InvalidFormat, "protect: bad protection");
   std::lock_guard<std::mutex> lk(mu_);
   size_t f = 0, n = 0;

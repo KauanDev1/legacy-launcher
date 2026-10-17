@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <string>
+#include <thread>
 #include <vector>
 
 #include "runtime/memory/page_heap.h"
@@ -60,7 +65,7 @@ TEST_CASE("commit inside reserved region calls hook", "[unit]") {
     bool c;
   };
   std::vector<Call> calls;
-  h.set_commit_hook([&](uint32_t a, uint32_t s, bool c) {
+  h.set_commit_hook([&](uint32_t a, uint32_t s, bool c, bool) {
     // Re-entrancy: the hook may query without deadlocking.
     CHECK(h.query(a));
     calls.push_back({a, s, c});
@@ -97,10 +102,10 @@ TEST_CASE("query reports state and allocation base", "[unit]") {
   CHECK(q.value().allocation_base == base);
   CHECK(q.value().protect == (kPageReadWrite | kPageGuard));
   CHECK(q.value().allocation_protect == kPageReadWrite);
-  auto r = h.query(base + 0x4000);
+  auto r = h.query(base + 0x4800);
   CHECK(r.value().state == RegionInfo::Reserved);
-  CHECK(r.value().base == base + 0x3000);
-  CHECK(r.value().size == 0x3000);
+  CHECK(r.value().base == base + 0x4000);
+  CHECK(r.value().size == 0x2000);
   auto f = h.query(base + 0x6000);
   CHECK(f.value().state == RegionInfo::Free);
   CHECK(f.value().allocation_base == 0);
@@ -129,10 +134,11 @@ TEST_CASE("page heap edge cases", "[unit]") {
   // Release with non-base address.
   uint32_t b = h.reserve(0x3000, 0, false, 0x30000).value();
   CHECK(h.release(b + 0x1000).error().code == ErrorCode::NotFound);
-  CHECK(h.allocation_size(b + 0x1000).error().code == ErrorCode::NotFound);
+  CHECK(h.allocation_size(b + 0x1000).value() == 0x3000);  // any address inside the allocation
+  CHECK(h.allocation_size(b + 0x3000).error().code == ErrorCode::NotFound);  // free page
   // Release reports committed pages and frees the range for reuse.
   uint32_t released = 0;
-  h.set_commit_hook([&](uint32_t, uint32_t s, bool c) {
+  h.set_commit_hook([&](uint32_t, uint32_t s, bool c, bool) {
     if (!c) released += s;
   });
   REQUIRE(h.commit(b, 0x2000, kPageReadWrite));
@@ -143,4 +149,61 @@ TEST_CASE("page heap edge cases", "[unit]") {
   // 64K heap rounds to its page size and ends at 0x70000000.
   PageHeap big(kHeap64kBase, kHeap64kEnd, 0x10000);
   CHECK(big.reserve(1, 0, true, std::nullopt).value() == kHeap64kEnd - 0x10000);
+}
+
+TEST_CASE("allocation protect and zero flag are passed through", "[unit]") {
+  PageHeap h = make4k();
+  std::vector<bool> zeros;
+  h.set_commit_hook([&](uint32_t, uint32_t, bool c, bool z) {
+    if (c) zeros.push_back(z);
+  });
+  uint32_t base = h.reserve(0x2000, 0, false, std::nullopt, kPageNoAccess).value();
+  REQUIRE(h.commit(base, 0x1000, kPageReadWrite));
+  REQUIRE(h.commit(base + 0x1000, 0x1000, kPageReadWrite, false));
+  CHECK(zeros == std::vector<bool>{true, false});
+  CHECK(h.query(base).value().allocation_protect == kPageNoAccess);
+  CHECK(h.reserve(0x1000, 0, false, std::nullopt, 0x3).error().code == ErrorCode::InvalidFormat);
+}
+
+TEST_CASE("page heap hooks are serialized with later operations", "[unit]") {
+  using namespace std::chrono_literals;
+  PageHeap h = make4k();
+  std::mutex m;
+  std::condition_variable cv;
+  bool in_release_hook = false;
+  std::vector<std::string> events;
+  h.set_commit_hook([&](uint32_t, uint32_t, bool committed, bool) {
+    if (!committed) {
+      {
+        std::lock_guard<std::mutex> lk(m);
+        events.push_back("release-start");
+        in_release_hook = true;
+      }
+      cv.notify_all();
+      std::this_thread::sleep_for(150ms);  // give thread B every chance to overtake
+      std::lock_guard<std::mutex> lk(m);
+      events.push_back("release-end");
+    } else {
+      std::lock_guard<std::mutex> lk(m);
+      events.push_back("commit");
+    }
+  });
+  uint32_t x = h.reserve(0x1000, 0, false, 0x20000).value();
+  REQUIRE(h.commit(x, 0x1000, kPageReadWrite));
+  {
+    std::lock_guard<std::mutex> lk(m);
+    events.clear();
+  }
+  std::thread a([&] { CHECK(h.release(x)); });
+  std::thread b([&] {
+    std::unique_lock<std::mutex> lk(m);
+    REQUIRE(cv.wait_for(lk, 2s, [&] { return in_release_hook; }));
+    lk.unlock();
+    // Fails (OutOfRange) if release's state change is visible but we raced ahead; must wait and then succeed.
+    CHECK(h.reserve(0x1000, 0, false, x));
+    CHECK(h.commit(x, 0x1000, kPageReadWrite));
+  });
+  a.join();
+  b.join();
+  CHECK(events == std::vector<std::string>{"release-start", "release-end", "commit"});
 }

@@ -48,26 +48,32 @@ struct RegionInfo {
 //                             -> STATUS_MEMORY_NOT_ALLOCATED
 //
 // Sizes round up and addresses round down to the page size. Thread-safe. The commit hook is called OUTSIDE the
-// internal mutex, after the state change is visible, so it may call back into query() etc. without deadlock.
-// Hook calls of concurrent operations may interleave.
+// state mutex but while holding the operation mutex: mutators (reserve/commit/decommit/release/protect) and
+// their hooks are fully serialized, so a hook never sees a later operation overtake it. The hook may call
+// query()/allocation_size() (state mutex only) but MUST NOT call mutators (it would deadlock).
 class PageHeap {
  public:
-  using CommitHook = std::function<void(uint32_t addr, uint32_t size, bool committed)>;
+  using CommitHook = std::function<void(uint32_t addr, uint32_t size, bool committed, bool zero)>;
 
   PageHeap(uint32_t base, uint32_t end, uint32_t page_size);
 
   // Reserves address space (not committed). alignment 0 means page size; otherwise a power of two. fixed_base
   // (rounded down to a page) places the range exactly; else first fit bottom-up, or highest fit if top_down.
-  // The allocation protect recorded is PAGE_READWRITE.
-  Result<uint32_t> reserve(uint32_t size, uint32_t alignment, bool top_down, std::optional<uint32_t> fixed_base);
-  // Commits pages of one allocation and sets their protection; the hook gets each newly committed run.
-  Result<void> commit(uint32_t addr, uint32_t size, uint32_t protect);
+  // `protect` is recorded as the allocation protect (MEMORY_BASIC_INFORMATION.AllocationProtect).
+  Result<uint32_t> reserve(uint32_t size, uint32_t alignment, bool top_down, std::optional<uint32_t> fixed_base,
+                              uint32_t protect = kPageReadWrite);
+  // Commits pages of one allocation and sets their protection; the hook gets each newly committed run, with `zero`
+  // telling it whether the pages must be zeroed (false for MEM_NOZERO).
+  Result<void> commit(uint32_t addr, uint32_t size, uint32_t protect, bool zero = true);
   // Returns committed pages to Reserved; the hook gets each decommitted run (committed=false).
   Result<void> decommit(uint32_t addr, uint32_t size);
   // Frees a whole allocation; allocation_base must be its exact base. Committed pages are reported to the hook.
   Result<void> release(uint32_t allocation_base);
+  // Windows semantics: base = addr rounded down to a page; size runs forward to the end of the run of pages
+  // sharing state/protect/allocation.
   Result<RegionInfo> query(uint32_t addr) const;
-  Result<uint32_t> allocation_size(uint32_t allocation_base) const;
+  // Size of the whole allocation containing addr (any address inside it). NotFound for free pages.
+  Result<uint32_t> allocation_size(uint32_t addr) const;
   // Changes protection of committed pages in one allocation; old_protect (optional) is the first page's.
   Result<void> protect(uint32_t addr, uint32_t size, uint32_t protect, uint32_t* old_protect);
   void set_commit_hook(CommitHook hook);
@@ -92,6 +98,7 @@ class PageHeap {
   Result<void> locate(uint32_t addr, uint32_t size, size_t* first, size_t* count) const;
 
   uint32_t base_, end_, page_;
+  std::mutex op_mu_;  // serializes mutators across state change AND hook; always taken before mu_
   mutable std::mutex mu_;
   std::vector<uint8_t> state_;
   std::vector<uint16_t> protect_;
