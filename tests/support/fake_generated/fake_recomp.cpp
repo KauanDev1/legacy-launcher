@@ -143,3 +143,23 @@ PPC_FUNC(sub_820001E0) {
     __imp__FakeMissing(ctx, base);
   }
 }
+
+// Second thread of the deadlock pair: KeWaitForSingleObject(main thread's KTHREAD, 0, 0, non-alertable, no
+// timeout), i.e. an infinite wait on the thread that is itself waiting for this one.
+PPC_FUNC(sub_82000320) {
+  ctx.r3.u64 = PPC_LOAD_U32(0x82000010);
+  ctx.r4.u64 = 0;
+  ctx.r5.u64 = 0;
+  ctx.r6.u64 = 0;
+  ctx.r7.u64 = 0;
+  ctx.lr = 0x82000324;
+  __imp__KeWaitForSingleObject(ctx, base);
+}
+
+// Entry point: a two-thread deadlock. Stores this thread's KTHREAD (KPCR +0x100) at guest 0x82000010, starts
+// sub_82000320 (which waits on that KTHREAD forever) and waits for it forever: the deadlock detector ends the run
+// with exit 6.
+PPC_FUNC(sub_82000300) {
+  PPC_STORE_U32(0x82000010, PPC_LOAD_U32(uint32_t(ctx.r13.u64) + 0x100));
+  create_and_wait(ctx, base, 0x82000320, 0, 0x82000304);
+}

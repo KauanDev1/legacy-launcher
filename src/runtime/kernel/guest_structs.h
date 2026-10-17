@@ -306,4 +306,48 @@ static_assert(offsetof(X_MM_QUERY_STATISTICS_RESULT, title) == 0xC);
 static_assert(offsetof(X_MM_QUERY_STATISTICS_RESULT, system) == 0x38);
 static_assert(offsetof(X_MM_QUERY_STATISTICS_RESULT, highest_physical_page) == 0x64);
 
+// RtlRaiseException's record. Verified against Xenia src/xenia/xbox.h (X_EXCEPTION_RECORD, static_assert_size 0x50).
+struct X_EXCEPTION_RECORD {
+  be<uint32_t> code;
+  be<uint32_t> exception_flags;
+  be<uint32_t> exception_record;
+  be<uint32_t> exception_address;
+  be<uint32_t> number_parameters;
+  be<uint32_t> exception_information[15];
+};
+static_assert(sizeof(X_EXCEPTION_RECORD) == 0x50);
+static_assert(offsetof(X_EXCEPTION_RECORD, number_parameters) == 0x10);
+static_assert(offsetof(X_EXCEPTION_RECORD, exception_information) == 0x14);
+
+// The Xbox 360 (PowerPC) CONTEXT that RtlCaptureContext fills. Xenia (master and canary) has no X_CONTEXT, so the
+// layout follows the public Xbox 360 kernel type definitions Xenia cites elsewhere (xkelib keTypes.h): control
+// section (flags, msr, iar, lr, ctr), 32 GPRs, cr/xer, fpscr + 32 FPRs, then the VMX section; 0xA40 bytes.
+// ContextFlags bits: CONTEXT_CONTROL 0x1, CONTEXT_FLOATING_POINT 0x2, CONTEXT_INTEGER 0x4, CONTEXT_VECTOR 0x10.
+struct X_CONTEXT {
+  be<uint32_t> context_flags;      // 0x000
+  be<uint32_t> msr;                // 0x004
+  be<uint32_t> iar;                // 0x008
+  be<uint32_t> lr;                 // 0x00C
+  be<uint64_t> ctr;                // 0x010
+  be<uint64_t> gpr[32];            // 0x018
+  be<uint32_t> cr;                 // 0x118
+  be<uint32_t> xer;                // 0x11C
+  be<double> fpscr;                // 0x120
+  be<double> fpr[32];              // 0x128
+  be<uint32_t> user_mode_control;  // 0x228
+  be<uint32_t> reserved;           // 0x22C
+  be<uint32_t> vscr[4];            // 0x230
+  be<uint32_t> vr[128][4];         // 0x240
+};
+static_assert(sizeof(X_CONTEXT) == 0xA40);
+static_assert(offsetof(X_CONTEXT, lr) == 0xC);
+static_assert(offsetof(X_CONTEXT, ctr) == 0x10);
+static_assert(offsetof(X_CONTEXT, gpr) == 0x18);
+static_assert(offsetof(X_CONTEXT, cr) == 0x118);
+static_assert(offsetof(X_CONTEXT, fpscr) == 0x120);
+static_assert(offsetof(X_CONTEXT, fpr) == 0x128);
+static_assert(offsetof(X_CONTEXT, user_mode_control) == 0x228);
+static_assert(offsetof(X_CONTEXT, vscr) == 0x230);
+static_assert(offsetof(X_CONTEXT, vr) == 0x240);
+
 }  // namespace lr::kernel

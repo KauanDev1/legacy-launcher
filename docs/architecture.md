@@ -155,7 +155,10 @@ thread e chama `Dispatcher::wake_for_apc`. Uma espera alertável (`KeWaitFor*`, 
 `NtSignalAndWaitForSingleObjectEx`, `KeDelayExecutionThread`; nesta, um ponteiro de intervalo nulo vale 0, um
 yield, em vez de espera infinita) que volta com `STATUS_USER_APC` executa antes as APCs
 da fila com `call_guest(rotina, {contexto, arg1, arg2})`, salvo dentro de `KeEnterCriticalRegion` (contador de
-APCs desabilitadas; ao sair da região, APCs pendentes rearmam a próxima espera alertável). `NtAlertThread` não é
+APCs desabilitadas; ao sair da região, APCs pendentes rearmam a próxima espera alertável). `queue_apc` chama
+`wake_for_apc` sob o mutex da thread, o mesmo sob o qual `finish` marca a thread como terminada: ou a APC chega antes
+e `thread_exited` apaga o despertar, ou ela vê a thread terminada e não faz nada, então nenhum despertar pendente
+sobrevive à thread (ordem de travas: mutex da thread, depois o do despachante). `NtAlertThread` não é
 importado pelo jogo, então `STATUS_ALERTED` nunca é produzido.
 
 Outras importações (`exports/threads.cpp`): `KeTlsAlloc`/`KeTlsFree`/`KeTlsGetValue`/`KeTlsSetValue`,
@@ -220,7 +223,7 @@ compatível com o `lwarx`/`stwcx.` do código gerado, com `pause` por 1000 volta
 
 Códigos de saída do jogo (`runtime/guest_thread.h`): 0 normal, 2 uso/carga (`kExitUsage`), 3 importação
 faltando (`kExitUnimplementedImport`), 4 falha (`kExitFault`), 5 erro fatal do convidado (`kExitGuestFatal`,
-ver `guest_fatal` abaixo) e 6 impasse (`kExitDeadlock`, reservado para a detecção de impasse).
+ver `guest_fatal` abaixo) e 6 impasse (`kExitDeadlock`, ver "Diagnóstico" abaixo).
 
 ## Kernel
 
@@ -240,15 +243,17 @@ código gerado e o kernel tem três partes:
   sejam descartados. Registrar o mesmo nome duas vezes aborta na inicialização.
 - **Thunks** (gerados por `lr::pipeline::render_import_thunks` em `work/generated/import_stubs.cpp` e
   compilados junto com o jogo): um `PPC_FUNC(__imp__Nome)` por importação. Na primeira chamada o thunk
-  guarda `find_import("Nome")` num `static` local; em toda chamada registra o nome na trilha (`trace`) e,
-  se não há função, chama `unimplemented_import`. Senão copia r3..r10, f1..f13, r1, r13 e lr para um
-  `GuestCall`, guarda r1/r13 como o quadro atual do convidado nesta thread (`set_current_frame`, usado por
-  `call_guest`), chama a função e escreve de volta r3 (e f1). A cópia está num único helper no topo do
+  guarda `find_import("Nome")` num `static` local; em toda chamada registra o nome na trilha (`trace`) e copia
+  r3..r10, f1..f13, r1, r13 e lr para um `GuestCall`. Se não há função, registra a chamada no trace de importações
+  (`trace_import_missing`) e chama `unimplemented_import`. Senão guarda r1/r13 como o quadro atual do convidado
+  nesta thread (`set_current_frame`, usado por `call_guest`), chama a função, registra a chamada com o retorno
+  (`trace_import_return`) e escreve de volta r3 (e f1). A cópia está num único helper no topo do
   arquivo, não repetida 459 vezes. É o único código do kernel que toca o `PPCContext`.
 
 **Estado do kernel** (`runtime/kernel/kernel.h`): `init_kernel(memória, KernelConfig)` cria, uma vez por
 processo, a instância única `Kernel` (acessada por `kernel()`), da qual pendem os subsistemas do kernel
-(memória do convidado e configuração: `game_dir`, `user_dir`, `language`, `strict_memory`, `trace_file`).
+(memória do convidado e configuração: `game_dir`, `user_dir`, `language`, `strict_memory`, `trace_imports`,
+`trace_file`, `deadlock_seconds`).
 Uma segunda chamada devolve `Error{Internal}`. A instância, assim como a tabela do registro e seu mutex, é
 vazada de propósito (nunca destruída), para que threads que ainda chamam thunks durante o fim do processo não
 toquem memória destruída. Só os testes (`tests/support/kernel_fixture.h`) usam `reset_kernel_for_tests()`
@@ -256,8 +261,8 @@ para criar um kernel novo por fixture.
 
 **`guest_fatal(o_quê)`**: erro irrecuperável do convidado (`KeBugCheck`, exceção do convidado sem tratamento,
 chamada a endereço sem função recompilada). Escreve `Guest fatal: <o_quê>` e a linha de trilha da thread
-(mesmo formato `Trail (last N): ...` do relatório de saída 3) em stderr, esvazia o stdio e sai com
-`_exit(5)`. Toda condição fatal que não é importação faltando passa por ela.
+(mesmo formato `Trail (last N): ...` do relatório de saída 3) em stderr, esvazia o stdio e o trace de importações
+e sai com `_exit(5)`. Toda condição fatal que não é importação faltando passa por ela.
 
 **Chamadas do kernel para o convidado** (`runtime/kernel/glue.h`): rotinas de início de thread, APCs, DPCs e
 callbacks são funções recompiladas, mas o `lr_runtime_core` não conhece o `PPCContext`. O `main.cpp`
@@ -300,7 +305,8 @@ Tempo limite: nulo = infinito, 0 = consulta, negativo = relativo em 100 ns, posi
 relógio real; as esperas usam prazos do `steady_clock`. `wake_for_apc(thread)` faz uma espera alertável devolver
 `STATUS_USER_APC` (ou a próxima, se a thread não está esperando). A identidade da thread vem de
 `current_thread_token()`: o endereço do KTHREAD numa thread do convidado, um número por thread do host nas outras.
-`snapshot()` lista as esperas em curso para o detector de impasse. Um convidado que muda `signal_state` com
+`snapshot()` lista as esperas em curso para o detector de impasse, cada uma com `apc_pending` (há um
+`wake_for_apc` pendente para aquela thread); `activity()` conta entradas e saídas de espera. Um convidado que muda `signal_state` com
 escrita comum, sem importação, só acorda alguém na próxima operação do despachante naquele cabeçalho.
 
 As importações (`exports/sync.cpp`, semântica do `xboxkrnl_threading.cc` do Xenia, só referência) são
@@ -311,3 +317,58 @@ devolve `STATUS_MUTANT_NOT_OWNED` em vez de levantar exceção), `KeWaitForSingl
 `NtSignalAndWaitForSingleObjectEx` (sinal e espera atômicos). Os `Nt*Create*` alocam o corpo no pool do kernel,
 liberado quando o objeto morre; nomes e atributos de objeto são ignorados (objetos nomeados não existem no M2).
 Esperar num handle sem cabeçalho devolve `STATUS_OBJECT_TYPE_MISMATCH`.
+
+## Diagnóstico
+
+Os modos de falha do ciclo "rodar, ver onde para, implementar" são importação faltando (saída 3), falha (4), erro
+fatal pedido pelo convidado (5) e impasse (6). Além do relatório de cada um, há o trace de importações.
+
+**Trace de importações** (`runtime/kernel/trace.h`): `legacyrecomp-game --trace-imports` (repassado por
+`legacyrecomp run -- --trace-imports`) grava uma linha por chamada de importação:
+
+```
+[<tid>] <Nome> r3=0x%08X r4=0x%08X r5=0x%08X r6=0x%08X -> 0x%08X
+```
+
+com os 32 bits baixos de r3..r6 na entrada e de r3 no retorno; `tid` é o id da thread do convidado (0 fora de
+uma). A linha é escrita depois que a importação volta; uma importação faltando é registrada com `-> missing` antes
+do relatório de saída 3, e uma que nunca volta (`KeBugCheckEx`, `ExTerminateThread`, `HalReturnToFirmware`) não
+tem linha. O destino é `--trace-file <caminho>` (diretórios criados; sem ele, stderr). O `legacyrecomp run`
+(`pipeline::launch`) sempre passa `--trace-file <raiz>/work/logs/game-trace.log`, que sozinho não faz nada.
+As linhas vão para um buffer de 64 KiB protegido por um spinlock (uma flag atômica) e são escritas com `write(2)`
+quando ele enche, na saída normal (`atexit` e o `_exit` do `main.cpp`) e em todo caminho fatal: saída 3 (topo da
+thread), 5 (`guest_fatal`), 6 (detector) e `HalReturnToFirmware`. O handler de falhas (saída 4) só tenta o
+spinlock, sem bloquear (seguro em sinal): se a própria thread que falhou estava escrevendo uma linha, as linhas no
+buffer se perdem. Desligado, cada thunk paga uma leitura atômica.
+
+**Detector de impasse** (`runtime/kernel/deadlock.h`): uma thread do host (não do convidado), iniciada com a
+primeira thread do convidado quando `KernelConfig::deadlock_seconds` > 0 (o `main.cpp` usa 10 s, ou a variável
+de ambiente `LR_DEADLOCK_SECONDS`; 0 desliga; os testes usam 1). A cada segundo ela observa: todas as threads
+vivas do convidado (`Threads::live()`, sem o worker interno nem a espera de `run_main_thread`, que é do host)
+estão numa espera do despachante infinita e não alertável-com-APC-pendente, e não há timer armado nem DPC na fila
+ou rodando (`Timers::has_pending_work()`). Uma thread fora de uma espera do despachante (rodando código,
+suspensa, começando) significa que não há impasse. A observação só vale se `Dispatcher::activity()` não mudou
+durante ela, e o impasse exige o mesmo `activity()` por pelo menos N segundos seguidos. Então o detector imprime
+em stderr
+
+```
+Deadlock: every guest thread is blocked in an infinite wait (no timer, DPC or APC pending) for N s
+Thread <id>: waiting on 0x<cabeçalho> (<tipo>)
+Trail (last K): ...
+```
+
+para cada thread (tipo do `KObject` dono do cabeçalho, ou o byte de tipo do cabeçalho quando o próprio convidado
+o inicializou; várias esperas com `(any)`/`(all)`), esvazia o stdio e o trace e sai com `_exit(6)`. A trilha de
+cada thread é lida pelo handle da sua trilha (`current_trail_handle`/`trail_of`), seguro porque a thread está
+bloqueada.
+
+**Importações de depuração** (`exports/debug.cpp`, semântica do `xboxkrnl_debug.cc`/`xboxkrnl_hal.cc` do Xenia,
+só referência): `DbgPrint` imprime a string de formato literal com prefixo `[guest] ` (até o interpretador de
+`printf`); `DbgBreakPoint` registra e continua; `KeBugCheck(código)`/`KeBugCheckEx(código, p1..p4)` →
+`guest_fatal("KeBugCheckEx 0x%08X (0x..., ...)")`; `HalReturnToFirmware` esvazia o trace e sai com 0;
+`RtlCaptureContext` preenche o `X_CONTEXT` do convidado (`guest_structs.h`, 0xA40 bytes; o Xenia não define
+esse tipo, o layout é o do `CONTEXT` público do Xbox 360) com r1, r3..r10, r13 e lr (`iar` = lr), resto 0,
+`ContextFlags` = controle | inteiros; `RtlRaiseException` → `guest_fatal` com o código da exceção, exceto
+`0x406D1388` (o `SetThreadName` do MSVC, que o Xenia também trata e retorna); `RtlUnwind` e
+`__C_specific_handler` → `guest_fatal` com o nome (sem SEH do convidado). Stubs com sucesso:
+`EtxProducerRegister`/`Unregister`/`Log`, `KeLockL2`/`KeUnlockL2`.

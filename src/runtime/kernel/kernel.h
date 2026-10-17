@@ -11,6 +11,7 @@
 
 #include "common/result.h"
 #include "runtime/guest_memory.h"
+#include "runtime/kernel/deadlock.h"
 #include "runtime/kernel/dispatcher.h"
 #include "runtime/kernel/objects.h"
 #include "runtime/kernel/threads.h"
@@ -27,13 +28,20 @@ struct KernelConfig {
   std::filesystem::path game_dir, user_dir;
   std::string language;
   bool strict_memory = false;
+  // --trace-imports: init_kernel enables the import trace (runtime/kernel/trace.h) to trace_file, or stderr without
+  // one. trace_file alone enables nothing.
+  bool trace_imports = false;
   std::optional<std::filesystem::path> trace_file;
+  // Deadlock detector threshold in seconds (runtime/kernel/deadlock.h); 0 = no detector (the default; main.cpp
+  // sets 10 or LR_DEADLOCK_SECONDS).
+  uint32_t deadlock_seconds = 0;
 };
 
 class Kernel {
  public:
   Kernel(runtime::GuestMemory& mem, KernelConfig cfg);
-  // Stops the timer/DPC worker first (Timers::shutdown), while everything it uses still exists.
+  // Stops the deadlock detector and the timer/DPC worker first (Timers::shutdown), while everything they use still
+  // exists.
   ~Kernel();
   Kernel(const Kernel&) = delete;
   Kernel& operator=(const Kernel&) = delete;
@@ -85,6 +93,9 @@ class Kernel {
   // Clocks, timers, DPCs and the kernel worker thread (runtime/kernel/timers.h).
   Timers& timers() { return timers_; }
 
+  // The deadlock detector (runtime/kernel/deadlock.h).
+  DeadlockDetector& deadlock() { return deadlock_; }
+
   // Kernel variable name -> guest address of its block (filled by resolve_variable_imports).
   std::map<std::string, uint32_t, std::less<>>& variable_blocks() { return variable_blocks_; }
 
@@ -109,6 +120,8 @@ class Kernel {
   // After the heaps: objects are destroyed first, so objects backed by pool memory can still free it.
   ObjectTable objects_;
   Dispatcher dispatcher_;
+  // Last: its watcher reads the members above; ~Kernel stops it first anyway.
+  DeadlockDetector deadlock_;
 };
 
 // Creates the process-wide Kernel over `mem`, which must outlive all guest code and span the whole 4 GiB guest
@@ -128,7 +141,7 @@ void reset_kernel_for_tests();
 // Ends the process for a condition the guest cannot recover from (KeBugCheck, an unhandled guest exception, a
 // guest call to an address without a recompiled function, ...): writes "Guest fatal: <what>\n" followed by the
 // calling thread's import trail (format_trail, the same line as the exit-3 report) to stderr, flushes stdio and
-// calls _exit(kExitGuestFatal), i.e. exit code 5.
+// calls _exit(kExitGuestFatal), i.e. exit code 5. The import trace is flushed first.
 // guest_fatal: not async-signal-safe, never call from signal handlers.
 [[noreturn]] void guest_fatal(std::string_view what);
 

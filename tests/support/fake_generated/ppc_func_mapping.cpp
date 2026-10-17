@@ -9,6 +9,7 @@ PPCFuncMapping PPCFuncMappings[] = {
 	{ 0x8200014C, __imp__FakeCallback },
 	{ 0x82000150, __imp__ExCreateThread },
 	{ 0x82000154, __imp__NtWaitForSingleObjectEx },
+	{ 0x82000158, __imp__KeWaitForSingleObject },
 	{ 0x82000160, sub_82000160 },
 	{ 0x82000170, sub_82000170 },
 	{ 0x82000180, sub_82000180 },
@@ -20,5 +21,7 @@ PPCFuncMapping PPCFuncMappings[] = {
 	{ 0x820002A0, sub_820002A0 },
 	{ 0x820002C0, sub_820002C0 },
 	{ 0x820002E0, sub_820002E0 },
+	{ 0x82000300, sub_82000300 },
+	{ 0x82000320, sub_82000320 },
 	{ 0, nullptr }
 };

@@ -3,7 +3,9 @@
 
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
+#include <vector>
 
 #include "pipeline/pipeline.h"
 #include "pipeline/stages/build_stage.h"
@@ -157,4 +159,26 @@ TEST_CASE("launch forwards Ctrl+C to the game, survives it and returns 128 + SIG
   auto r = launch(opts, {});
   REQUIRE(r);
   CHECK(r.value() == 130);
+}
+
+TEST_CASE("launch passes --trace-file <root>/work/logs/game-trace.log to the game", "[unit][trace]") {
+  TempDir t;
+  write(t.path / "work" / "image" / "default_tu1.xex", "image");
+  // Stand-in game: records its arguments, one per line.
+  const fs::path game = t.path / "bin" / "legacyrecomp-game";
+  const fs::path args = t.path / "args.txt";
+  write(game, "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done > '" + args.string() + "'\nexit 0\n");
+  fs::permissions(game, fs::perms::owner_all);
+  Options opts;
+  opts.root = t.path;
+  const std::vector<std::string> extra = {"--trace-imports"};
+  auto r = launch(opts, extra);
+  REQUIRE(r);
+  CHECK(r.value() == 0);
+  std::ifstream f(args);
+  std::stringstream ss;
+  ss << f.rdbuf();
+  const std::string expect_file = (t.path / "work" / "logs" / "game-trace.log").string();
+  CHECK(ss.str().find("--trace-file\n" + expect_file + "\n") != std::string::npos);
+  CHECK(ss.str().find("--trace-imports\n") != std::string::npos);  // extra arguments still reach the game
 }

@@ -681,3 +681,21 @@ TEST_CASE("KeDelayExecutionThread with a null interval yields instead of blockin
   CHECK(thread_of(c.handle)->exit_code() == STATUS_SUCCESS);
   CHECK(f.call("NtClose", c.handle) == STATUS_SUCCESS);
 }
+
+// Task 20 carried item: an APC queued while the target thread finishes must not leave a pending wake-up behind for
+// the dead thread's token (queue_apc and finish serialize on the thread's lock). Stress: many short-lived threads,
+// each hammered with APCs until it has finished.
+TEST_CASE("queue_apc racing a finishing thread leaves no pending APC behind", "[unit][kernel][threads]") {
+  KernelFixture f;
+  def(kFnA, [](const std::vector<uint64_t>&) -> uint64_t { return 0; });
+  for (int i = 0; i < 200; ++i) {
+    const Created c = create(f, kFnA, 0);
+    REQUIRE(c.status == STATUS_SUCCESS);
+    const std::shared_ptr<GuestThread> t = thread_of(c.handle);
+    while (!t->finished()) t->queue_apc({kFnA, 0, 0, 0});
+    t->queue_apc({kFnA, 0, 0, 0});  // after finish: dropped
+    CHECK(wait_handle(f, c.handle) == STATUS_WAIT_0);
+    CHECK_FALSE(kernel().dispatcher().apc_pending(t->kthread()));
+    CHECK(f.call("NtClose", c.handle) == STATUS_SUCCESS);
+  }
+}

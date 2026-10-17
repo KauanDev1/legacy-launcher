@@ -59,6 +59,7 @@ struct WaitInfo {
   WaitType type;
   bool infinite;
   bool alertable;
+  bool apc_pending;  // wake_for_apc left a wake-up for this token (an alertable wait would return STATUS_USER_APC)
 };
 
 class Dispatcher {
@@ -99,8 +100,14 @@ class Dispatcher {
   // whose KTHREAD (its token) reuses the same guest address.
   void thread_exited(uint32_t thread_token);
 
-  // Threads currently blocked in wait(), for the deadlock detector (Task 20).
+  // Threads currently blocked in wait(), for the deadlock detector (runtime/kernel/deadlock.h).
   std::vector<WaitInfo> snapshot() const;
+  // Whether a wake_for_apc for `thread_token` is pending (not yet consumed by an alertable wait nor cleared by
+  // thread_exited).
+  bool apc_pending(uint32_t thread_token) const;
+  // Counts wait entries and exits (every call to wait() or signal_and_wait() that reaches the wait logic, and every
+  // blocked wait that ends): unchanged between two reads means no thread entered or left a wait meanwhile.
+  uint64_t activity() const { return activity_.load(std::memory_order_acquire); }
 
   // Identity of the calling thread for mutant ownership and wake_for_apc: the hook's value when one is set (the
   // thread task sets the current KTHREAD guest address; 0 from the hook means "not a guest thread"), else a non-zero
@@ -148,6 +155,7 @@ class Dispatcher {
   // thread token -> headers of the mutants it owns (kept in step with the owner field by set_owner).
   std::unordered_map<uint32_t, std::vector<uint32_t>> owned_;
   std::atomic<uint32_t (*)()> token_hook_{nullptr};
+  std::atomic<uint64_t> activity_{0};
 };
 
 }  // namespace lr::kernel

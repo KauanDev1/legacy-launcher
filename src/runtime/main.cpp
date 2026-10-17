@@ -3,7 +3,11 @@
 // generated ppc_config.h / ppc_recomp_*.cpp / ppc_func_mapping.cpp and the generated import thunks, and links
 // lr_runtime_core with --whole-archive so its LR_KERNEL / LR_KERNEL_STUB registrations are kept.
 //
-// Usage: <game> --image <xex> [--data <dir>] [--headless] [--coverage] [--strict-memory]
+// Usage: <game> --image <xex> [--data <dir>] [--headless] [--coverage] [--strict-memory] [--trace-imports]
+//        [--trace-file <path>]
+// --trace-imports logs every import call (runtime/kernel/trace.h) to --trace-file, or stderr without one; the
+// launcher always passes --trace-file, which alone does nothing. LR_DEADLOCK_SECONDS (default 10, 0 = off) sets the
+// deadlock detector threshold (runtime/kernel/deadlock.h).
 // Exit codes: 0 ok (also: window closed by the user), 2 usage/load error, 3 unimplemented import, 4 fault,
 // 5 guest fatal (lr::kernel::guest_fatal), 6 deadlock.
 
@@ -12,6 +16,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -30,6 +35,7 @@
 #include "runtime/kernel/kernel.h"
 #include "runtime/kernel/registry.h"
 #include "runtime/kernel/threads.h"
+#include "runtime/kernel/trace.h"
 #include "runtime/kernel/variables.h"
 #include "runtime/loader.h"
 #include "runtime/xex_imports.h"
@@ -48,11 +54,15 @@ struct Options {
   bool headless = false;
   bool coverage = false;
   bool strict_memory = false;  // uncommitted heap pages PROT_NONE (lr::kernel::KernelConfig::strict_memory)
+  bool trace_imports = false;
+  std::string trace_file;  // empty: stderr
 };
 
 int usage(const char* msg) {
   if (msg) std::fprintf(stderr, "error: %s\n", msg);
-  std::fprintf(stderr, "usage: game --image <xex> [--data <dir>] [--headless] [--coverage] [--strict-memory]\n");
+  std::fprintf(stderr,
+               "usage: game --image <xex> [--data <dir>] [--headless] [--coverage] [--strict-memory] "
+               "[--trace-imports] [--trace-file <path>]\n");
   return kExitUsage;
 }
 
@@ -64,6 +74,15 @@ std::vector<char> read_file(const std::string& path, bool& ok) {
 }
 
 bool is_xex2(const std::vector<char>& b) { return b.size() >= 4 && std::memcmp(b.data(), "XEX2", 4) == 0; }
+
+// LR_DEADLOCK_SECONDS: the detector threshold (tests use 1). Unset or not a number: 10; 0 disables the detector.
+uint32_t deadlock_seconds() {
+  const char* v = std::getenv("LR_DEADLOCK_SECONDS");
+  if (v == nullptr) return 10;
+  char* end = nullptr;
+  const unsigned long n = std::strtoul(v, &end, 10);
+  return (end == v || *end != 0 || n > 86400) ? 10 : static_cast<uint32_t>(n);
+}
 
 // Function rows come from the generated thunks; with --image <xex>, the XEX's variable imports (type-0 records
 // without a thunk) are added as `variable` rows: implemented when a kernel variable is registered for them.
@@ -198,6 +217,7 @@ int run_with_window(uint32_t entry, uint32_t stack_size) {
   if (closed && !done) {
     // The user closed the window while the guest is still running: report success and take the guest down with us.
     std::fflush(nullptr);
+    lr::kernel::flush_import_trace();
     _exit(0);
   }
   runner.join();
@@ -215,9 +235,10 @@ int main(int argc, char** argv) {
     if (a == "--headless") opt.headless = true;
     else if (a == "--coverage") opt.coverage = true;
     else if (a == "--strict-memory") opt.strict_memory = true;
-    else if (a == "--image" || a == "--data") {
+    else if (a == "--trace-imports") opt.trace_imports = true;
+    else if (a == "--image" || a == "--data" || a == "--trace-file") {
       if (i + 1 >= argc) return usage(("missing value for " + a).c_str());
-      (a == "--image" ? opt.image : opt.data) = argv[++i];
+      (a == "--image" ? opt.image : a == "--data" ? opt.data : opt.trace_file) = argv[++i];
     } else {
       return usage(("unknown argument " + a).c_str());
     }
@@ -243,6 +264,9 @@ int main(int argc, char** argv) {
   cfg.game_dir = std::filesystem::path(opt.image).parent_path();
   if (!opt.data.empty()) cfg.user_dir = opt.data;
   cfg.strict_memory = opt.strict_memory;
+  cfg.trace_imports = opt.trace_imports;
+  if (!opt.trace_file.empty()) cfg.trace_file = opt.trace_file;
+  cfg.deadlock_seconds = deadlock_seconds();
   if (auto r = lr::kernel::init_kernel(mem.value(), std::move(cfg)); !r) {
     std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
     return kExitUsage;
@@ -305,5 +329,6 @@ int main(int argc, char** argv) {
   // The main guest thread has returned (or the window failed): end the process now, taking any other guest threads
   // down with it, without running static destructors under their feet.
   std::fflush(nullptr);
+  lr::kernel::flush_import_trace();
   _exit(rc);
 }

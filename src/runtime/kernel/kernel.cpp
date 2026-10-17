@@ -11,6 +11,7 @@
 
 #include "runtime/guest_thread.h"
 #include "runtime/kernel/registry.h"
+#include "runtime/kernel/trace.h"
 #include "runtime/memory_map.h"
 
 namespace lr::kernel {
@@ -28,9 +29,13 @@ Kernel::Kernel(runtime::GuestMemory& mem, KernelConfig cfg)
       heap64k_(runtime::kHeap64kBase, runtime::kHeap64kEnd, 0x10000),
       stacks_(runtime::kStacksBase, runtime::kStacksEnd, 0x1000),
       timers_(*this),
-      dispatcher_(mem.base()) {}
+      dispatcher_(mem.base()),
+      deadlock_(*this) {}
 
-Kernel::~Kernel() { timers_.shutdown(); }
+Kernel::~Kernel() {
+  deadlock_.stop();
+  timers_.shutdown();
+}
 
 Result<void> Kernel::setup_memory() {
   if (mem_.size() < (uint64_t{1} << 32))
@@ -92,6 +97,9 @@ uint32_t Kernel::kernel_data_alloc(uint32_t size, uint32_t align) {
 }
 
 Result<void> init_kernel(runtime::GuestMemory& mem, KernelConfig cfg) {
+  if (g_kernel.load(std::memory_order_acquire) != nullptr)
+    return Error{ErrorCode::Internal, "init_kernel called twice", "the kernel is initialized once per process"};
+  if (cfg.trace_imports) LR_TRY(enable_import_trace(cfg.trace_file));
   auto* k = new Kernel(mem, std::move(cfg));
   Kernel* expected = nullptr;
   if (!g_kernel.compare_exchange_strong(expected, k, std::memory_order_acq_rel)) {
@@ -121,12 +129,14 @@ void reset_kernel_for_tests() {
   // The worker may still be running guest DPC code, which needs kernel(): stop it before the instance goes away.
   if (Kernel* k = g_kernel.load(std::memory_order_acquire)) k->timers().shutdown();
   delete g_kernel.exchange(nullptr, std::memory_order_acq_rel);
+  disable_import_trace();
 }
 
 void guest_fatal(std::string_view what) {
   const std::string msg = "Guest fatal: " + std::string(what) + "\n" + format_trail(current_trail());
   std::fputs(msg.c_str(), stderr);
   std::fflush(nullptr);
+  flush_import_trace();
   _exit(runtime::kExitGuestFatal);
 }
 

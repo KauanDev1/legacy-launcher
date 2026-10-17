@@ -11,6 +11,8 @@
 #include <cstring>
 #include <string>
 
+#include "runtime/kernel/trace.h"
+
 namespace lr::runtime {
 
 namespace {
@@ -88,6 +90,7 @@ void handler(int signo, siginfo_t* info, void*) {
   char buf[kFaultBufSize];
   size_t n = format_fault(buf, sizeof buf - 1, signo, g_installed.base, g_installed.size, info ? info->si_addr : nullptr);
   buf[n++] = '\n';
+  lr::kernel::flush_import_trace_from_signal();  // async-signal-safe: never blocks, may skip (kernel/trace.h)
   ssize_t ignored = ::write(2, buf, n);
   (void)ignored;
   ::_exit(4);

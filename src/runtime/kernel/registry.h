@@ -51,6 +51,12 @@ void set_import_entry_hook(void (*hook)());
 // The calling thread's traced imports (last 32), oldest first.
 std::vector<std::string> current_trail();
 
+// The calling thread's trail as an opaque handle, valid while that thread lives, and the trail behind a handle. The
+// deadlock detector reads the trails of guest threads blocked in a wait this way (their last trace() happened before
+// they took the dispatcher lock to block, which the detector takes too).
+const void* current_trail_handle();
+std::vector<std::string> trail_of(const void* handle);
+
 // "Trail (last N): a -> b\n" — the trail line of the exit-3 report, shared with guest_fatal (exit 5).
 std::string format_trail(const std::vector<std::string>& trail);
 

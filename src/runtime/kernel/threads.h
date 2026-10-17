@@ -71,6 +71,8 @@ class GuestThread final : public KObject {
   uint32_t stack_top() const { return layout_.stack_top; }
   uint32_t exit_code() const { return exit_code_.load(std::memory_order_acquire); }
   bool finished() const { return finished_.load(std::memory_order_acquire); }
+  // This thread's import trail (registry.h trail_of) while it runs, nullptr before it starts and after it ends.
+  const void* trail_handle() const { return trail_.load(std::memory_order_acquire); }
 
   // Suspend count. Both return the previous count; resume() at 0 does nothing. A suspended thread blocks before
   // its start routine runs, or (cooperatively) at its next import entry when another thread suspends it.
@@ -111,6 +113,7 @@ class GuestThread final : public KObject {
   uint32_t handle_ = 0;
   std::atomic<uint32_t> exit_code_{0};
   std::atomic<bool> finished_{false};
+  std::atomic<const void*> trail_{nullptr};
   std::atomic<int32_t> priority_{0};
   std::atomic<uint32_t> affinity_;
   std::atomic<int32_t> apc_disable_{0};

@@ -36,6 +36,11 @@ TEST_CASE("render_import_thunks emits a cached lookup per import", "[unit]") {
   // The register copy lives once in a shared helper, not in every thunk.
   CHECK(src.find("lr::kernel::trace(name)") != std::string::npos);
   CHECK(src.find("unimplemented_import(name, uint32_t(ctx.lr))") != std::string::npos);
+  // --trace-imports: a missing import is logged before the throw, any other call after it returns (runtime/kernel/trace.h).
+  CHECK(src.find("#include \"runtime/kernel/trace.h\"") != std::string::npos);
+  CHECK(src.find("lr::kernel::trace_import_missing(name, c);\n    lr::kernel::unimplemented_import") !=
+        std::string::npos);
+  CHECK(src.find("e.fn(c);\n  lr::kernel::trace_import_return(name, c);") != std::string::npos);
   CHECK(src.find("c.gpr[7] = ctx.r10.u64;") != std::string::npos);
   // The guest frame of the call is recorded for call_guest before the import runs.
   CHECK(src.find("#include \"runtime/kernel/glue.h\"") != std::string::npos);

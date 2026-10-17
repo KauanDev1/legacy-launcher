@@ -130,6 +130,7 @@ uint32_t Dispatcher::wait(std::span<const uint32_t> headers, WaitType type, Time
 uint32_t Dispatcher::wait_locked(std::unique_lock<std::mutex>& lock, std::span<const uint32_t> headers,
                                  WaitType type, Timeout t, bool alertable) {
   const uint32_t token = current_thread_token();
+  activity_.fetch_add(1, std::memory_order_acq_rel);
   uint32_t result = 0;
   if (try_satisfy(headers, type, token, result)) return result;
   if (alertable) {
@@ -183,6 +184,7 @@ uint32_t Dispatcher::wait_locked(std::unique_lock<std::mutex>& lock, std::span<c
     if (it->second.empty()) by_header_.erase(it);
   }
   std::erase(waiters_, &w);
+  activity_.fetch_add(1, std::memory_order_acq_rel);
   return w.result;
 }
 
@@ -331,8 +333,14 @@ std::vector<WaitInfo> Dispatcher::snapshot() const {
   std::lock_guard<std::mutex> lock(mutex_);
   std::vector<WaitInfo> out;
   for (const Waiter* w : waiters_)
-    if (!w->done) out.push_back({w->token, w->headers, w->type, w->infinite, w->alertable});
+    if (!w->done)
+      out.push_back({w->token, w->headers, w->type, w->infinite, w->alertable, apc_pending_.count(w->token) != 0});
   return out;
+}
+
+bool Dispatcher::apc_pending(uint32_t thread_token) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return apc_pending_.count(thread_token) != 0;
 }
 
 }  // namespace lr::kernel

@@ -61,10 +61,16 @@ void trace(const char* name) {
 
 void set_import_entry_hook(void (*hook)()) { g_entry_hook.store(hook, std::memory_order_release); }
 
-std::vector<std::string> current_trail() {
+std::vector<std::string> current_trail() { return trail_of(&t_trail); }
+
+const void* current_trail_handle() { return &t_trail; }
+
+std::vector<std::string> trail_of(const void* handle) {
   std::vector<std::string> out;
-  const size_t n = t_trail.count < kTrailSize ? t_trail.count : kTrailSize;
-  for (size_t i = t_trail.count - n; i < t_trail.count; ++i) out.emplace_back(t_trail.names[i % kTrailSize]);
+  if (handle == nullptr) return out;
+  const Trail& t = *static_cast<const Trail*>(handle);
+  const size_t n = t.count < kTrailSize ? t.count : kTrailSize;
+  for (size_t i = t.count - n; i < t.count; ++i) out.emplace_back(t.names[i % kTrailSize]);
   return out;
 }
 

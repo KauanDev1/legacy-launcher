@@ -74,7 +74,9 @@ Result<int> launch(const Options& options, std::span<const std::string> extra_ar
     return Error{ErrorCode::NotFound, "patched image missing: " + image.string(),
                  "run `legacyrecomp install --iso <iso>` again"};
 
-  std::vector<std::string> args = {game.string(), "--image", image.string(), "--data", p.game.string()};
+  // --trace-file always: the game only writes it when --trace-imports is among the extra arguments (spec section 11).
+  std::vector<std::string> args = {game.string(), "--image", image.string(), "--data", p.game.string(),
+                                   "--trace-file", (p.logs / "game-trace.log").string()};
   args.insert(args.end(), extra_args.begin(), extra_args.end());
   std::vector<char*> argv;
   for (auto& a : args) argv.push_back(a.data());

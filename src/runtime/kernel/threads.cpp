@@ -24,6 +24,7 @@
 #include "runtime/kernel/guest_structs.h"
 #include "runtime/kernel/kernel.h"
 #include "runtime/kernel/registry.h"
+#include "runtime/kernel/trace.h"
 #include "runtime/loader.h"
 
 namespace lr::kernel {
@@ -73,6 +74,7 @@ void store_signal_state(uint8_t* base, uint32_t header, int32_t v) {
 [[noreturn]] void die(int code, const std::string& msg) {
   std::fputs(msg.c_str(), stderr);
   std::fflush(nullptr);
+  flush_import_trace();
   _exit(code);
 }
 
@@ -130,12 +132,13 @@ void GuestThread::wait_while_suspended() {
   resumed_.wait(lock, [&] { return suspend_count_.load() == 0; });
 }
 
+// wake_for_apc runs under the thread lock, as does finish()'s `finished_` store: either this call completes before
+// finish() (whose Dispatcher::thread_exited then clears the wake-up) or it sees `finished_` and does nothing, so no
+// pending wake-up outlives the thread. Lock order: thread mutex, then the dispatcher's (never the reverse).
 void GuestThread::queue_apc(const GuestApc& apc) {
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (finished()) return;
-    apcs_.push_back(apc);
-  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (finished()) return;
+  apcs_.push_back(apc);
   kernel_.dispatcher().wake_for_apc(kthread());
 }
 
@@ -157,13 +160,9 @@ void GuestThread::enter_critical_region() { apc_disable_.fetch_add(1); }
 
 void GuestThread::leave_critical_region() {
   if (apc_disable_.fetch_sub(1) != 1) return;
-  // APCs that arrived while disabled: re-arm the next alertable wait.
-  bool pending = false;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    pending = !apcs_.empty();
-  }
-  if (pending) kernel_.dispatcher().wake_for_apc(kthread());
+  // APCs that arrived while disabled: re-arm the next alertable wait (under the lock, as queue_apc).
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!finished() && !apcs_.empty()) kernel_.dispatcher().wake_for_apc(kthread());
 }
 
 uint32_t GuestThread::tls_slot_address(uint32_t index) const {
@@ -175,6 +174,7 @@ void GuestThread::run(const ThreadParams& p) {
   if (auto r = runtime::install_thread_altstack(); !r)
     die(runtime::kExitFault, "guest thread " + std::to_string(id_) + ": cannot install sigaltstack: " + r.error().message + "\n");
   t_current = this;
+  trail_.store(current_trail_handle(), std::memory_order_release);
   wait_while_suspended();
   uint32_t code = 0;
   const uint32_t r1 = layout_.stack_top - runtime::kGuestStackTopSlack;
@@ -225,6 +225,7 @@ void GuestThread::run_internal(void (*body)(void*), void* arg) {
 }
 
 void GuestThread::finish(uint32_t code) {
+  trail_.store(nullptr, std::memory_order_release);
   exit_code_.store(code, std::memory_order_release);
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -450,6 +451,7 @@ Result<std::shared_ptr<GuestThread>> create_guest_thread(const ThreadParams& p) 
   thread->set_guest_header(thread->kthread());
   thread->set_handle(k.objects().add(thread));
   threads.add(thread);
+  k.deadlock().on_guest_thread_created();
 
   host_started();
   auto* holder = new std::pair<std::shared_ptr<GuestThread>, ThreadParams>(thread, p);

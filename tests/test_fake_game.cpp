@@ -9,6 +9,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -36,7 +37,7 @@ struct TempDir : lr::testing::TempDir {
   TempDir() : lr::testing::TempDir("lr_fake_game") {}
 };
 
-RunResult run_game(const fs::path& dir, const std::vector<std::string>& args) {
+RunResult run_game(const fs::path& dir, const std::vector<std::string>& args, const std::vector<std::string>& extra_env = {}) {
   const fs::path log = dir / "out.log";
   posix_spawn_file_actions_t fa;
   posix_spawn_file_actions_init(&fa);
@@ -48,7 +49,12 @@ RunResult run_game(const fs::path& dir, const std::vector<std::string>& args) {
   for (auto& s : store) argv.push_back(s.data());
   argv.push_back(nullptr);
   pid_t pid;
-  REQUIRE(posix_spawn(&pid, LR_FAKE_GAME_PATH, &fa, nullptr, argv.data(), environ) == 0);
+  std::vector<std::string> env_store(extra_env);
+  for (char** e = environ; *e != nullptr; ++e) env_store.emplace_back(*e);
+  std::vector<char*> envp;
+  for (auto& s : env_store) envp.push_back(s.data());
+  envp.push_back(nullptr);
+  REQUIRE(posix_spawn(&pid, LR_FAKE_GAME_PATH, &fa, nullptr, argv.data(), envp.data()) == 0);
   posix_spawn_file_actions_destroy(&fa);
   int st = 0;
   REQUIRE(waitpid(pid, &st, 0) == pid);
@@ -61,7 +67,7 @@ RunResult run_game(const fs::path& dir, const std::vector<std::string>& args) {
 std::string write_image(const fs::path& dir, uint32_t entry) {
   const fs::path p = dir / "fake.elf";
   auto elf = lr::test::build_elf(entry, {{".rdata", 0x82000000, std::vector<uint8_t>(16, 0), false},
-                                         {".text", 0x82000100, std::vector<uint8_t>(0x200, 0), true}});
+                                         {".text", 0x82000100, std::vector<uint8_t>(0x300, 0), true}});
   std::ofstream(p, std::ios::binary).write(reinterpret_cast<const char*>(elf.data()), std::streamsize(elf.size()));
   return p.string();
 }
@@ -76,7 +82,7 @@ TEST_CASE("fake game --coverage lists three states", "[unit]") {
   CHECK(r.out.find("| FakeStub | function | stub |") != std::string::npos);
   CHECK(r.out.find("| FakeCallback | function | implemented |") != std::string::npos);
   CHECK(r.out.find("| FakeMissing | function | missing |") != std::string::npos);
-  CHECK(r.out.find("Implemented: 4, stub: 1, missing: 1 / 6 functions + 0 variables") != std::string::npos);
+  CHECK(r.out.find("Implemented: 5, stub: 1, missing: 1 / 7 functions + 0 variables") != std::string::npos);
 }
 
 TEST_CASE("fake game --coverage --image adds the XEX's variable imports", "[unit]") {
@@ -105,7 +111,7 @@ TEST_CASE("fake game --coverage --image adds the XEX's variable imports", "[unit
   CHECK(r.out.find("| XboxKrnlVersion4Digit | variable | missing |") != std::string::npos);
   CHECK(r.out.find("DbgPrint") == std::string::npos);  // a function: its row comes from the generated thunks
   CHECK(r.out.find("| KeTimeStampBundle | variable | implemented |") != std::string::npos);
-  CHECK(r.out.find("Implemented: 6, stub: 1, missing: 2 / 6 functions + 3 variables") != std::string::npos);
+  CHECK(r.out.find("Implemented: 7, stub: 1, missing: 2 / 7 functions + 3 variables") != std::string::npos);
 }
 
 // The XEX TLS header (key 0x00020104) is validated at load: an unusable one is a load error (exit 2), never a
@@ -231,6 +237,60 @@ TEST_CASE("missing import on a secondary guest thread exits 3 with a Thread line
   CHECK(r.code == 3);
   CHECK(r.out.find("Unimplemented import: FakeMissing\nCalled from: 0x82000164\nThread: 2\n") != std::string::npos);
   CHECK(r.out.find("Trail (last 1): FakeMissing") != std::string::npos);
+}
+
+// sub_82000300 (thread 1) waits forever for thread 2 (sub_82000320), which waits forever for thread 1's KTHREAD:
+// with LR_DEADLOCK_SECONDS=1 the detector reports both waits with their object kinds and trails, then exits 6.
+TEST_CASE("two guest threads waiting on each other exit 6 with both waits listed", "[unit][threads][deadlock]") {
+  TempDir td;
+  const auto start = std::chrono::steady_clock::now();
+  auto r = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x82000300)}, {"LR_DEADLOCK_SECONDS=1"});
+  INFO(r.out);
+  CHECK(r.code == 6);
+  CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(30));
+  CHECK(r.out.find("Deadlock: every guest thread is blocked in an infinite wait") != std::string::npos);
+  CHECK(r.out.find("Thread 1: waiting on 0x") != std::string::npos);
+  CHECK(r.out.find("Thread 2: waiting on 0x") != std::string::npos);
+  CHECK(r.out.find("(thread)") != std::string::npos);
+  CHECK(r.out.find("Trail (last 2): ExCreateThread -> NtWaitForSingleObjectEx") != std::string::npos);
+  CHECK(r.out.find("Trail (last 1): KeWaitForSingleObject") != std::string::npos);
+}
+
+// sub_82000180 calls FakeImplemented(41) -> 42 and FakeStub(7) -> 0 on thread 1, nothing else.
+TEST_CASE("fake game --trace-imports writes one line per call", "[unit][trace]") {
+  TempDir td;
+  const fs::path file = td.path / "logs" / "game-trace.log";
+  auto r = run_game(td.path, {"--headless", "--trace-imports", "--trace-file", file.string(), "--image",
+                              write_image(td.path, 0x82000180)});
+  INFO(r.out);
+  CHECK(r.code == 0);
+  std::ifstream f(file);
+  std::stringstream ss;
+  ss << f.rdbuf();
+  CHECK(ss.str() ==
+        "[1] FakeImplemented r3=0x00000029 r4=0x00000000 r5=0x00000000 r6=0x00000000 -> 0x0000002A\n"
+        "[1] FakeStub r3=0x00000007 r4=0x00000000 r5=0x00000000 r6=0x00000000 -> 0x00000000\n");
+
+  // A missing import is logged before the exit-3 report, and the buffer is flushed on that path.
+  const fs::path missing = td.path / "missing.log";
+  auto m = run_game(td.path, {"--headless", "--trace-imports", "--trace-file", missing.string(), "--image",
+                              write_image(td.path, 0x82000100)});
+  CHECK(m.code == 3);
+  std::ifstream mf(missing);
+  std::stringstream ms;
+  ms << mf.rdbuf();
+  CHECK(ms.str().find("[1] FakeStub ") != std::string::npos);
+  CHECK(ms.str().find("[1] FakeMissing r3=") != std::string::npos);
+  CHECK(ms.str().find("-> missing\n") != std::string::npos);
+
+  // Without --trace-file the trace goes to stderr; without --trace-imports nothing is written.
+  auto e = run_game(td.path, {"--headless", "--trace-imports", "--image", write_image(td.path, 0x82000180)});
+  CHECK(e.code == 0);
+  CHECK(e.out.find("[1] FakeStub r3=0x00000007") != std::string::npos);
+  const fs::path off = td.path / "off.log";
+  auto o = run_game(td.path, {"--headless", "--trace-file", off.string(), "--image", write_image(td.path, 0x82000180)});
+  CHECK(o.code == 0);
+  CHECK_FALSE(fs::exists(off));
 }
 
 TEST_CASE("fake game usage and load errors exit 2", "[unit]") {
