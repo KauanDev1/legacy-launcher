@@ -76,22 +76,24 @@ TEST_CASE("fake game --coverage lists three states", "[unit]") {
   CHECK(r.out.find("| FakeStub | function | stub |") != std::string::npos);
   CHECK(r.out.find("| FakeCallback | function | implemented |") != std::string::npos);
   CHECK(r.out.find("| FakeMissing | function | missing |") != std::string::npos);
-  CHECK(r.out.find("Implemented: 2, stub: 1, missing: 1 / 4") != std::string::npos);
+  CHECK(r.out.find("Implemented: 2, stub: 1, missing: 1 / 4 functions + 0 variables") != std::string::npos);
 }
 
 TEST_CASE("fake game --coverage --image adds the XEX's variable imports", "[unit]") {
   TempDir td;
   // xboxkrnl.exe: DbgPrint (0x003) as function (type-0 + type-1 records), XexExecutableModuleHandle (0x193,
-  // registered) and XboxKrnlVersion4Digit (0x345, not registered) as variables.
+  // registered), XboxKrnlVersion4Digit (0x345, not registered) and KeTimeStampBundle (0x0AD, registered as Stub
+  // until Task 18 keeps it current) as variables.
   std::vector<uint8_t> text(0x100, 0), data(0x100, 0);
   lr::testing::put_be32(data, 0x0, 0x003);
   lr::testing::put_be32(text, 0x10, 0x01000003);
   lr::testing::put_be32(data, 0x4, 0x193);
   lr::testing::put_be32(data, 0x8, 0x345);
+  lr::testing::put_be32(data, 0xC, 0x0AD);
   const auto xex = lr::testing::Xex2Builder()
                        .entry_point(0x82001000)
                        .image_base(0x82000000)
-                       .import_library("xboxkrnl.exe", {0x82002000, 0x82001010, 0x82002004, 0x82002008})
+                       .import_library("xboxkrnl.exe", {0x82002000, 0x82001010, 0x82002004, 0x82002008, 0x8200200C})
                        .pe_image(0x82000000, 0x3000, {{".text", 0x1000, text, true}, {".data", 0x2000, data, false}})
                        .build();
   const fs::path p = td.path / "default.xex";
@@ -102,7 +104,8 @@ TEST_CASE("fake game --coverage --image adds the XEX's variable imports", "[unit
   CHECK(r.out.find("| XexExecutableModuleHandle | variable | implemented |") != std::string::npos);
   CHECK(r.out.find("| XboxKrnlVersion4Digit | variable | missing |") != std::string::npos);
   CHECK(r.out.find("DbgPrint") == std::string::npos);  // a function: its row comes from the generated thunks
-  CHECK(r.out.find("Implemented: 3, stub: 1, missing: 2 / 6") != std::string::npos);
+  CHECK(r.out.find("| KeTimeStampBundle | variable | stub |") != std::string::npos);
+  CHECK(r.out.find("Implemented: 3, stub: 2, missing: 2 / 4 functions + 3 variables") != std::string::npos);
 }
 
 // sub_82000280 calls FakeCallback(sub_82000200, 41); the callback checks the frame call_guest built and returns

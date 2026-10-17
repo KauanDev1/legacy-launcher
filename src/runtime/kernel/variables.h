@@ -6,6 +6,7 @@
 
 #include "common/result.h"
 #include "formats/xex2.h"
+#include "runtime/kernel/abi.h"
 #include "runtime/guest_memory.h"
 #include "runtime/loader.h"
 
@@ -20,11 +21,17 @@ namespace lr::kernel {
 using VariableInit = void (*)(uint8_t* host, uint32_t guest);
 
 // Registers kernel variable `name` with a block of `size` bytes, filled by `init` (may be null) when the block is
-// allocated. Registering a name twice is a programming error: it prints the name and aborts. Safe to call from
+// allocated. `state` is what --coverage reports (Stub: the block exists but its contents are not maintained yet).
+// Registering a name twice is a programming error: it prints the name and aborts. Safe to call from
 // static initializers.
-void register_variable(const char* name, uint32_t size, VariableInit init);
+void register_variable(const char* name, uint32_t size, VariableInit init,
+                       ImportState state = ImportState::Implemented);
 
 bool is_variable_registered(std::string_view name);
+
+// Coverage state of variable `name`: as registered (Implemented, or Stub for a block that exists but is not kept
+// up to date yet), Missing when not registered.
+ImportState variable_state(std::string_view name);
 
 // Guest address of the block of registered variable `name`, or 0 when unknown or not yet allocated (blocks are
 // allocated by resolve_variable_imports, for every registered variable, imported or not).

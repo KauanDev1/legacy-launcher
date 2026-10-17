@@ -110,12 +110,26 @@ int print_coverage(const std::string& image) {
     char ordinal[8];
     std::snprintf(ordinal, sizeof ordinal, "0x%04X", static_cast<unsigned>(v.ordinal));
     const std::string name = v.name.empty() ? v.library + "@" + ordinal : v.name;
-    const bool have = !v.name.empty() && lr::kernel::is_variable_registered(v.name);
-    ++(have ? implemented : missing);
-    std::printf("| %s | variable | %s |\n", name.c_str(), have ? "implemented" : "missing");
+    const ImportState state = v.name.empty() ? ImportState::Missing : lr::kernel::variable_state(v.name);
+    const char* status = "missing";
+    switch (state) {
+      case ImportState::Implemented:
+        status = "implemented";
+        ++implemented;
+        break;
+      case ImportState::Stub:
+        status = "stub";
+        ++stub;
+        break;
+      case ImportState::Missing:
+        ++missing;
+        break;
+    }
+    std::printf("| %s | variable | %s |\n", name.c_str(), status);
   }
-  std::printf("\nImplemented: %zu, stub: %zu, missing: %zu / %zu\n", implemented, stub, missing,
-              lr_import_count + variables.size());
+  // Spec section 5.3: functions and variables are counted separately in the total.
+  std::printf("\nImplemented: %zu, stub: %zu, missing: %zu / %zu functions + %zu variables\n", implemented, stub,
+              missing, lr_import_count, variables.size());
   return 0;
 }
 

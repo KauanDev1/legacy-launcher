@@ -164,6 +164,7 @@ host.
 Como todo thunk passa por `trace`, a trilha do relatório de saída 3 (`Trail (last N): ...`, últimas 32
 chamadas da thread) lista todas as importações chamadas antes da que falta, inclusive stubs, terminando
 nela. `--coverage` imprime `| Import | Kind | Status |` para as 459 importações (tipo `function`; estado
-`implemented`, `stub` ou `missing`) e termina com `Implemented: a, stub: b, missing: c / total` (ver
+`implemented`, `stub` ou `missing`; com `--image <xex>`, também as importações de variável, tipo `variable`) e
+termina com `Implemented: a, stub: b, missing: c / N functions + M variables` (ver
 `docs/kernel-coverage.md`). Esse modelo substitui o do M1 (`LR_KERNEL_EXPORT` forte contra stub fraco), que
 não funcionava com o runtime pré-compilado: ver `docs/adr/0004-m2-plan-deviations.md`.

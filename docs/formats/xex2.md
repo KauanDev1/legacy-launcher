@@ -93,4 +93,7 @@ o `pool_tag` em ASCII é escolha nossa).
 
 `legacyrecomp inspect --imports <xex>` imprime uma linha por registro de tipo 0: `biblioteca 0xORDINAL nome
 tipo`, com tipo `function` ou `variable` (`?` para ordinal desconhecido). `legacyrecomp-game --coverage --image
-<xex>` acrescenta as importações de variável como linhas `| nome | variable | implemented/missing |`.
+<xex>` acrescenta as importações de variável como linhas `| nome | variable | estado |`, com o estado dado no
+registro (`register_variable(..., ImportState)`, padrão `implemented`; `KeTimeStampBundle` é `stub` até a Task 18
+mantê-lo atualizado; não registrada = `missing`). A linha final conta funções e variáveis separadamente
+(spec §5.3): `Implemented: a, stub: b, missing: c / N functions + M variables`.

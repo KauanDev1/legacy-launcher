@@ -160,4 +160,7 @@ TEST_CASE("kernel variables are registered (whole-archive link of variables.cpp)
     CHECK(kernel::is_variable_registered(n));
   }
   CHECK_FALSE(kernel::is_variable_registered("XboxKrnlVersion4Digit"));
+  CHECK(kernel::variable_state("XexExecutableModuleHandle") == kernel::ImportState::Implemented);
+  CHECK(kernel::variable_state("KeTimeStampBundle") == kernel::ImportState::Stub);  // zero until Task 18
+  CHECK(kernel::variable_state("XboxKrnlVersion4Digit") == kernel::ImportState::Missing);
 }

@@ -24,6 +24,7 @@ namespace {
 struct VariableDef {
   uint32_t size;
   VariableInit init;
+  ImportState state;
 };
 
 // Function-local statics, intentionally leaked: registrations run from static initializers in any order (same
@@ -47,7 +48,9 @@ std::string hex16(uint16_t v) {
 }
 
 struct Registrar {
-  Registrar(const char* name, uint32_t size, VariableInit init) { register_variable(name, size, init); }
+  Registrar(const char* name, uint32_t size, VariableInit init, ImportState state = ImportState::Implemented) {
+    register_variable(name, size, init, state);
+  }
 };
 
 // --- Kernel variables. Contents follow Xenia's xboxkrnl_module.cc (XboxkrnlModule constructor) unless noted. ---
@@ -67,8 +70,8 @@ const Registrar r_command_line("ExLoadedCommandLine", 1024, [](uint8_t* p, uint3
 const Registrar r_image_name("ExLoadedImageName", 256, nullptr);
 
 // KeTimeStampBundle: interrupt time (u64), system time (u64), tick count in ms (u32), padding. Zero until the
-// timer that keeps it current exists (Task 18).
-const Registrar r_time_stamp("KeTimeStampBundle", 24, nullptr);
+// timer that keeps it current exists (Task 18), hence Stub in --coverage.
+const Registrar r_time_stamp("KeTimeStampBundle", 24, nullptr, ImportState::Stub);
 
 // XboxHardwareInfo: u32 flags = 0x20, u8 CPU count = 6, rest zero.
 const Registrar r_hardware_info("XboxHardwareInfo", 16, [](uint8_t* p, uint32_t) {
@@ -118,12 +121,22 @@ Result<void> allocate_variables(runtime::GuestMemory& mem) {
 
 }  // namespace
 
-void register_variable(const char* name, uint32_t size, VariableInit init) {
+void register_variable(const char* name, uint32_t size, VariableInit init, ImportState state) {
+  if (state == ImportState::Missing) {
+    std::fprintf(stderr, "fatal: kernel variable %s registered as missing\n", name);
+    std::abort();
+  }
   std::lock_guard<std::mutex> lock(vars_mutex());
-  if (!vars().emplace(name, VariableDef{size, init}).second) {
+  if (!vars().emplace(name, VariableDef{size, init, state}).second) {
     std::fprintf(stderr, "fatal: kernel variable %s registered twice\n", name);
     std::abort();
   }
+}
+
+ImportState variable_state(std::string_view name) {
+  std::lock_guard<std::mutex> lock(vars_mutex());
+  const auto it = vars().find(name);
+  return it == vars().end() ? ImportState::Missing : it->second.state;
 }
 
 bool is_variable_registered(std::string_view name) {
