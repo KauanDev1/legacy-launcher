@@ -42,3 +42,4 @@ add_test(NAME no_gpl_disassembler_in_binaries
           "-DRUNTIME_LIB_DIR=${LR_RESOURCES_DIR}/runtime/lib"
           -P ${CMAKE_CURRENT_SOURCE_DIR}/support/check_no_gpl_disassembler.cmake)
 set_tests_properties(no_gpl_disassembler_in_binaries PROPERTIES LABELS unit)
+add_subdirectory(recomp)
