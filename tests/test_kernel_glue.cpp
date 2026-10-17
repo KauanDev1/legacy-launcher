@@ -160,6 +160,26 @@ TEST_CASE("call_guest runs the glue with the args and a fresh frame below the ca
   CHECK(g_rec.r1 == 0x2FFFFF00);
 }
 
+struct CalleeThrew {};
+static uint64_t throwing_call(uint8_t*, uint32_t, const uint64_t*, int, uint32_t r1, uint32_t r13) {
+  lr::kernel::set_current_frame(r1 - 0x40, r13);  // a thunk inside the callee moved the frame, then it unwound
+  throw CalleeThrew{};
+}
+
+TEST_CASE("call_guest restores the caller's frame when the callee unwinds", "[unit]") {
+  KernelFixture f;
+  lr::kernel::set_guest_glue({throwing_call, only_82000200});
+  lr::kernel::set_current_frame(0x30000008, 0x7FFF0000);
+  CHECK_THROWS_AS(lr::kernel::call_guest(0x82000200, {}), CalleeThrew);
+
+  lr::kernel::set_guest_glue({record_call, only_82000200});
+  g_rec = {};
+  g_callee_sets_frame = 0;
+  lr::kernel::call_guest(0x82000200, {});
+  CHECK(g_rec.r1 == 0x2FFFFF00);  // computed from the restored caller frame 0x30000008
+  CHECK(g_rec.r13 == 0x7FFF0000);
+}
+
 TEST_CASE("call_guest to an address without function is guest fatal (unit)", "[unit]") {
   auto r = run_child([] {
     KernelFixture f;

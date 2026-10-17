@@ -87,6 +87,15 @@ TEST_CASE("call_guest runs a recompiled callback", "[unit]") {
   CHECK(r.out.empty());
 }
 
+// sub_820002A0 calls FakeCallback(sub_82000220), which enables flush mode and does inexact/denormal float math:
+// no SIGFPE (exit 4), and the caller's MXCSR is restored after call_guest (a mismatch calls FakeMissing, exit 3).
+TEST_CASE("call_guest gives the callback the host FP environment and restores the caller's", "[unit]") {
+  TempDir td;
+  auto r = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x820002A0)});
+  CHECK(r.code == 0);
+  CHECK(r.out.empty());
+}
+
 TEST_CASE("call_guest to an address without function is guest fatal", "[unit]") {
   TempDir td;
   auto r = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x820002C0)});

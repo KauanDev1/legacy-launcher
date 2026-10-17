@@ -66,3 +66,31 @@ PPC_FUNC(sub_820002E0) {
   ctx.lr = 0x820002E4;
   __imp__FakeCallback(ctx, base);
 }
+
+// Guest callback that turns on flush-to-zero like recompiled float code does (fpscr.enableFlushMode) and then does
+// inexact / denormal float math. Its fpscr must start from the host FP environment (all SSE exceptions masked): a
+// zeroed csr would unmask them and the first inexact result would raise SIGFPE (exit 4). Returns 1 in r3.
+PPC_FUNC(sub_82000220) {
+  (void)base;
+  ctx.fpscr.enableFlushMode();
+  volatile float tiny = 1e-40f;
+  volatile float one = 1.0f, three = 3.0f;
+  volatile float third = one / three;  // inexact at run time
+  volatile float r = tiny * third;
+  (void)r;
+  ctx.r3.u64 = 1;
+}
+
+// Entry point: FakeCallback(sub_82000220) must return 1 without SIGFPE, and the host MXCSR this caller had before
+// call_guest (no flush-to-zero) must be back afterwards; otherwise calls the missing import (exit 3).
+PPC_FUNC(sub_820002A0) {
+  const uint32_t before = ctx.fpscr.getcsr();
+  ctx.r3.u64 = 0x82000220;
+  ctx.r4.u64 = 0;
+  ctx.lr = 0x820002A4;
+  __imp__FakeCallback(ctx, base);
+  if (ctx.r3.u64 != 1 || ctx.fpscr.getcsr() != before) {
+    ctx.lr = 0x820002A8;
+    __imp__FakeMissing(ctx, base);
+  }
+}

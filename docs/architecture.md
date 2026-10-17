@@ -128,7 +128,9 @@ callbacks são funções recompiladas, mas o `lr_runtime_core` não conhece o `P
 confere primeiro se o endereço está em `[PPC_CODE_BASE, PPC_CODE_BASE + PPC_CODE_SIZE)` e alinhado a 4, e só
 então lê a entrada da tabela de funções (não nula). `call_guest(endereço, args)` usa o quadro atual da thread
 (gravado pelo thunk): a função chamada roda com `r1 = (r1 atual - 0x100) & ~0xF` e o mesmo r13, e o quadro
-de quem chamou é restaurado na volta. Endereço sem função recompilada (ou mais de 8 argumentos, ou thread
+de quem chamou é restaurado na volta, inclusive quando uma exceção atravessa a chamada. O `PPCContext` novo
+(e o da thread principal, em `guest_body`) carrega o `fpscr` do MXCSR real do host (`loadFromHost`), com
+todas as exceções SSE mascaradas; a cola restaura o MXCSR de quem chamou depois do callback. Endereço sem função recompilada (ou mais de 8 argumentos, ou thread
 sem quadro) termina com `guest_fatal` citando o endereço do convidado, nunca com salto para o endereço 0 do
 host.
 

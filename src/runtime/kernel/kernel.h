@@ -52,6 +52,7 @@ void reset_kernel_for_tests();
 // guest call to an address without a recompiled function, ...): writes "Guest fatal: <what>\n" followed by the
 // calling thread's import trail (format_trail, the same line as the exit-3 report) to stderr, flushes stdio and
 // calls _exit(kExitGuestFatal), i.e. exit code 5.
+// guest_fatal: not async-signal-safe, never call from signal handlers.
 [[noreturn]] void guest_fatal(std::string_view what);
 
 }  // namespace lr::kernel

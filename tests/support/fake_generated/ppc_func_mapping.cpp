@@ -9,7 +9,9 @@ PPCFuncMapping PPCFuncMappings[] = {
 	{ 0x8200014C, __imp__FakeCallback },
 	{ 0x82000180, sub_82000180 },
 	{ 0x82000200, sub_82000200 },
+	{ 0x82000220, sub_82000220 },
 	{ 0x82000280, sub_82000280 },
+	{ 0x820002A0, sub_820002A0 },
 	{ 0x820002C0, sub_820002C0 },
 	{ 0x820002E0, sub_820002E0 },
 	{ 0, nullptr }

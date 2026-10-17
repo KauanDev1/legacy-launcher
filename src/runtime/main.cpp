@@ -85,16 +85,30 @@ void guest_body(uint8_t* base, void* user) {
   PPCContext ctx{};
   ctx.r1.u64 = kGuestStackBase + kGuestStackSize - kGuestStackTopSlack;
   ctx.r13.u64 = kGuestPcrAddress;
+  // fpscr caches the host MXCSR: start from the real one (all SSE exceptions masked). A zeroed cache would make the
+  // first enableFlushMode() write MXCSR = FTZ|DAZ with every exception unmasked, and the next inexact result
+  // would raise SIGFPE.
+  ctx.fpscr.loadFromHost();
   fn(ctx, base);
 }
 
 // --- Guest-call glue (lr::kernel::call_guest): the prebuilt kernel cannot build a PPCContext, this TU can. ---
 uint8_t* g_guest_base = nullptr;  // set in main() before set_guest_glue
 
+// Restores the host FP control word on scope exit (also when the callee unwinds), so the caller's cached
+// ctx.fpscr.csr still matches the hardware after a callback changed rounding or flush mode.
+struct HostFpGuard {
+  PPCFPSCRRegister fp{};
+  uint32_t saved = fp.getcsr();
+  ~HostFpGuard() { fp.setcsr(saved); }
+};
+
 uint64_t glue_call(uint8_t* base, uint32_t fn, const uint64_t* args, int nargs, uint32_t r1, uint32_t r13) {
+  const HostFpGuard fp_guard;
   PPCContext ctx{};
   ctx.r1.u64 = r1;
   ctx.r13.u64 = r13;
+  ctx.fpscr.loadFromHost();  // see guest_body
   PPCRegister* const gpr[8] = {&ctx.r3, &ctx.r4, &ctx.r5, &ctx.r6, &ctx.r7, &ctx.r8, &ctx.r9, &ctx.r10};
   for (int i = 0; i < nargs && i < 8; ++i) gpr[i]->u64 = args[i];
   PPCFunc* const target = PPC_LOOKUP_FUNC(base, fn);

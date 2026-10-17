@@ -25,11 +25,13 @@ void set_guest_glue(const GuestGlue& g);
 
 // Records the calling thread's current guest frame (r1, r13). Called by every generated thunk (lr_call_import)
 // before the import runs, and by code that starts guest code on a new thread.
+// t_frame (glue.cpp) is the frame of the most recent import on this thread.
 void set_current_frame(uint32_t r1, uint32_t r13);
 
 // Calls the recompiled function at `fn` with up to 8 integer args (r3..r10) on the calling thread and returns its
 // r3. The callee runs with r1 = (current r1 - 0x100) & ~0xF and the current r13, using kernel().memory() as the
-// guest base; the caller's frame is restored afterwards (a thunk inside the callee moves it). guest_fatal (exit 5)
+// guest base; the caller's frame is restored afterwards, also when the callee unwinds (a thunk inside the callee
+// moves it). The glue's `call` gives the callee the host FP environment and restores it on return. guest_fatal (exit 5)
 // when no glue is installed, the thread has no current frame, there are more than 8 args, or !has_function(fn)
 // (the message names the guest address: never a jump to host address 0).
 uint64_t call_guest(uint32_t fn, std::span<const uint64_t> args);
