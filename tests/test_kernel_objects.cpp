@@ -125,3 +125,16 @@ TEST_CASE("ObOpenObjectByName and ObCreateObject are not implemented", "[unit][k
   CHECK(static_cast<uint32_t>(f.call("ObOpenObjectByName", 0, 0, 0, 0, 0, 0, 0)) == STATUS_NOT_IMPLEMENTED);
   CHECK(static_cast<uint32_t>(f.call("ObCreateObject", 0, 0, 0, 0, 0)) == STATUS_NOT_IMPLEMENTED);
 }
+
+TEST_CASE("ObReferenceObjectByHandle refuses objects without a guest body", "[unit][kernel][objects]") {
+  KernelFixture f;
+  auto file = std::make_shared<KObject>(ObjectKind::File);
+  std::weak_ptr<KObject> weak = file;
+  const uint32_t h = kernel().objects().add(std::move(file));
+  const uint32_t out = f.alloc(4);
+  *f.mem.translate<be<uint32_t>>(out) = 0xAAAAAAAA;
+  CHECK(static_cast<uint32_t>(f.call("ObReferenceObjectByHandle", h, 0, out)) == STATUS_OBJECT_TYPE_MISMATCH);
+  CHECK(rd(f, out) == 0xAAAAAAAA);  // nothing written
+  CHECK(kernel().objects().close(h) == STATUS_SUCCESS);
+  CHECK(weak.expired());  // no kernel pin was taken
+}

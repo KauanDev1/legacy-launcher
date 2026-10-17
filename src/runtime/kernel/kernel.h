@@ -11,6 +11,7 @@
 
 #include "common/result.h"
 #include "runtime/guest_memory.h"
+#include "runtime/kernel/dispatcher.h"
 #include "runtime/kernel/objects.h"
 #include "runtime/memory/page_heap.h"
 #include "runtime/memory/physical_heap.h"
@@ -69,6 +70,9 @@ class Kernel {
   // Handle table and kernel objects (runtime/kernel/objects.h).
   ObjectTable& objects() { return objects_; }
 
+  // The wait engine (runtime/kernel/dispatcher.h) over this kernel's guest memory.
+  Dispatcher& dispatcher() { return dispatcher_; }
+
   // Kernel variable name -> guest address of its block (filled by resolve_variable_imports).
   std::map<std::string, uint32_t, std::less<>>& variable_blocks() { return variable_blocks_; }
 
@@ -82,10 +86,12 @@ class Kernel {
   uint32_t executable_module_ = 0;
   uint32_t executable_header_ = 0;
   std::map<std::string, uint32_t, std::less<>> variable_blocks_;
-  ObjectTable objects_;
   runtime::PageHeap heap4k_;
   runtime::PageHeap heap64k_;
   runtime::PhysicalHeap physical_;
+  // After the heaps: objects are destroyed first, so objects backed by pool memory can still free it.
+  ObjectTable objects_;
+  Dispatcher dispatcher_;
 };
 
 // Creates the process-wide Kernel over `mem`, which must outlive all guest code and span the whole 4 GiB guest

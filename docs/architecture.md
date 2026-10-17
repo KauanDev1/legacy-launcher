@@ -168,3 +168,35 @@ nela. `--coverage` imprime `| Import | Kind | Status |` para as 459 importaçõe
 termina com `Implemented: a, stub: b, missing: c / N functions + M variables` (ver
 `docs/kernel-coverage.md`). Esse modelo substitui o do M1 (`LR_KERNEL_EXPORT` forte contra stub fraco), que
 não funcionava com o runtime pré-compilado: ver `docs/adr/0004-m2-plan-deviations.md`.
+
+### Objetos, handles e esperas
+
+`Kernel::objects()` (`runtime/kernel/objects.h`) é a tabela de handles (`0xF8000000 + 4·slot`). Um `KObject`
+pode ter um corpo no convidado (`guest_header()`, o `DISPATCHER_HEADER`); `ObReferenceObjectByHandle` recusa
+objetos sem corpo (um arquivo, por exemplo) com `STATUS_OBJECT_TYPE_MISMATCH`, sem escrever nada e sem fixar
+referência.
+
+`Kernel::dispatcher()` (`runtime/kernel/dispatcher.h`) é o motor de espera. A memória do convidado é a fonte da
+verdade: ele trabalha só com endereços de `DISPATCHER_HEADER` (tipo `+0`, `signal_state` `+4`), então eventos que
+o próprio jogo inicializa (o `KeInitializeEvent` é inline) funcionam sem handle. Um mutex global serializa tudo;
+`signal_state` é lido e escrito com operações atômicas sobre a palavra big-endian, coerentes com o
+`lwarx`/`stwcx.` do código gerado. Os esperadores ficam numa lista FIFO por endereço de cabeçalho, cada um com sua
+variável de condição, e quem sinaliza (set, pulse, release) já os satisfaz e consome sob o mutex, então um pulso
+ou um evento de reset automático nunca perde o despertar. Tipos: evento de notificação (0) e de sincronização (1,
+consumido), mutante (2: `signal_state` 1 livre, desce a cada aquisição, recursão pelo dono; dono em `+0x18`),
+semáforo (5, limite em `+0x10`), thread (6) e timers (8, 9 = reset automático). WaitAll adquire tudo ou nada.
+Tempo limite: nulo = infinito, 0 = consulta, negativo = relativo em 100 ns, positivo = FILETIME absoluto contra o
+relógio real; as esperas usam prazos do `steady_clock`. `wake_for_apc(thread)` faz uma espera alertável devolver
+`STATUS_USER_APC` (ou a próxima, se a thread não está esperando). A identidade da thread vem de
+`current_thread_token()`: um número por thread do host até a tarefa de threads instalar o endereço do KTHREAD.
+`snapshot()` lista as esperas em curso para o detector de impasse. Um convidado que muda `signal_state` com
+escrita comum, sem importação, só acorda alguém na próxima operação do despachante naquele cabeçalho.
+
+As importações (`exports/sync.cpp`, semântica do `xboxkrnl_threading.cc` do Xenia, só referência) são
+`KeSetEvent`/`KeResetEvent`, `KeInitializeMutant`/`KeReleaseMutant` (assinaturas do NT; liberar sem ser dono
+devolve `STATUS_MUTANT_NOT_OWNED` em vez de levantar exceção), `KeWaitForSingleObject`,
+`KeWaitForMultipleObjects`, `NtCreateEvent`, `NtSetEvent`, `NtClearEvent`, `NtPulseEvent`, `NtCreateSemaphore`,
+`NtReleaseSemaphore`, `NtWaitForSingleObjectEx`, `NtWaitForMultipleObjectsEx` e
+`NtSignalAndWaitForSingleObjectEx` (sinal e espera atômicos). Os `Nt*Create*` alocam o corpo no pool do kernel,
+liberado quando o objeto morre; nomes e atributos de objeto são ignorados (objetos nomeados não existem no M2).
+Esperar num handle sem cabeçalho devolve `STATUS_OBJECT_TYPE_MISMATCH`.

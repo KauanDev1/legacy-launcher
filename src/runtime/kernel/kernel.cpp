@@ -25,7 +25,8 @@ Kernel::Kernel(runtime::GuestMemory& mem, KernelConfig cfg)
       cfg_(std::move(cfg)),
       data_next_(runtime::kKernelDataBase),
       heap4k_(runtime::kHeap4kBase, runtime::kHeap4kEnd, 0x1000),
-      heap64k_(runtime::kHeap64kBase, runtime::kHeap64kEnd, 0x10000) {}
+      heap64k_(runtime::kHeap64kBase, runtime::kHeap64kEnd, 0x10000),
+      dispatcher_(mem.base()) {}
 
 Result<void> Kernel::setup_memory() {
   if (mem_.size() < (uint64_t{1} << 32))
