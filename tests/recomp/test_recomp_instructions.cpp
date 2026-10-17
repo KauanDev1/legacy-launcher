@@ -227,3 +227,120 @@ TEST_CASE("sthu stores the low halfword and updates rA", "[unit][recomp]") {
   CHECK(guest_ptr(0x10004)[0] == 0x00);  // only two bytes written
   CHECK(out.r5.u32 == 0x10002);
 }
+
+TEST_CASE("eqv of equal values is all ones", "[unit][recomp]") {
+  PPCContext in{};
+  in.r4.u64 = 0x123456789ABCDEF0ull;
+  in.r5.u64 = 0x123456789ABCDEF0ull;
+  const PPCContext out = run_case(case_address("eqv"), in, guest_memory());
+  CHECK(out.r3.u64 == 0xFFFFFFFFFFFFFFFFull);
+  CHECK(out.r4.u64 == 0x123456789ABCDEF0ull);
+  CHECK(out.r5.u64 == 0x123456789ABCDEF0ull);
+}
+
+TEST_CASE("eqv is the complement of xor", "[unit][recomp]") {
+  PPCContext in{};
+  in.r4.u64 = 0xF0F0F0F0F0F0F0F0ull;
+  in.r5.u64 = 0xFF00FF00FF00FF00ull;
+  const PPCContext out = run_case(case_address("eqv"), in, guest_memory());
+  CHECK(out.r3.u64 == 0xF00FF00FF00FF00Full);
+}
+
+TEST_CASE("eqv. sets cr0.lt for negative result", "[unit][recomp]") {
+  PPCContext in{};
+  in.r4.u64 = 0xFFFFFFFF;
+  in.r5.u64 = 0xFFFFFFFE;  // ~(x ^ y) = ~1 = 0xFFFFFFFE (negative in 32 bits)
+  in.xer.so = 1;
+  const PPCContext out = run_case(case_address("eqv."), in, guest_memory());
+  CHECK(out.r3.u32 == 0xFFFFFFFE);
+  CHECK(out.cr0.lt == 1);
+  CHECK(out.cr0.gt == 0);
+  CHECK(out.cr0.eq == 0);
+  CHECK(out.cr0.so == 1);
+}
+
+TEST_CASE("eqv. sets cr0.gt for positive and cr0.eq for zero results", "[unit][recomp]") {
+  PPCContext a{};
+  a.r4.u64 = 0;
+  a.r5.u64 = 0x80000000;  // ~0x80000000 = 0x7FFFFFFF in the low word
+  const PPCContext pos = run_case(case_address("eqv."), a, guest_memory());
+  CHECK(pos.cr0.lt == 0);
+  CHECK(pos.cr0.gt == 1);
+  CHECK(pos.cr0.eq == 0);
+
+  PPCContext b{};
+  b.r4.u64 = 0;
+  b.r5.u64 = 0xFFFFFFFF;  // ~(0 ^ 0xFFFFFFFF) = 0 in the low word
+  const PPCContext zero = run_case(case_address("eqv."), b, guest_memory());
+  CHECK(zero.cr0.lt == 0);
+  CHECK(zero.cr0.gt == 0);
+  CHECK(zero.cr0.eq == 1);
+}
+
+TEST_CASE("subfze with CA=1 on 0 gives 0 and CA=1", "[unit][recomp]") {
+  PPCContext in{};
+  in.r4.u64 = 0;
+  in.xer.ca = 1;
+  in.r3.u64 = 0x55;  // must be overwritten
+  const PPCContext out = run_case(case_address("subfze"), in, guest_memory());
+  CHECK(out.r3.u64 == 0);  // ~0 + 1 = 0 with carry out
+  CHECK(out.xer.ca == 1);
+  CHECK(out.r4.u64 == 0);
+}
+
+TEST_CASE("subfze with CA=0 on 0 gives -1 and CA=0", "[unit][recomp]") {
+  PPCContext in{};
+  in.r4.u64 = 0;
+  in.xer.ca = 0;
+  const PPCContext out = run_case(case_address("subfze"), in, guest_memory());
+  CHECK(out.r3.u64 == 0xFFFFFFFFFFFFFFFFull);
+  CHECK(out.xer.ca == 0);
+}
+
+TEST_CASE("subfze computes ~rA + CA and clears CA when there is no carry", "[unit][recomp]") {
+  PPCContext in{};
+  in.r4.u64 = 5;
+  in.xer.ca = 1;
+  const PPCContext out = run_case(case_address("subfze"), in, guest_memory());
+  CHECK(out.r3.u32 == 0xFFFFFFFB);  // ~5 + 1 = -5
+  CHECK(out.xer.ca == 0);
+  CHECK(out.r4.u64 == 5);
+}
+
+TEST_CASE("subfze. sets cr0", "[unit][recomp]") {
+  PPCContext neg{};
+  neg.r4.u64 = 5;
+  neg.xer.ca = 1;
+  const PPCContext n = run_case(case_address("subfze."), neg, guest_memory());
+  CHECK(n.r3.u32 == 0xFFFFFFFB);
+  CHECK(n.cr0.lt == 1);
+  CHECK(n.cr0.gt == 0);
+  CHECK(n.cr0.eq == 0);
+
+  PPCContext zero{};
+  zero.r4.u64 = 0;
+  zero.xer.ca = 1;
+  const PPCContext z = run_case(case_address("subfze."), zero, guest_memory());
+  CHECK(z.r3.u64 == 0);
+  CHECK(z.cr0.lt == 0);
+  CHECK(z.cr0.gt == 0);
+  CHECK(z.cr0.eq == 1);
+}
+
+TEST_CASE("vsel128 picks vB bits where mask set", "[unit][recomp]") {
+  PPCContext in{};
+  // v64 is the mask (and the destination); v1 = vA, v2 = vB.
+  for (int i = 0; i < 16; i++) {
+    in.v1.u8[i] = 0xAA;
+    in.v2.u8[i] = 0x55;
+    in.v64.u8[i] = 0xF0;
+    in.v3.u8[i] = 0x77;  // neighbour register, must stay unchanged
+  }
+  const PPCContext out = run_case(case_address("vsel128"), in, guest_memory());
+  for (int i = 0; i < 16; i++) {
+    CHECK(out.v64.u8[i] == 0x5A);  // (0xAA & ~0xF0) | (0x55 & 0xF0) = 0x0A | 0x50
+    CHECK(out.v1.u8[i] == 0xAA);
+    CHECK(out.v2.u8[i] == 0x55);
+    CHECK(out.v3.u8[i] == 0x77);
+  }
+}

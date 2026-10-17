@@ -45,6 +45,17 @@ inline const std::vector<RecompCase>& recomp_cases() {
       {"stfsux", 0x82000E00, {0x7C23256E, kBlr}},  // stfsux f1,r3,r4
       {"lhzu", 0x82000F00, {0xA4850002, kBlr}},    // lhzu r4,2(r5)
       {"sthu", 0x82001000, {0xB485FFFE, kBlr}},    // sthu r4,-2(r5)
+      // X-form ALU: 0x7C000000 | S<<21 | A<<16 | B<<11 | XO<<1 | Rc. eqv XO=284 (0x238); subfze XO=200 (0x190, OE=0),
+      // for which rB=0 and the destination is RT<<21.
+      {"eqv", 0x82001100, {0x7C832A38, kBlr}},    // eqv r3,r4,r5   (S=4, A=3, B=5)
+      {"eqv.", 0x82001200, {0x7C832A39, kBlr}},   // eqv. r3,r4,r5
+      {"subfze", 0x82001300, {0x7C640190, kBlr}},   // subfze r3,r4   (RT=3, RA=4)
+      {"subfze.", 0x82001400, {0x7C640191, kBlr}},  // subfze. r3,r4
+      // vsel128 = VX128(5, 848): opcode 5 (0x14000000) | 0x350. VMX128 splits 7-bit register numbers across the
+      // word (see insert_*128 in the disassembler): VD128 = ((v&0x60)>>3) | ((v&0x1f)<<21), VA128 = ((v&0x40)<<4) |
+      // (v&0x20) | ((v&0x1f)<<16), VB128 = ((v&0x60)>>5) | ((v&0x1f)<<11). VS128 is VD128, so the mask is vD.
+      // vD=v64 (0x8), vA=v1 (1<<16), vB=v2 (2<<11): 0x14000350|0x8|0x10000|0x1000 = 0x14011358.
+      {"vsel128", 0x82001500, {0x14011358, kBlr}},  // vsel128 v64,v1,v2,v64
   };
   return cases;
 }
