@@ -168,9 +168,10 @@ Outras importações (`exports/threads.cpp`): `KeTlsAlloc`/`KeTlsFree`/`KeTlsGet
 
 Relógios (`runtime/kernel/timers.h`, importações em `exports/time.cpp`): o XenonRecomp traduz a leitura do
 timebase (`mftb`) para `__rdtsc()`, então o contador de desempenho do convidado **é o TSC do host**.
-`KeQueryPerformanceFrequency` devolve a frequência do TSC medida por `calibrate_tsc_hz()` (`__rdtsc()` contra
-`CLOCK_MONOTONIC` durante 50 ms, uma vez por kernel, no primeiro uso, guardada em `Timers::tsc_hz()`), como valor de
-64 bits, e não os 50 MHz do console. `KeQuerySystemTime` grava o relógio de tempo real do host como FILETIME (100 ns
+`KeQueryPerformanceFrequency` devolve a frequência do TSC medida **na inicialização** (`init_kernel` grava em `Timers::tsc_hz()` o valor de
+`process_tsc_hz()`, que mede uma vez por processo com `calibrate_tsc_hz()`: três amostras de ~16 ms dentro de 50 ms,
+cada leitura de `CLOCK_MONOTONIC` entre duas leituras de `__rdtsc()`, vence a amostra de colchetes mais estreitos),
+como valor de 64 bits, e não os 50 MHz do console. `KeQuerySystemTime` grava o relógio de tempo real do host como FILETIME (100 ns
 desde 1601-01-01 UTC, BE). `RtlTimeToTimeFields`/`RtlTimeFieldsToTime` convertem para o calendário gregoriano
 proléptico (`X_TIME_FIELDS` do Xenia: oito `be<int16_t>`, dia da semana por último, 0 = domingo); campos fora da
 faixa devolvem FALSE.
@@ -181,8 +182,9 @@ Thread de trabalho do kernel: uma por kernel, roda as expirações de timers, as
 sequência do convidado (a thread principal continua sendo a 1), sem handle, fora de `Threads::live()` e de
 `wait_for_guest_threads_for_tests`; ela espera numa variável de condição própria, nunca no despachante, então o
 detector de impasse não a conta como thread do convidado (ele deve consultar `Timers::has_pending_work()`: timer
-armado ou DPC na fila conta como trabalho pendente). Criá-la não congela o layout de TLS (`set_image` continua
-válido). Ela nasce sob demanda (primeiro timer armado, primeiro DPC na fila ou importação de `KeTimeStampBundle`),
+armado ou DPC na fila conta como trabalho pendente). Seu bloco de TLS copia o modelo de TLS do XEX como o de qualquer thread, e criá-la congela o layout
+(`set_image` falha depois); por isso o `main.cpp` chama `set_image` antes de `resolve_variable_imports`, que pode
+iniciá-la. Ela nasce sob demanda (primeiro timer armado, primeiro DPC na fila ou importação de `KeTimeStampBundle`),
 roda em `DISPATCH_LEVEL` e chama o convidado por `call_guest` (a cola, com o FPSCR do host). O destrutor do `Kernel`
 (e `reset_kernel_for_tests`, antes de soltar a instância) a para e faz `join`. Uma `UnimplementedImport` dentro de
 um DPC sai com 3 e o relatório; qualquer outra exceção, inclusive `ExTerminateThread`, sai com 4.
@@ -191,7 +193,7 @@ Timers: `NtCreateTimer(handle*, atributos, tipo)` aloca um `X_KTIMER` (0x28 byte
 não declara um) no pool com cabeçalho tipo 8 (notificação, tipo 0) ou 9 (sincronização, tipo 1, consumido pela
 espera). `NtSetTimerEx(handle, vencimento*, rotina_apc, modo, contexto_apc, resume, período_ms, estado_anterior*)`
 (ordem do Xenia) zera o `signal_state` e arma o timer: vencimento negativo = relativo em 100 ns, senão FILETIME
-absoluto; `resume` devolve `STATUS_TIMER_RESUME_IGNORED` como no Xenia. Ao vencer, a thread de trabalho põe
+absoluto; período negativo devolve `STATUS_INVALID_PARAMETER` (o `Period` do NT é `LONG`); `resume` devolve `STATUS_TIMER_RESUME_IGNORED` como no Xenia. Ao vencer, a thread de trabalho põe
 `signal_state` em 1 e chama `Dispatcher::signal`, enfileira a APC `rotina(contexto, FILETIME baixo, alto)` na
 thread do convidado que armou o timer (semântica do Xbox/Xenia, não roda na thread de trabalho) e rearma o timer
 periódico (períodos perdidos são pulados). `NtCancelTimer` desarma e informa o estado atual. Fechar o último handle
@@ -200,7 +202,8 @@ desarma o timer antes de liberar o corpo. Prazo, período e APC ficam no host, i
 DPCs: `KeInitializeDpc(dpc*, rotina, contexto)` grava o `XDPC` do Xenia (tipo 19 no byte alto da primeira palavra,
 rotina `+0xC`, contexto `+0x10`, argumentos `+0x14`/`+0x18`). `KeInsertQueueDpc(dpc*, arg1, arg2)` devolve FALSE se
 o DPC já está na fila; senão grava os argumentos e a thread de trabalho chama `rotina(dpc, contexto, arg1, arg2)`.
-O DPC sai da fila antes de a rotina rodar, então pode ser reenfileirado (o Xenia nunca despacha DPCs).
+O DPC sai da fila antes de a rotina rodar, então pode ser reenfileirado (o Xenia nunca despacha DPCs). Um DPC com rotina 0 é erro fatal do convidado (`guest_fatal`, saída 5), no
+`KeInsertQueueDpc` ou na thread de trabalho.
 
 `KeTimeStampBundle` (`X_TIME_STAMP_BUNDLE`, 24 bytes): tempo de interrupção (100 ns desde o início do kernel), tempo
 do sistema (FILETIME) e contagem de ticks em ms em `+0x10` (o único campo que o Xenia atualiza). O bloco é preenchido

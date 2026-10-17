@@ -150,9 +150,10 @@ uint32_t NtCreateTimer(GuestCall& c, U32Ptr handle_out, uint32_t /*attributes*/,
 // NtSetTimerEx(handle, due_time*, apc_routine, apc_mode, apc_context, resume, period_ms, previous_state*): due time
 // < 0 relative 100 ns, otherwise an absolute FILETIME (0 = now). The APC goes to the calling guest thread at each
 // expiry. Xenia asserts the last argument is 0; we read it as NT's PreviousState pointer (written when non-null).
-// resume -> STATUS_TIMER_RESUME_IGNORED, as Xenia.
+// resume -> STATUS_TIMER_RESUME_IGNORED, as Xenia; a negative period is STATUS_INVALID_PARAMETER.
 uint32_t NtSetTimerEx(GuestCall& c, uint32_t handle, I64Ptr due_ptr, uint32_t apc_routine, uint32_t /*apc_mode*/,
-                      uint32_t apc_context, uint32_t resume, uint32_t period_ms, U32Ptr previous) {
+                      uint32_t apc_context, uint32_t resume, int32_t period_ms, U32Ptr previous) {
+  if (period_ms < 0) return STATUS_INVALID_PARAMETER;  // NT's Period is a LONG
   std::shared_ptr<KObject> obj;
   uint32_t header = 0;
   if (uint32_t s = resolve_timer(handle, obj, header); s != STATUS_SUCCESS) return s;
@@ -169,7 +170,7 @@ uint32_t NtSetTimerEx(GuestCall& c, uint32_t handle, I64Ptr due_ptr, uint32_t ap
   if (GuestThread* self = current_thread(); self != nullptr && apc_routine != 0)
     apc_thread = std::static_pointer_cast<GuestThread>(self->shared_from_this());
   const int32_t prev =
-      kernel().timers().set_timer(header, due, period_ms, apc_routine, apc_context, std::move(apc_thread));
+      kernel().timers().set_timer(header, due, static_cast<uint32_t>(period_ms), apc_routine, apc_context, std::move(apc_thread));
   put_u32(c, previous, static_cast<uint32_t>(prev));
   return (resume & 0xFF) != 0 ? STATUS_TIMER_RESUME_IGNORED : STATUS_SUCCESS;
 }
@@ -201,9 +202,12 @@ void KeInitializeDpc(GuestCall& c, GuestPtr<X_KDPC> dpc, uint32_t routine, uint3
 }
 
 // KeInsertQueueDpc(dpc*, arg1, arg2) -> TRUE when queued, FALSE when already queued. The kernel worker then calls
-// routine(dpc, context, arg1, arg2) (Xenia's version never dispatches DPCs).
+// routine(dpc, context, arg1, arg2) (Xenia's version never dispatches DPCs). A DPC whose routine is 0 is a
+// guest_fatal (here, or on the worker if the routine is cleared after insertion).
 uint32_t KeInsertQueueDpc(GuestPtr<X_KDPC> dpc, uint32_t arg1, uint32_t arg2) {
   if (!dpc.valid_range(sizeof(X_KDPC))) return 0;
+  if (dpc.get(kernel().memory().base())->routine == 0)
+    guest_fatal("KeInsertQueueDpc: DPC without a routine (routine 0)");
   return kernel().timers().queue_dpc(dpc.addr, arg1, arg2) ? 1 : 0;
 }
 

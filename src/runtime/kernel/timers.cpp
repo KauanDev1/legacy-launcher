@@ -8,6 +8,7 @@
 #include <x86intrin.h>
 
 #include <atomic>
+#include <cstdint>
 #include <string>
 
 #include "runtime/guest_thread.h"
@@ -80,16 +81,47 @@ void store_be32(uint8_t* p, uint32_t v) {
 
 // --- Clocks and calendar ----------------------------------------------------------------------------------------
 
+namespace {
+
+// One CLOCK_MONOTONIC read bracketed by two TSC reads: the TSC value at the clock read is taken as the bracket's
+// midpoint, and its width bounds the error.
+struct Stamp {
+  uint64_t tsc, width;
+  int64_t ns;
+};
+Stamp stamp() {
+  const uint64_t a = __rdtsc();
+  const int64_t ns = monotonic_ns();
+  const uint64_t b = __rdtsc();
+  return {a + (b - a) / 2, b - a, ns};
+}
+
+}  // namespace
+
 uint64_t calibrate_tsc_hz() {
-  const int64_t n0 = monotonic_ns();
-  const uint64_t c0 = __rdtsc();
-  timespec req{0, 50'000'000};
-  while (::nanosleep(&req, &req) != 0) {
+  constexpr int kSamples = 3;
+  constexpr long kSampleNs = 50'000'000 / kSamples;  // the three samples share the 50 ms budget
+  uint64_t best_hz = 0, best_width = UINT64_MAX;
+  for (int i = 0; i < kSamples; ++i) {
+    const Stamp s0 = stamp();
+    timespec req{0, kSampleNs};
+    while (::nanosleep(&req, &req) != 0) {
+    }
+    const Stamp s1 = stamp();
+    const int64_t ns = s1.ns > s0.ns ? s1.ns - s0.ns : 1;
+    const uint64_t width = s0.width + s1.width;
+    if (width < best_width) {
+      best_width = width;
+      best_hz = static_cast<uint64_t>(static_cast<unsigned __int128>(s1.tsc - s0.tsc) * 1'000'000'000u /
+                                      static_cast<uint64_t>(ns));
+    }
   }
-  const uint64_t c1 = __rdtsc();
-  const int64_t n1 = monotonic_ns();
-  const int64_t ns = n1 > n0 ? n1 - n0 : 1;
-  return static_cast<uint64_t>(static_cast<unsigned __int128>(c1 - c0) * 1'000'000'000u / static_cast<uint64_t>(ns));
+  return best_hz;
+}
+
+uint64_t process_tsc_hz() {
+  static const uint64_t hz = calibrate_tsc_hz();
+  return hz;
 }
 
 int64_t host_filetime_now() {
@@ -133,11 +165,6 @@ void set_current_irql(uint8_t irql) { t_irql = irql; }
 Timers::Timers(Kernel& k) : kernel_(k), start_(Clock::now()) {}
 
 Timers::~Timers() { shutdown(); }
-
-uint64_t Timers::tsc_hz() {
-  std::call_once(tsc_once_, [this] { tsc_hz_ = calibrate_tsc_hz(); });
-  return tsc_hz_;
-}
 
 int32_t Timers::set_timer(uint32_t header, Clock::time_point due, uint32_t period_ms, uint32_t apc_routine,
                           uint32_t apc_context, std::weak_ptr<GuestThread> apc_thread) {
@@ -264,6 +291,7 @@ void Timers::loop() {
       const auto* d = reinterpret_cast<const X_KDPC*>(base + dpc);
       const uint64_t args[] = {dpc, d->context, d->arg1, d->arg2};
       const uint32_t routine = d->routine;
+      if (routine == 0) guest_fatal("kernel worker: queued DPC has no routine (routine 0, cleared after insertion)");
       dpc_running_ = true;
       lock.unlock();
       (void)call_guest(routine, args);

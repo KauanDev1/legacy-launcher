@@ -355,15 +355,15 @@ std::vector<Threads::TerminateNotification> Threads::terminate_notifications() c
 namespace {
 
 // Guest memory, KTHREAD, KPCR and TLS of a new thread and its GuestThread object (no handle, not started). An
-// internal thread (create_internal_guest_thread) gets no TLS template and kMinTlsSlots slots, and leaves the image
-// TLS layout unfrozen.
+// internal thread (create_internal_guest_thread) gets the current image TLS layout (template and slot count) like any
+// thread, and freezes it too.
 Result<std::shared_ptr<GuestThread>> allocate_thread(const ThreadParams& p, bool internal) {
   Kernel& k = kernel();
   Threads& threads = k.threads();
-  if (!internal) threads.mark_thread_created();  // freezes the TLS layout (set_image refuses from now on)
+  threads.mark_thread_created();  // freezes the TLS layout (set_image refuses from now on)
   uint8_t* const base = k.memory().base();
-  const std::optional<formats::TlsInfo> tls = internal ? std::nullopt : threads.tls();
-  const uint32_t slots = internal ? Threads::kMinTlsSlots : threads.tls_slot_count();
+  const std::optional<formats::TlsInfo> tls = threads.tls();
+  const uint32_t slots = threads.tls_slot_count();
   // Sized in 64 bits: set_image caps the header values, this keeps a bad layout from wrapping into a short block.
   const uint64_t tls_static64 = tls ? (uint64_t{tls->data_size} + 3) / 4 * 4 : 0;
   const uint64_t block_size = uint64_t{kTlsOffset} + tls_static64 + uint64_t{slots} * 4;

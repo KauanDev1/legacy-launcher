@@ -3,6 +3,7 @@
 
 #include <pthread.h>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -38,8 +39,13 @@ namespace lr::kernel {
 class Kernel;
 class GuestThread;
 
-// Measures the TSC rate: __rdtsc() against CLOCK_MONOTONIC over 50 ms. Not cached (Timers::tsc_hz caches it).
+// Measures the TSC rate against CLOCK_MONOTONIC within a 50 ms budget: three samples of ~16 ms, each clock read
+// bracketed between two __rdtsc() reads; the sample with the tightest brackets wins. Not cached.
 uint64_t calibrate_tsc_hz();
+
+// calibrate_tsc_hz() measured once per process (the invariant TSC rate does not change; every kernel, including the
+// many test kernels, reuses the first measurement). Called by init_kernel, so the measurement happens at init.
+uint64_t process_tsc_hz();
 
 // Host realtime clock as a FILETIME.
 int64_t host_filetime_now();
@@ -64,8 +70,9 @@ class Timers {
   Timers(const Timers&) = delete;
   Timers& operator=(const Timers&) = delete;
 
-  // calibrate_tsc_hz(), measured once per kernel on first use.
-  uint64_t tsc_hz();
+  // The TSC rate measured at init_kernel (set_tsc_hz, from process_tsc_hz()).
+  uint64_t tsc_hz() const { return tsc_hz_.load(std::memory_order_acquire); }
+  void set_tsc_hz(uint64_t hz) { tsc_hz_.store(hz, std::memory_order_release); }
 
   // Arms the timer at `header` (replacing a previous arming): signal_state becomes 0, it fires at `due` and then
   // every period_ms (0 = once). apc_routine != 0 queues routine(apc_context, filetime low, high) to `apc_thread`
@@ -111,8 +118,7 @@ class Timers {
 
   Kernel& kernel_;
   const Clock::time_point start_;
-  std::once_flag tsc_once_;
-  uint64_t tsc_hz_ = 0;
+  std::atomic<uint64_t> tsc_hz_{0};
 
   mutable std::mutex mutex_;
   std::condition_variable cv_;

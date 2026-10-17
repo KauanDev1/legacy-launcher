@@ -189,8 +189,10 @@ Result<std::shared_ptr<GuestThread>> create_guest_thread(const ThreadParams& p);
 // like any guest thread, so guest routines (DPCs) can run on it, but it is not a guest-visible thread: no handle
 // and no ObjectTable entry, not in Threads::live() (so neither KeTlsAlloc, ObLookupThreadByThreadId nor the
 // deadlock detector see it), no host thread of its own and not counted by wait_for_guest_threads_for_tests. Its
-// TLS block has no XEX template and kMinTlsSlots slots, and creating it does not freeze the image TLS layout
-// (Threads::set_image still works), so it may start before the image is set. The owner runs it with
+// TLS block follows the image layout (XEX template copy and slot count) like any thread's, and creating it freezes
+// that layout like any thread creation (Threads::set_image fails afterwards: a wrong order is a load error, never a
+// worker TLS block without the template). main.cpp therefore sets the image before resolve_variable_imports, which
+// may start the worker. The owner runs it with
 // run_internal(body, arg) on a host thread it manages (kHostStackSize stack): the calling host thread becomes this
 // guest thread (current_thread(), its KTHREAD as dispatcher token, current guest frame at the top of its stack)
 // while body runs. UnimplementedImport from body ends the process with exit 3 and the usual report, any other

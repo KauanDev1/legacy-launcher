@@ -259,6 +259,15 @@ int main(int argc, char** argv) {
                  static_cast<unsigned long long>(PPC_IMAGE_BASE));
     return kExitUsage;
   }
+  // Every guest thread gets a copy of the XEX TLS template; ExCreateThread with stack size 0 uses the image's.
+  // Before resolve_variable_imports: importing KeTimeStampBundle starts the kernel worker, whose TLS block copies the
+  // template too.
+  if (auto r = lr::kernel::kernel().threads().set_image(img.value().tls, img.value().stack_size, img.value().base,
+                                                        img.value().size);
+      !r) {
+    std::fprintf(stderr, "error: cannot load %s: %s\n", opt.image.c_str(), r.error().message.c_str());
+    return kExitUsage;
+  }
   if (is_xex2(bytes)) {  // the test ELF images have no import records
     auto header = lr::formats::parse_xex2(image_bytes);
     lr::Result<void> r = header ? lr::kernel::resolve_variable_imports(mem.value(), img.value(), header.value())
@@ -290,13 +299,6 @@ int main(int argc, char** argv) {
 
   g_guest_base = mem.value().base();
   lr::kernel::set_guest_glue({glue_call, glue_has_function});
-  // Every guest thread gets a copy of the XEX TLS template; ExCreateThread with stack size 0 uses the image's.
-  if (auto r = lr::kernel::kernel().threads().set_image(img.value().tls, img.value().stack_size, img.value().base,
-                                                        img.value().size);
-      !r) {
-    std::fprintf(stderr, "error: cannot load %s: %s\n", opt.image.c_str(), r.error().message.c_str());
-    return kExitUsage;
-  }
 
   const uint32_t entry = img.value().entry, stack_size = img.value().stack_size;
   const int rc = opt.headless ? lr::kernel::run_main_thread(entry, stack_size) : run_with_window(entry, stack_size);

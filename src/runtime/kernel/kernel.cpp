@@ -104,6 +104,8 @@ Result<void> init_kernel(runtime::GuestMemory& mem, KernelConfig cfg) {
     return r;
   }
   install_thread_hooks(*k);
+  // Spec section 10: the TSC rate KeQueryPerformanceFrequency reports is measured at init (once per process).
+  k->timers().set_tsc_hz(process_tsc_hz());
   return {};
 }
 

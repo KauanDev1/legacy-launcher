@@ -3,6 +3,8 @@
 // behind a test GuestGlue keyed by guest address (same pattern as test_kernel_threads.cpp).
 #include <catch2/catch_test_macros.hpp>
 
+#include <sys/wait.h>
+#include <unistd.h>
 #include <x86intrin.h>
 
 #include <atomic>
@@ -11,6 +13,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -390,4 +393,82 @@ TEST_CASE("KeTimeStampBundle is kept current once imported", "[unit][kernel][tim
   const int64_t sys = static_cast<int64_t>(static_cast<uint64_t>(b->system_time));
   CHECK(sys <= now);
   CHECK(sys > now - 10'000'000);  // within 1 s
+}
+
+TEST_CASE("the TSC rate is measured at kernel init", "[unit][kernel][time]") {
+  KernelFixture f;
+  CHECK(kernel().timers().tsc_hz() > 100'000'000ull);  // before any KeQueryPerformanceFrequency call
+  CHECK(kernel().timers().tsc_hz() == process_tsc_hz());
+}
+
+TEST_CASE("NtSetTimerEx rejects a negative period", "[unit][kernel][time]") {
+  KernelFixture f;
+  const uint32_t h = create_timer(f, 0);
+  const uint32_t due = f.alloc(8);
+  *f.mem.translate<be<int64_t>>(due) = -10'000;
+  CHECK(static_cast<uint32_t>(f.call("NtSetTimerEx", h, due, 0u, 1u, 0u, 0u, -5, 0u)) == STATUS_INVALID_PARAMETER);
+  CHECK_FALSE(kernel().timers().has_pending_work());
+  CHECK(f.call("NtClose", h) == STATUS_SUCCESS);
+}
+
+TEST_CASE("a DPC without a routine is a guest fatal error", "[unit][kernel][time]") {
+  int fds[2];
+  REQUIRE(::pipe(fds) == 0);
+  const pid_t pid = ::fork();
+  REQUIRE(pid >= 0);
+  if (pid == 0) {
+    ::dup2(fds[1], 2);
+    ::close(fds[0]);
+    {
+      KernelFixture f;
+      const uint32_t dpc = f.alloc(sizeof(X_KDPC));
+      f.call("KeInitializeDpc", dpc, 0u, 0u);
+      f.call("KeInsertQueueDpc", dpc, 0u, 0u);
+    }
+    ::_exit(99);
+  }
+  ::close(fds[1]);
+  std::string out;
+  char buf[256];
+  for (ssize_t n; (n = ::read(fds[0], buf, sizeof buf)) > 0;) out.append(buf, static_cast<size_t>(n));
+  ::close(fds[0]);
+  int status = 0;
+  REQUIRE(::waitpid(pid, &status, 0) == pid);
+  REQUIRE(WIFEXITED(status));
+  CHECK(WEXITSTATUS(status) == 5);
+  CHECK(out.find("DPC without a routine") != std::string::npos);
+}
+
+TEST_CASE("the worker's TLS block holds the XEX TLS template", "[unit][kernel][time]") {
+  KernelFixture f;
+  const uint32_t tmpl = f.alloc(0x10);
+  for (uint32_t i = 0; i < 0x10; ++i) *f.mem.translate<uint8_t>(tmpl + i) = static_cast<uint8_t>(0xB0 + i);
+  REQUIRE(kernel().threads().set_image(lr::formats::TlsInfo{100, tmpl, 0x20, 0x10}, 0, tmpl, 0x10));
+  const uint32_t dpc = f.alloc(sizeof(X_KDPC));
+  std::atomic<bool> done{false};
+  std::vector<uint8_t> bytes;
+  uint32_t kt_tls = 0, tls = 0;
+  uint64_t set_ok = 0, got = 0;
+  def(kFnA, [&](const std::vector<uint64_t>&) -> uint64_t {
+    tls = rd(f, t_r13 + offsetof(X_KPCR, tls_ptr));
+    kt_tls = rd(f, current_thread()->kthread() + offsetof(X_KTHREAD, tls_address));
+    bytes.assign(f.mem.translate<uint8_t>(tls), f.mem.translate<uint8_t>(tls) + 0x20);
+    set_ok = gcall(f, "KeTlsSetValue", 99u, 0x1234u);  // slot 99 exists: the header asks for 100
+    got = gcall(f, "KeTlsGetValue", 99u);
+    done = true;
+    return 0;
+  });
+  f.call("KeInitializeDpc", dpc, kFnA, 0u);
+  CHECK((f.call("KeInsertQueueDpc", dpc, 0u, 0u) & 0xFF) == 1);
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (!done && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+  REQUIRE(done);
+  std::vector<uint8_t> want(0x20, 0);
+  for (uint32_t i = 0; i < 0x10; ++i) want[i] = static_cast<uint8_t>(0xB0 + i);
+  CHECK(bytes == want);
+  CHECK(tls == kt_tls);
+  CHECK(set_ok == 1);
+  CHECK(got == 0x1234);
+  // The worker froze the TLS layout like any thread.
+  CHECK_FALSE(kernel().threads().set_image(std::nullopt, 0, tmpl, 0x10));
 }

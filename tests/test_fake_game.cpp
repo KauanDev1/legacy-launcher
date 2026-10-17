@@ -138,6 +138,26 @@ TEST_CASE("fake game rejects an unusable XEX TLS header with exit 2", "[unit][th
   CHECK(huge.out.find("data size 4294967295 exceeds") != std::string::npos);
 }
 
+// Importing KeTimeStampBundle starts the kernel worker inside resolve_variable_imports, and creating the worker freezes
+// the TLS layout: main.cpp must set the image (TLS template) first, or the load fails with exit 2.
+TEST_CASE("fake game with a TLS header and a KeTimeStampBundle import loads and runs", "[unit][threads][time]") {
+  TempDir td;
+  std::vector<uint8_t> text(0x100, 0), data(0x100, 0);
+  lr::testing::put_be32(data, 0x0, 0x0AD);  // xboxkrnl KeTimeStampBundle (variable)
+  const auto xex = lr::testing::Xex2Builder()
+                       .entry_point(0x82000180)
+                       .image_base(0x82000000)
+                       .tls(0, 0x82002010, 0x20, 0x10)
+                       .import_library("xboxkrnl.exe", {0x82002000})
+                       .pe_image(0x82000000, 0x3000, {{".text", 0x1000, text, true}, {".data", 0x2000, data, false}})
+                       .build();
+  const fs::path p = td.path / "tls_bundle.xex";
+  std::ofstream(p, std::ios::binary).write(reinterpret_cast<const char*>(xex.data()), std::streamsize(xex.size()));
+  auto r = run_game(td.path, {"--headless", "--image", p.string()});
+  INFO(r.out);
+  CHECK(r.code == 0);
+}
+
 // sub_82000280 calls FakeCallback(sub_82000200, 41); the callback checks the frame call_guest built and returns
 // 42, which sub_82000280 checks (a mismatch calls FakeMissing, exit 3).
 TEST_CASE("call_guest runs a recompiled callback", "[unit]") {
