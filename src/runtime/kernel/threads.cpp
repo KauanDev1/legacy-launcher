@@ -37,6 +37,7 @@ constexpr uint32_t kMinStack = 0x4000;  // Xenia: 16 KiB minimum
 constexpr uint32_t kKThreadOffset = 0;
 constexpr uint32_t kPcrOffset = sizeof(X_KTHREAD);
 constexpr uint32_t kTlsOffset = (kPcrOffset + sizeof(X_KPCR) + 0xF) & ~0xFu;
+constexpr uint64_t kMaxThreadBlock = 0x01000000;  // far above the capped TLS layout (Threads::kMax*)
 
 thread_local GuestThread* t_current = nullptr;
 
@@ -206,6 +207,8 @@ void GuestThread::finish(uint32_t code) {
     finished_.store(true, std::memory_order_release);
     apcs_.clear();  // rundown: queued APCs never run
   }
+  // Nothing per-thread may outlive the thread in the dispatcher: a later thread can get the same KTHREAD address.
+  kernel_.dispatcher().thread_exited(kthread());
   store_signal_state(kernel_.memory().base(), kthread(), 1);
   kernel_.dispatcher().signal(kthread());
   kernel_.threads().remove(this);
@@ -215,12 +218,36 @@ void GuestThread::finish(uint32_t code) {
 
 Threads::Threads() : default_stack_size_(runtime::kDefaultStackSize), tls_used_(kMinTlsSlots, false) {}
 
-void Threads::set_image(std::optional<formats::TlsInfo> tls, uint32_t default_stack_size) {
+Result<void> Threads::set_image(std::optional<formats::TlsInfo> tls, uint32_t default_stack_size, uint32_t image_base,
+                                uint32_t image_size) {
   std::lock_guard<std::mutex> lock(mutex_);
+  if (threads_created_)
+    return Error{ErrorCode::Internal, "the image TLS layout cannot change after a guest thread exists",
+                 "Threads::set_image must run before the first create_guest_thread"};
+  if (tls) {
+    if (tls->slot_count > kMaxTlsSlots)
+      return Error{ErrorCode::InvalidFormat, "XEX TLS header: slot count " + std::to_string(tls->slot_count) +
+                                                 " exceeds " + std::to_string(kMaxTlsSlots), ""};
+    if (tls->data_size > kMaxTlsDataSize)
+      return Error{ErrorCode::InvalidFormat, "XEX TLS header: data size " + std::to_string(tls->data_size) +
+                                                 " exceeds " + std::to_string(kMaxTlsDataSize), ""};
+    if (tls->raw_data_size > tls->data_size)
+      return Error{ErrorCode::InvalidFormat, "XEX TLS header: raw data size exceeds the data size", ""};
+    const uint64_t raw_end = uint64_t{tls->raw_data_address} + tls->raw_data_size;
+    if (tls->raw_data_size != 0 &&
+        (tls->raw_data_address < image_base || raw_end > uint64_t{image_base} + image_size))
+      return Error{ErrorCode::InvalidFormat, "XEX TLS header: raw data lies outside the loaded image", ""};
+  }
   tls_ = tls;
   if (default_stack_size != 0) default_stack_size_ = default_stack_size;
   const uint32_t slots = std::max(kMinTlsSlots, tls ? tls->slot_count : 0u);
   tls_used_.assign(slots, false);
+  return {};
+}
+
+void Threads::mark_thread_created() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  threads_created_ = true;
 }
 
 std::optional<formats::TlsInfo> Threads::tls() const {
@@ -304,10 +331,16 @@ std::vector<Threads::TerminateNotification> Threads::terminate_notifications() c
 Result<std::shared_ptr<GuestThread>> create_guest_thread(const ThreadParams& p) {
   Kernel& k = kernel();
   Threads& threads = k.threads();
+  threads.mark_thread_created();  // freezes the TLS layout (set_image refuses from now on)
   uint8_t* const base = k.memory().base();
   const std::optional<formats::TlsInfo> tls = threads.tls();
   const uint32_t slots = threads.tls_slot_count();
-  const uint32_t tls_static = tls ? round_up(tls->data_size, 4) : 0;
+  // Sized in 64 bits: set_image caps the header values, this keeps a bad layout from wrapping into a short block.
+  const uint64_t tls_static64 = tls ? (uint64_t{tls->data_size} + 3) / 4 * 4 : 0;
+  const uint64_t block_size = uint64_t{kTlsOffset} + tls_static64 + uint64_t{slots} * 4;
+  if (block_size > kMaxThreadBlock)
+    return Error{ErrorCode::InvalidFormat, "guest thread TLS block too large", std::to_string(block_size) + " bytes"};
+  const uint32_t tls_static = static_cast<uint32_t>(tls_static64);
 
   // Guest stack: one reserved guard page below the committed stack.
   const uint32_t stack_size = std::max(kMinStack, round_up(p.stack_size != 0 ? p.stack_size : threads.default_stack_size(), kPage));
@@ -320,7 +353,7 @@ Result<std::shared_ptr<GuestThread>> create_guest_thread(const ThreadParams& p) 
   }
   Result<void> prot = k.memory().protect(stack_alloc + kPage, stack_size, PROT_READ | PROT_WRITE);
   if (prot) prot = k.memory().protect(stack_alloc, kPage, PROT_NONE);
-  const uint32_t block = prot ? k.pool_alloc(kTlsOffset + tls_static + slots * 4, 0) : 0;
+  const uint32_t block = prot ? k.pool_alloc(static_cast<uint32_t>(block_size), 0) : 0;
   if (block == 0) {
     (void)k.memory().protect(stack_alloc, kPage, PROT_READ | PROT_WRITE);
     (void)k.stacks().release(stack_alloc);

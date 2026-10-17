@@ -113,7 +113,10 @@ com `static_assert` em `guest_structs.h`; semântica do `xthread.cc`, só refer�
   `tls_ptr` `+0x00`, `pcr_ptr` `+0x30`, topo da pilha `+0x70`, fundo `+0x74`, `current_thread` `+0x100`,
   `current_cpu` `+0x10C`) e o bloco TLS: cópia do modelo TLS do XEX (cabeçalho `0x00020104`: dados brutos de
   `raw_data_address`, completados com zeros até `data_size`) seguida dos slots de `KeTlsAlloc` (`be<uint32_t>`,
-  no mínimo 64, ou o `slot_count` do cabeçalho se maior; bitmap de slots do processo). `tls_ptr` e
+  no mínimo 64, ou o `slot_count` do cabeçalho se maior; bitmap de slots do processo). O `main.cpp` passa o
+  cabeçalho a `Threads::set_image`, que o valida (no máximo 4096 slots e 4 MiB de dados, `raw_data_size` <=
+  `data_size`, dados brutos dentro da imagem carregada; tamanhos calculados em 64 bits): um cabeçalho inválido é erro
+  de carga (saída 2). `set_image` é recusado depois que existe alguma thread, então o layout de TLS é fixo. `tls_ptr` e
   `tls_address` apontam para a cópia do modelo, como o `tls_static_address` do Xenia;
 - uma pilha do heap de pilhas (`Kernel::stacks()`), arredondada a 4 KiB, mínimo 16 KiB, com uma página de guarda
   reservada e `PROT_NONE` logo abaixo. A thread começa com `r1` = topo - `0x80`.
@@ -128,7 +131,10 @@ Início: toda thread entra no código recompilado pela cola (`call_guest_on_fram
 carrega o `fpscr` do host. Com rotina de início XAPI chama `xapi(início, contexto)` e o código de saída é 0; sem
 ela, `início(contexto)` e o código de saída é o r3 devolvido. `ExTerminateThread(código)` lança
 `GuestThreadExit`, capturada no topo da thread (a segunda e última exceção permitida, ADR 0004). Ao terminar, o
-`signal_state` do KTHREAD vira 1 e `Dispatcher::signal` acorda quem espera; APCs pendentes são descartadas.
+`signal_state` do KTHREAD vira 1 e `Dispatcher::signal` acorda quem espera; APCs pendentes são descartadas e
+`Dispatcher::thread_exited` apaga o despertar de APC pendente e abandona os mutantes que a thread ainda possui (quem
+os adquire depois recebe `STATUS_ABANDONED_WAIT_0`), para que nada passe a uma thread nova cujo KTHREAD reutilize o
+mesmo endereço.
 
 No topo de cada thread: `UnimplementedImport` imprime o relatório com uma linha `Thread: <id>` (spec §11) e
 encerra o processo inteiro com `_exit(3)`; qualquer outra exceção dá `_exit(4)`; falha real (SIGSEGV, SIGILL,
@@ -146,7 +152,8 @@ bloqueia a thread na próxima importação. `NtResumeThread`/`KeResumeThread` de
 
 APCs: `NtQueueApcThread(handle, rotina, contexto, arg1, arg2)` põe `(rotina, contexto, arg1, arg2)` na fila da
 thread e chama `Dispatcher::wake_for_apc`. Uma espera alertável (`KeWaitFor*`, `NtWaitFor*Ex`,
-`NtSignalAndWaitForSingleObjectEx`, `KeDelayExecutionThread`) que volta com `STATUS_USER_APC` executa antes as APCs
+`NtSignalAndWaitForSingleObjectEx`, `KeDelayExecutionThread`; nesta, um ponteiro de intervalo nulo vale 0, um
+yield, em vez de espera infinita) que volta com `STATUS_USER_APC` executa antes as APCs
 da fila com `call_guest(rotina, {contexto, arg1, arg2})`, salvo dentro de `KeEnterCriticalRegion` (contador de
 APCs desabilitadas; ao sair da região, APCs pendentes rearmam a próxima espera alertável). `NtAlertThread` não é
 importado pelo jogo, então `STATUS_ALERTED` nunca é produzido.

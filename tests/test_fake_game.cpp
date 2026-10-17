@@ -108,6 +108,36 @@ TEST_CASE("fake game --coverage --image adds the XEX's variable imports", "[unit
   CHECK(r.out.find("Implemented: 5, stub: 2, missing: 2 / 6 functions + 3 variables") != std::string::npos);
 }
 
+// The XEX TLS header (key 0x00020104) is validated at load: an unusable one is a load error (exit 2), never a
+// corrupted TLS block. Entry sub_82000180 returns normally (exit 0) when the image loads.
+TEST_CASE("fake game rejects an unusable XEX TLS header with exit 2", "[unit][threads]") {
+  TempDir td;
+  auto run_with_tls = [&](uint32_t slots, uint32_t raw_addr, uint32_t data_size, uint32_t raw_size) {
+    std::vector<uint8_t> text(0x100, 0), data(0x100, 0);
+    const auto xex = lr::testing::Xex2Builder()
+                         .entry_point(0x82000180)
+                         .image_base(0x82000000)
+                         .tls(slots, raw_addr, data_size, raw_size)
+                         .pe_image(0x82000000, 0x3000, {{".text", 0x1000, text, true}, {".data", 0x2000, data, false}})
+                         .build();
+    const fs::path p = td.path / "tls.xex";
+    std::ofstream(p, std::ios::binary).write(reinterpret_cast<const char*>(xex.data()), std::streamsize(xex.size()));
+    return run_game(td.path, {"--headless", "--image", p.string()});
+  };
+  auto ok = run_with_tls(0, 0x82002000, 0x20, 0x10);
+  INFO(ok.out);
+  CHECK(ok.code == 0);
+  auto slots = run_with_tls(100000, 0x82002000, 0x20, 0x10);
+  CHECK(slots.code == 2);
+  CHECK(slots.out.find("XEX TLS header: slot count 100000 exceeds 4096") != std::string::npos);
+  auto outside = run_with_tls(0, 0x90000000, 0x20, 0x10);
+  CHECK(outside.code == 2);
+  CHECK(outside.out.find("raw data lies outside the loaded image") != std::string::npos);
+  auto huge = run_with_tls(0, 0x82002000, 0xFFFFFFFF, 0x10);
+  CHECK(huge.code == 2);
+  CHECK(huge.out.find("data size 4294967295 exceeds") != std::string::npos);
+}
+
 // sub_82000280 calls FakeCallback(sub_82000200, 41); the callback checks the frame call_guest built and returns
 // 42, which sub_82000280 checks (a mismatch calls FakeMissing, exit 3).
 TEST_CASE("call_guest runs a recompiled callback", "[unit]") {

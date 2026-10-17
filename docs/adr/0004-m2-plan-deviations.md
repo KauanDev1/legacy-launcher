@@ -68,3 +68,14 @@ Formato: o quê, por quê, custo se estiver errada.
   código gerado; o custo é uma leitura atômica por importação; (c)–(e) seguem o comportamento observado no Xenia.
 - Custo se errado: (a) memória de TLS por thread um pouco maior; (b) uma thread suspensa que nunca chama uma
   importação nunca para (aceitável: suspender outra thread é raro e o jogo só o faz em pontos de sincronização).
+
+### M6. Validação do cabeçalho TLS e limpeza do despachante no fim da thread (Tarefa 17, correção)
+- O quê: `Threads::set_image` valida o cabeçalho TLS do XEX (no máximo 4096 slots e 4 MiB de dados,
+  `raw_data_size` <= `data_size`, dados brutos dentro da imagem carregada) e o jogo sai com 2 se ele for inválido;
+  o bloco por thread é dimensionado em 64 bits. `set_image` é recusado depois da primeira thread. No fim de uma
+  thread, `Dispatcher::thread_exited` apaga o despertar de APC pendente e abandona os mutantes que ela possui.
+  `KeDelayExecutionThread` com ponteiro de intervalo nulo faz só um yield.
+- Por quê: um cabeçalho malformado faria alocações gigantes ou um bloco curto (estouro de 32 bits) e a cópia do
+  modelo escreveria sobre outros objetos do kernel; e o estado por thread do despachante é indexado pelo endereço do
+  KTHREAD, que o pool reutiliza para a próxima thread.
+- Custo se errado: um título legítimo acima dos limites seria recusado na carga (limites bem acima do uso real).

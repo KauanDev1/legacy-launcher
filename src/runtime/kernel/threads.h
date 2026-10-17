@@ -125,12 +125,21 @@ class Threads {
  public:
   static constexpr uint32_t kMinTlsSlots = 64;
   static constexpr uint32_t kTlsOutOfIndexes = 0xFFFFFFFF;
+  // Sanity caps on the XEX TLS header (a valid title is far below both).
+  static constexpr uint32_t kMaxTlsSlots = 4096;
+  static constexpr uint32_t kMaxTlsDataSize = 4u << 20;
 
   Threads();
 
-  // From the loaded image: TLS template (XEX key 0x00020104) and default stack size (0 keeps the current one).
-  // Call before any thread is created. Slot count = max(64, the header's slot_count).
-  void set_image(std::optional<formats::TlsInfo> tls, uint32_t default_stack_size);
+  // From the loaded image [image_base, image_base + image_size): TLS template (XEX key 0x00020104) and default
+  // stack size (0 keeps the current one). Slot count = max(64, the header's slot_count). InvalidFormat when the
+  // header is unusable: slot_count > kMaxTlsSlots, data_size > kMaxTlsDataSize, raw_data_size > data_size, or raw
+  // data outside the image. Internal once a guest thread has been created (the layout of existing TLS blocks is
+  // fixed). Nothing is changed on error.
+  Result<void> set_image(std::optional<formats::TlsInfo> tls, uint32_t default_stack_size, uint32_t image_base,
+                         uint32_t image_size);
+  // Called by create_guest_thread: from then on set_image fails.
+  void mark_thread_created();
   std::optional<formats::TlsInfo> tls() const;
   uint32_t tls_slot_count() const;
   uint32_t default_stack_size() const;
@@ -164,6 +173,7 @@ class Threads {
   std::vector<bool> tls_used_;
   std::vector<std::weak_ptr<GuestThread>> live_;
   std::vector<TerminateNotification> notifications_;
+  bool threads_created_ = false;
   std::atomic<uint32_t> next_id_{1};
   std::atomic<uint32_t> next_cpu_{0};
   std::atomic<uint32_t> process_type_{1};

@@ -115,8 +115,10 @@ uint32_t NtYieldExecution() {
 // KeDelayExecutionThread(processor_mode, alertable, interval*): STATUS_SUCCESS after the interval (relative < 0,
 // absolute > 0, 0 = yield), or STATUS_USER_APC when an APC arrived during an alertable delay (the queued APCs
 // have run by then).
+// A null (or null-page) interval pointer is treated as 0, a yield: Xenia dereferences it unconditionally, and
+// timeout_from_guest's null = infinite rule (right for waits) would turn a bad call into a thread that never wakes.
 uint32_t KeDelayExecutionThread(uint32_t /*mode*/, uint32_t alertable, TimeoutPtr interval) {
-  const Timeout t = timeout_from_guest(interval);
+  const Timeout t = interval.valid_range(8) ? timeout_from_guest(interval) : Timeout{Timeout::Poll, 0};
   const uint32_t s = kernel().dispatcher().wait({}, WaitType::Any, t, (alertable & 0xFF) != 0);
   if (s == STATUS_USER_APC) {
     deliver_current_apcs();

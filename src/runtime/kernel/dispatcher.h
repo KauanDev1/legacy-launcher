@@ -94,6 +94,11 @@ class Dispatcher {
   // Makes an alertable wait of `thread_token` return STATUS_USER_APC (now, or at its next alertable wait).
   void wake_for_apc(uint32_t thread_token);
 
+  // A guest thread ended: forgets its pending APC wake-up and abandons every mutant it still owns (signal_state 1,
+  // owner 0, abandoned: the next acquirer gets STATUS_ABANDONED_WAIT_0), so nothing carries over to a new thread
+  // whose KTHREAD (its token) reuses the same guest address.
+  void thread_exited(uint32_t thread_token);
+
   // Threads currently blocked in wait(), for the deadlock detector (Task 20).
   std::vector<WaitInfo> snapshot() const;
 
@@ -127,6 +132,8 @@ class Dispatcher {
   // The wait status when the wait described by (headers, type, token) can be satisfied now (consuming it).
   bool try_satisfy(std::span<const uint32_t> headers, WaitType type, uint32_t token, uint32_t& result);
   void wake_waiters(uint32_t header);
+  // Writes a mutant's owner field and updates owned_.
+  void set_owner(uint32_t header, uint32_t token);
   int32_t set_event_locked(uint32_t header);
   uint32_t release_semaphore_locked(uint32_t header, int32_t count, int32_t* previous);
   uint32_t release_mutant_locked(uint32_t header, bool abandon, int32_t* previous);
@@ -138,6 +145,8 @@ class Dispatcher {
   std::unordered_map<uint32_t, std::vector<Waiter*>> by_header_;
   std::vector<Waiter*> waiters_;
   std::unordered_map<uint32_t, bool> apc_pending_;
+  // thread token -> headers of the mutants it owns (kept in step with the owner field by set_owner).
+  std::unordered_map<uint32_t, std::vector<uint32_t>> owned_;
   std::atomic<uint32_t (*)()> token_hook_{nullptr};
 };
 

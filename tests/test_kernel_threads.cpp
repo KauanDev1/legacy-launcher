@@ -313,7 +313,7 @@ TEST_CASE("TLS template copied per thread", "[unit][kernel][threads]") {
   KernelFixture f;
   const uint32_t tmpl = f.alloc(0x10);
   for (uint32_t i = 0; i < 0x10; ++i) *f.mem.translate<uint8_t>(tmpl + i) = static_cast<uint8_t>(0xA0 + i);
-  kernel().threads().set_image(lr::formats::TlsInfo{0, tmpl, 0x20, 0x10}, 0);
+  REQUIRE(kernel().threads().set_image(lr::formats::TlsInfo{0, tmpl, 0x20, 0x10}, 0, tmpl, 0x10));
 
   struct Seen {
     uint32_t tls = 0, kt_tls = 0;
@@ -535,4 +535,149 @@ TEST_CASE("a stray exception on a guest thread exits 4", "[unit][kernel][threads
   });
   CHECK(r.code == 4);
   CHECK(r.err.find("Thread: 1") != std::string::npos);
+}
+
+TEST_CASE("set_image rejects an unusable XEX TLS header", "[unit][kernel][threads]") {
+  using lr::formats::TlsInfo;
+  KernelFixture f;
+  Threads& t = kernel().threads();
+  constexpr uint32_t kBase = 0x82000000, kSize = 0x10000;
+  // Slot count over the cap (would size a giant bitmap and TLS block).
+  auto slots = t.set_image(TlsInfo{Threads::kMaxTlsSlots + 1, kBase, 0x10, 0x10}, 0, kBase, kSize);
+  REQUIRE_FALSE(slots);
+  CHECK(slots.error().code == lr::ErrorCode::InvalidFormat);
+  CHECK(slots.error().message.find("slot count") != std::string::npos);
+  // data_size over the cap; 0xFFFFFFFF would also wrap a 32-bit block size computation.
+  CHECK_FALSE(t.set_image(TlsInfo{0, kBase, Threads::kMaxTlsDataSize + 4, 0}, 0, kBase, kSize));
+  CHECK_FALSE(t.set_image(TlsInfo{0, kBase, 0xFFFFFFFF, 0}, 0, kBase, kSize));
+  // Raw data bigger than the data, outside the image, or wrapping past 4 GiB.
+  CHECK_FALSE(t.set_image(TlsInfo{0, kBase, 0x10, 0x20}, 0, kBase, kSize));
+  auto outside = t.set_image(TlsInfo{0, kBase + kSize - 8, 0x10, 0x10}, 0, kBase, kSize);
+  REQUIRE_FALSE(outside);
+  CHECK(outside.error().message.find("outside the loaded image") != std::string::npos);
+  CHECK_FALSE(t.set_image(TlsInfo{0, kBase - 0x10, 0x10, 0x10}, 0, kBase, kSize));
+  CHECK_FALSE(t.set_image(TlsInfo{0, 0xFFFFFFF8, 0x10, 0x10}, 0, kBase, kSize));
+  // Nothing changed by the rejections.
+  CHECK_FALSE(t.tls());
+  CHECK(t.tls_slot_count() == Threads::kMinTlsSlots);
+  // The caps themselves and a template inside the image are accepted.
+  CHECK(t.set_image(TlsInfo{Threads::kMaxTlsSlots, kBase, Threads::kMaxTlsDataSize, 0x10}, 0, kBase, kSize));
+  CHECK(t.tls_slot_count() == Threads::kMaxTlsSlots);
+  CHECK(t.set_image(TlsInfo{0, kBase + kSize - 0x10, 0x10, 0x10}, 0x8000, kBase, kSize));
+  CHECK(t.default_stack_size() == 0x8000);
+}
+
+TEST_CASE("set_image is refused once a guest thread exists", "[unit][kernel][threads]") {
+  KernelFixture f;
+  def(kFnA, [](const std::vector<uint64_t>&) -> uint64_t { return 0; });
+  const Created c = create(f, kFnA, 0);
+  REQUIRE(c.status == STATUS_SUCCESS);
+  CHECK(wait_handle(f, c.handle) == STATUS_WAIT_0);
+  auto r = kernel().threads().set_image(lr::formats::TlsInfo{128, 0, 0x10, 0}, 0, 0x82000000, 0x10000);
+  REQUIRE_FALSE(r);
+  CHECK(r.error().code == lr::ErrorCode::Internal);
+  CHECK(kernel().threads().tls_slot_count() == Threads::kMinTlsSlots);  // existing TLS blocks keep their layout
+  CHECK(f.call("NtClose", c.handle) == STATUS_SUCCESS);
+}
+
+TEST_CASE("a thread that exits holding a mutant abandons it", "[unit][kernel][threads]") {
+  KernelFixture f;
+  const uint32_t m = f.alloc(sizeof(X_KMUTANT));
+  def(kFnA, [&f, m](const std::vector<uint64_t>&) -> uint64_t {
+    (void)gcall(f, "KeInitializeMutant", m, 1u);  // owned by this thread, never released
+    return 0;
+  });
+  const Created c = create(f, kFnA, 0);
+  REQUIRE(c.status == STATUS_SUCCESS);
+  CHECK(wait_handle(f, c.handle) == STATUS_WAIT_0);
+  CHECK(rd(f, m + offsetof(X_KMUTANT, owner)) == 0);
+  const uint32_t five_s = f.alloc(8);  // bounded: without the abandon the wait would never end
+  *f.mem.translate<be<int64_t>>(five_s) = -50'000'000;
+  CHECK(f.call("KeWaitForSingleObject", m, 0u, 0u, 0u, five_s) == STATUS_ABANDONED_WAIT_0);
+  // The waiter owns it now, normally (the abandoned mark is consumed).
+  CHECK(rd(f, m + offsetof(X_KMUTANT, owner)) == kernel().dispatcher().current_thread_token());
+  CHECK(f.call("KeReleaseMutant", m, 0u, 0u, 0u) == 0);
+  CHECK(f.call("NtClose", c.handle) == STATUS_SUCCESS);
+}
+
+TEST_CASE("a waiter blocked on a mutant gets STATUS_ABANDONED_WAIT_0 when its owner thread exits",
+          "[unit][kernel][threads]") {
+  KernelFixture f;
+  const uint32_t m = f.alloc(sizeof(X_KMUTANT));
+  const uint32_t ev_out = f.alloc(4);
+  REQUIRE(f.call("NtCreateEvent", ev_out, 0u, 0u, 0u) == STATUS_SUCCESS);
+  const uint32_t ev = rd(f, ev_out);
+  std::atomic<bool> owned{false};
+  def(kFnA, [&f, &owned, m, ev](const std::vector<uint64_t>&) -> uint64_t {
+    (void)gcall(f, "KeInitializeMutant", m, 1u);
+    owned = true;
+    return gcall(f, "NtWaitForSingleObjectEx", ev, 0u, 0u, 0u);
+  });
+  const Created c = create(f, kFnA, 0);
+  REQUIRE(c.status == STATUS_SUCCESS);
+  while (!owned) std::this_thread::yield();
+  std::atomic<uint32_t> waiter_status{0xFFFFFFFF};
+  const uint32_t five_s = f.alloc(8);  // bounded: without the abandon the wait would never end
+  *f.mem.translate<be<int64_t>>(five_s) = -50'000'000;
+  std::thread waiter([&] { waiter_status = gcall(f, "KeWaitForSingleObject", m, 0u, 0u, 0u, five_s); });
+  REQUIRE(wait_for_waiters(2));
+  CHECK(f.call("NtSetEvent", ev, 0u) == STATUS_SUCCESS);  // the owner exits without releasing
+  waiter.join();
+  CHECK(waiter_status == STATUS_ABANDONED_WAIT_0);
+  CHECK(wait_handle(f, c.handle) == STATUS_WAIT_0);
+  CHECK(f.call("NtClose", c.handle) == STATUS_SUCCESS);
+  CHECK(f.call("NtClose", ev) == STATUS_SUCCESS);
+}
+
+TEST_CASE("a pending APC does not leak into a thread that reuses the KTHREAD address", "[unit][kernel][threads]") {
+  KernelFixture f;
+  const uint32_t ev_out = f.alloc(4);
+  REQUIRE(f.call("NtCreateEvent", ev_out, 0u, 0u, 0u) == STATUS_SUCCESS);
+  const uint32_t ev = rd(f, ev_out);
+  std::atomic<int> apc_runs{0};
+  def(kFnC, [&](const std::vector<uint64_t>&) -> uint64_t {
+    ++apc_runs;
+    return 0;
+  });
+  // A: a non-alertable wait, so a queued APC only leaves a pending wake-up behind; A exits without delivering it.
+  def(kFnA, [&f, ev](const std::vector<uint64_t>&) -> uint64_t {
+    return gcall(f, "NtWaitForSingleObjectEx", ev, 0u, 0u, 0u);
+  });
+  const Created a = create(f, kFnA, 0);
+  REQUIRE(a.status == STATUS_SUCCESS);
+  REQUIRE(wait_for_waiters(1));
+  CHECK(f.call("NtQueueApcThread", a.handle, kFnC, 0u, 0u, 0u) == STATUS_SUCCESS);
+  CHECK(f.call("NtSetEvent", ev, 0u) == STATUS_SUCCESS);
+  CHECK(wait_handle(f, a.handle) == STATUS_WAIT_0);
+  std::weak_ptr<GuestThread> gone = thread_of(a.handle);
+  const uint32_t a_kthread = gone.lock()->kthread();
+  CHECK(f.call("NtClose", a.handle) == STATUS_SUCCESS);
+  while (!gone.expired()) std::this_thread::yield();  // the host thread drops the last reference
+
+  // B: an alertable delay must run its full interval, not return STATUS_USER_APC from A's leftover wake-up.
+  def(kFnB, [&f](const std::vector<uint64_t>&) -> uint64_t {
+    const uint32_t interval = f.alloc(8);
+    *f.mem.translate<be<int64_t>>(interval) = -200'000;  // 20 ms
+    return gcall(f, "KeDelayExecutionThread", 1u, 1u, interval);
+  });
+  const Created b = create(f, kFnB, 0);
+  REQUIRE(b.status == STATUS_SUCCESS);
+  CHECK(wait_handle(f, b.handle) == STATUS_WAIT_0);
+  REQUIRE(thread_of(b.handle)->kthread() == a_kthread);  // the pool block was reused
+  CHECK(thread_of(b.handle)->exit_code() == STATUS_SUCCESS);
+  CHECK(apc_runs == 0);  // A's APC was discarded at its exit
+  CHECK(f.call("NtClose", b.handle) == STATUS_SUCCESS);
+  CHECK(f.call("NtClose", ev) == STATUS_SUCCESS);
+}
+
+TEST_CASE("KeDelayExecutionThread with a null interval yields instead of blocking", "[unit][kernel][threads]") {
+  KernelFixture f;
+  def(kFnA, [&f](const std::vector<uint64_t>&) -> uint64_t {
+    return gcall(f, "KeDelayExecutionThread", 1u, 1u, 0u);
+  });
+  const Created c = create(f, kFnA, 0);
+  REQUIRE(c.status == STATUS_SUCCESS);
+  CHECK(wait_handle(f, c.handle, 50'000'000) == STATUS_WAIT_0);  // 5 s bound; a block would time out
+  CHECK(thread_of(c.handle)->exit_code() == STATUS_SUCCESS);
+  CHECK(f.call("NtClose", c.handle) == STATUS_SUCCESS);
 }

@@ -79,7 +79,7 @@ bool Dispatcher::consume(uint32_t header, uint32_t token) {
       return false;
     case kMutantObject: {
       store_state(header, load_state(header) - 1);
-      store_u32(header + kMutantOwner, token);
+      set_owner(header, token);
       if (load_u32(header + kMutantAbandoned) != 0) {
         store_u32(header + kMutantAbandoned, 0);
         return true;
@@ -245,10 +245,10 @@ void Dispatcher::init_mutant(uint32_t header, bool initial_owner) {
   store_u32(header + 0xC, header + 8);
   store_u32(header + kMutantAbandoned, 0);
   if (initial_owner) {
-    store_u32(header + kMutantOwner, current_thread_token());
+    set_owner(header, current_thread_token());
     store_state(header, 0);
   } else {
-    store_u32(header + kMutantOwner, 0);
+    set_owner(header, 0);
     store_state(header, 1);
   }
 }
@@ -257,12 +257,12 @@ uint32_t Dispatcher::release_mutant_locked(uint32_t header, bool abandon, int32_
   const int32_t prev = load_state(header);
   if (abandon) {
     store_state(header, 1);
-    store_u32(header + kMutantOwner, 0);
+    set_owner(header, 0);
     store_u32(header + kMutantAbandoned, 1);
   } else {
     if (load_u32(header + kMutantOwner) != current_thread_token()) return STATUS_MUTANT_NOT_OWNED;
     store_state(header, prev + 1);
-    if (prev + 1 == 1) store_u32(header + kMutantOwner, 0);
+    if (prev + 1 == 1) set_owner(header, 0);
   }
   if (previous != nullptr) *previous = prev;
   wake_waiters(header);
@@ -299,6 +299,32 @@ void Dispatcher::wake_for_apc(uint32_t thread_token) {
     }
   }
   apc_pending_[thread_token] = true;
+}
+
+void Dispatcher::set_owner(uint32_t header, uint32_t token) {
+  const uint32_t old = load_u32(header + kMutantOwner);
+  if (old != 0) {
+    if (auto it = owned_.find(old); it != owned_.end()) {
+      std::erase(it->second, header);
+      if (it->second.empty()) owned_.erase(it);
+    }
+  }
+  store_u32(header + kMutantOwner, token);
+  if (token != 0) owned_[token].push_back(header);
+}
+
+void Dispatcher::thread_exited(uint32_t thread_token) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  apc_pending_.erase(thread_token);
+  auto it = owned_.find(thread_token);
+  if (it == owned_.end()) return;
+  const std::vector<uint32_t> headers = it->second;  // release_mutant_locked edits owned_
+  for (uint32_t h : headers) {
+    // Only what is still a mutant owned by this thread (the guest may have reused the memory since).
+    if (type_of(h) == kMutantObject && load_u32(h + kMutantOwner) == thread_token)
+      (void)release_mutant_locked(h, true, nullptr);
+  }
+  owned_.erase(thread_token);
 }
 
 std::vector<WaitInfo> Dispatcher::snapshot() const {
