@@ -69,9 +69,11 @@ const Registrar r_command_line("ExLoadedCommandLine", 1024, [](uint8_t* p, uint3
 // Image name: a zeroed buffer (Xenia allocates kExLoadedImageNameSize bytes and writes nothing).
 const Registrar r_image_name("ExLoadedImageName", 256, nullptr);
 
-// KeTimeStampBundle: interrupt time (u64), system time (u64), tick count in ms (u32), padding. Zero until the
-// timer that keeps it current exists (Task 18), hence Stub in --coverage.
-const Registrar r_time_stamp("KeTimeStampBundle", 24, nullptr, ImportState::Stub);
+// KeTimeStampBundle (X_TIME_STAMP_BUNDLE): interrupt time (u64), system time (u64), tick count in ms (u32),
+// padding. Filled when allocated; resolve_variable_imports starts the 1 ms updates on the kernel worker only when
+// the game imports it (Timers::enable_time_stamp_bundle).
+const Registrar r_time_stamp("KeTimeStampBundle", sizeof(X_TIME_STAMP_BUNDLE),
+                             [](uint8_t* p, uint32_t) { kernel().timers().fill_time_stamp_bundle(p); });
 
 // XboxHardwareInfo: u32 flags = 0x20, u8 CPU count = 6, rest zero.
 const Registrar r_hardware_info("XboxHardwareInfo", 16, [](uint8_t* p, uint32_t) {
@@ -166,12 +168,16 @@ Result<void> resolve_variable_imports(runtime::GuestMemory& mem, const runtime::
 
   runtime::clear_fault_page_notes();
   std::map<std::string, uint32_t> guards;  // one guard page per missing variable
+  uint32_t time_stamp_bundle = 0;          // imported KeTimeStampBundle block
   for (const runtime::ImportRecord& r : records) {
     uint32_t target = r.thunk;
     const std::string label = r.name.empty() ? r.library + "@" + hex16(r.ordinal) : r.name;
     if (target == 0 && !r.name.empty()) {
       const auto it = k.variable_blocks().find(r.name);
-      if (it != k.variable_blocks().end()) target = it->second;
+      if (it != k.variable_blocks().end()) {
+        target = it->second;
+        if (r.name == "KeTimeStampBundle") time_stamp_bundle = target;
+      }
     }
     if (target == 0) {
       auto& page = guards[label];
@@ -185,6 +191,8 @@ Result<void> resolve_variable_imports(runtime::GuestMemory& mem, const runtime::
     }
     *mem.translate<runtime::be<uint32_t>>(r.slot) = target;
   }
+  // Only a title that reads the bundle pays for the 1 ms update loop.
+  if (time_stamp_bundle != 0) k.timers().enable_time_stamp_bundle(time_stamp_bundle);
   return {};
 }
 

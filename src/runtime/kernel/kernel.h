@@ -14,6 +14,7 @@
 #include "runtime/kernel/dispatcher.h"
 #include "runtime/kernel/objects.h"
 #include "runtime/kernel/threads.h"
+#include "runtime/kernel/timers.h"
 #include "runtime/memory/page_heap.h"
 #include "runtime/memory/physical_heap.h"
 
@@ -32,6 +33,8 @@ struct KernelConfig {
 class Kernel {
  public:
   Kernel(runtime::GuestMemory& mem, KernelConfig cfg);
+  // Stops the timer/DPC worker first (Timers::shutdown), while everything it uses still exists.
+  ~Kernel();
   Kernel(const Kernel&) = delete;
   Kernel& operator=(const Kernel&) = delete;
 
@@ -79,6 +82,9 @@ class Kernel {
   // Guest thread state (runtime/kernel/threads.h).
   Threads& threads() { return threads_; }
 
+  // Clocks, timers, DPCs and the kernel worker thread (runtime/kernel/timers.h).
+  Timers& timers() { return timers_; }
+
   // Kernel variable name -> guest address of its block (filled by resolve_variable_imports).
   std::map<std::string, uint32_t, std::less<>>& variable_blocks() { return variable_blocks_; }
 
@@ -97,6 +103,9 @@ class Kernel {
   runtime::PhysicalHeap physical_;
   runtime::PageHeap stacks_;
   Threads threads_;
+  // Destroyed after the objects (a timer object disarms itself here) and before the heaps (the worker's guest
+  // memory); the worker itself is stopped by ~Kernel before any member goes away.
+  Timers timers_;
   // After the heaps: objects are destroyed first, so objects backed by pool memory can still free it.
   ObjectTable objects_;
   Dispatcher dispatcher_;

@@ -200,6 +200,67 @@ struct X_LARGE_INTEGER {
 };
 static_assert(sizeof(X_LARGE_INTEGER) == 8);
 
+// Timer body created by NtCreateTimer (type 8 notification / 9 synchronization). Xenia keeps timers host-side and
+// declares no X_KTIMER; this is the NT KTIMER layout (header, due time, timer list entry, DPC, period), of which
+// only the header is used: the timer engine (timers.h) keeps due time and period on the host.
+struct X_KTIMER {
+  X_DISPATCHER_HEADER header;  // 0x00
+  be<uint64_t> due_time;       // 0x10
+  X_LIST_ENTRY timer_list;     // 0x18
+  be<uint32_t> dpc;            // 0x20
+  be<int32_t> period;          // 0x24
+};
+static_assert(sizeof(X_KTIMER) == 0x28);
+static_assert(offsetof(X_KTIMER, due_time) == 0x10);
+static_assert(offsetof(X_KTIMER, dpc) == 0x20);
+static_assert(offsetof(X_KTIMER, period) == 0x24);
+
+// Deferred procedure call object, from Xenia's XDPC (xboxkrnl_threading.cc): seven u32. KeInitializeDpc packs the
+// object type 19 (DpcObject) in the top byte of the first word, importance and number below it.
+struct X_KDPC {
+  be<uint32_t> type_word;  // 0x00: type << 24 | importance << 16 | number << 8
+  be<uint32_t> flink;      // 0x04
+  be<uint32_t> blink;      // 0x08
+  be<uint32_t> routine;    // 0x0C
+  be<uint32_t> context;    // 0x10
+  be<uint32_t> arg1;       // 0x14
+  be<uint32_t> arg2;       // 0x18
+};
+static_assert(sizeof(X_KDPC) == 0x1C);
+static_assert(offsetof(X_KDPC, routine) == 0x0C);
+static_assert(offsetof(X_KDPC, context) == 0x10);
+static_assert(offsetof(X_KDPC, arg1) == 0x14);
+static_assert(offsetof(X_KDPC, arg2) == 0x18);
+
+// RtlTimeToTimeFields / RtlTimeFieldsToTime calendar fields, Xenia's X_TIME_FIELDS (xboxkrnl_rtl.cc, 16 bytes):
+// eight be<int16_t>, weekday last (0 = Sunday).
+struct X_TIME_FIELDS {
+  be<int16_t> year;
+  be<int16_t> month;  // 1..12
+  be<int16_t> day;    // 1..31
+  be<int16_t> hour;
+  be<int16_t> minute;
+  be<int16_t> second;
+  be<int16_t> milliseconds;
+  be<int16_t> weekday;
+};
+static_assert(sizeof(X_TIME_FIELDS) == 16);
+static_assert(offsetof(X_TIME_FIELDS, milliseconds) == 0xC);
+static_assert(offsetof(X_TIME_FIELDS, weekday) == 0xE);
+
+// KeTimeStampBundle (kernel variable, 24 bytes as Xenia's xboxkrnl_module.cc allocates it): u64 at +0, u64 at +8,
+// u32 tick count in milliseconds at +16 (the only field Xenia updates, every 1 ms), u32 padding. +0 and +8 are the
+// NT KSYSTEM_TIME-style interrupt time (100 ns since boot) and system time (FILETIME); we keep them current too.
+struct X_TIME_STAMP_BUNDLE {
+  be<uint64_t> interrupt_time;  // 0x00
+  be<uint64_t> system_time;     // 0x08
+  be<uint32_t> tick_count;      // 0x10
+  be<uint32_t> padding;         // 0x14
+};
+static_assert(sizeof(X_TIME_STAMP_BUNDLE) == 24);
+static_assert(offsetof(X_TIME_STAMP_BUNDLE, system_time) == 8);
+static_assert(offsetof(X_TIME_STAMP_BUNDLE, tick_count) == 0x10);
+
 // NtQueryVirtualMemory output. Field order from Xenia xboxkrnl_memory.cc (NtQueryVirtualMemory fills base_address,
 // allocation_base, allocation_protect, region_size, state, protect, type), all u32.
 struct X_MEMORY_BASIC_INFORMATION {

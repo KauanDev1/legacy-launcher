@@ -11,6 +11,7 @@ constexpr uint32_t STATUS_USER_APC = 0xC0;
 constexpr uint32_t STATUS_ALERTED = 0x101;
 constexpr uint32_t STATUS_TIMEOUT = 0x102;
 constexpr uint32_t STATUS_PENDING = 0x103;
+constexpr uint32_t STATUS_TIMER_RESUME_IGNORED = 0x40000025;
 constexpr uint32_t STATUS_NO_MORE_FILES = 0x80000006;
 constexpr uint32_t STATUS_UNSUCCESSFUL = 0xC0000001;
 constexpr uint32_t STATUS_NOT_IMPLEMENTED = 0xC0000002;

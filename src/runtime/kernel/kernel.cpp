@@ -27,7 +27,10 @@ Kernel::Kernel(runtime::GuestMemory& mem, KernelConfig cfg)
       heap4k_(runtime::kHeap4kBase, runtime::kHeap4kEnd, 0x1000),
       heap64k_(runtime::kHeap64kBase, runtime::kHeap64kEnd, 0x10000),
       stacks_(runtime::kStacksBase, runtime::kStacksEnd, 0x1000),
+      timers_(*this),
       dispatcher_(mem.base()) {}
+
+Kernel::~Kernel() { timers_.shutdown(); }
 
 Result<void> Kernel::setup_memory() {
   if (mem_.size() < (uint64_t{1} << 32))
@@ -113,6 +116,8 @@ Kernel& kernel() {
 
 void reset_kernel_for_tests() {
   wait_for_guest_threads_for_tests();
+  // The worker may still be running guest DPC code, which needs kernel(): stop it before the instance goes away.
+  if (Kernel* k = g_kernel.load(std::memory_order_acquire)) k->timers().shutdown();
   delete g_kernel.exchange(nullptr, std::memory_order_acq_rel);
 }
 

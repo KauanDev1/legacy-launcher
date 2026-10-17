@@ -85,7 +85,7 @@ endereço convidado big-endian:
 
 Conteúdo das variáveis (valores do Xenia, `xboxkrnl_module.cc`): `XexExecutableModuleHandle` (4 bytes com o
 endereço do `LDR_DATA_TABLE_ENTRY`), `ExLoadedCommandLine` (1 KiB com `"default.xex"`, aspas incluídas),
-`ExLoadedImageName` (256 bytes zerados), `KeTimeStampBundle` (24 bytes, zerado até a Task 18), `XboxHardwareInfo`
+`ExLoadedImageName` (256 bytes zerados), `KeTimeStampBundle` (24 bytes, atualizado a cada 1 ms quando importado, ver `docs/architecture.md`), `XboxHardwareInfo`
 (flags `0x20`, 6 CPUs), `XboxKrnlVersion` (`2.0xFFFF.0xFFFF.0x8000`), `KeDebugMonitorData` (ponteiro nulo) e os
 `X_OBJECT_TYPE` (0x1C bytes, `xobject.h` do Xenia) de `ExThreadObjectType`, `ExEventObjectType`,
 `ExSemaphoreObjectType`, `ExMutantObjectType`, `ExTimerObjectType` e `IoFileObjectType` (só o endereço importa;
@@ -94,6 +94,6 @@ o `pool_tag` em ASCII é escolha nossa).
 `legacyrecomp inspect --imports <xex>` imprime uma linha por registro de tipo 0: `biblioteca 0xORDINAL nome
 tipo`, com tipo `function` ou `variable` (`?` para ordinal desconhecido). `legacyrecomp-game --coverage --image
 <xex>` acrescenta as importações de variável como linhas `| nome | variable | estado |`, com o estado dado no
-registro (`register_variable(..., ImportState)`, padrão `implemented`; `KeTimeStampBundle` é `stub` até a Task 18
-mantê-lo atualizado; não registrada = `missing`). A linha final conta funções e variáveis separadamente
+registro (`register_variable(..., ImportState)`, padrão `implemented`; `stub` para um bloco que existe mas não é mantido
+atualizado; não registrada = `missing`). A linha final conta funções e variáveis separadamente
 (spec §5.3): `Implemented: a, stub: b, missing: c / N functions + M variables`.

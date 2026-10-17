@@ -38,6 +38,7 @@ constexpr uint32_t kKThreadOffset = 0;
 constexpr uint32_t kPcrOffset = sizeof(X_KTHREAD);
 constexpr uint32_t kTlsOffset = (kPcrOffset + sizeof(X_KPCR) + 0xF) & ~0xFu;
 constexpr uint64_t kMaxThreadBlock = 0x01000000;  // far above the capped TLS layout (Threads::kMax*)
+constexpr uint32_t kInternalThreadId = 0x10000;  // the kernel worker's thread id, outside the guest sequence
 
 thread_local GuestThread* t_current = nullptr;
 
@@ -166,7 +167,7 @@ void GuestThread::leave_critical_region() {
 }
 
 uint32_t GuestThread::tls_slot_address(uint32_t index) const {
-  if (index >= kernel_.threads().tls_slot_count()) return 0;
+  if (index >= layout_.tls_slot_count) return 0;
   return layout_.tls_slots + index * 4;
 }
 
@@ -197,6 +198,29 @@ void GuestThread::run(const ThreadParams& p) {
                                  "\n" + format_trail(current_trail()));
   }
   finish(code);
+  t_current = nullptr;
+}
+
+void GuestThread::run_internal(void (*body)(void*), void* arg) {
+  if (auto r = runtime::install_thread_altstack(); !r)
+    die(runtime::kExitFault, "kernel thread " + std::to_string(id_) + ": cannot install sigaltstack: " + r.error().message + "\n");
+  t_current = this;
+  set_current_frame(layout_.stack_top - runtime::kGuestStackTopSlack, layout_.pcr);
+  try {
+    body(arg);
+  } catch (const UnimplementedImport& e) {
+    die(runtime::kExitUnimplementedImport, format_report(e, id_));
+  } catch (const GuestThreadExit&) {
+    die(runtime::kExitFault, "ExTerminateThread called on the kernel worker thread (from a DPC routine)\nThread: " +
+                                 std::to_string(id_) + "\n" + format_trail(current_trail()));
+  } catch (const std::exception& e) {
+    die(runtime::kExitFault, std::string("Uncaught host exception on the kernel worker thread: ") + e.what() +
+                                 "\nThread: " + std::to_string(id_) + "\n" + format_trail(current_trail()));
+  } catch (...) {
+    die(runtime::kExitFault, "Uncaught non-standard exception on the kernel worker thread\nThread: " +
+                                 std::to_string(id_) + "\n" + format_trail(current_trail()));
+  }
+  set_current_frame(0, 0);
   t_current = nullptr;
 }
 
@@ -328,13 +352,18 @@ std::vector<Threads::TerminateNotification> Threads::terminate_notifications() c
 
 // --- Creation ---------------------------------------------------------------------------------------------------
 
-Result<std::shared_ptr<GuestThread>> create_guest_thread(const ThreadParams& p) {
+namespace {
+
+// Guest memory, KTHREAD, KPCR and TLS of a new thread and its GuestThread object (no handle, not started). An
+// internal thread (create_internal_guest_thread) gets no TLS template and kMinTlsSlots slots, and leaves the image
+// TLS layout unfrozen.
+Result<std::shared_ptr<GuestThread>> allocate_thread(const ThreadParams& p, bool internal) {
   Kernel& k = kernel();
   Threads& threads = k.threads();
-  threads.mark_thread_created();  // freezes the TLS layout (set_image refuses from now on)
+  if (!internal) threads.mark_thread_created();  // freezes the TLS layout (set_image refuses from now on)
   uint8_t* const base = k.memory().base();
-  const std::optional<formats::TlsInfo> tls = threads.tls();
-  const uint32_t slots = threads.tls_slot_count();
+  const std::optional<formats::TlsInfo> tls = internal ? std::nullopt : threads.tls();
+  const uint32_t slots = internal ? Threads::kMinTlsSlots : threads.tls_slot_count();
   // Sized in 64 bits: set_image caps the header values, this keeps a bad layout from wrapping into a short block.
   const uint64_t tls_static64 = tls ? (uint64_t{tls->data_size} + 3) / 4 * 4 : 0;
   const uint64_t block_size = uint64_t{kTlsOffset} + tls_static64 + uint64_t{slots} * 4;
@@ -366,6 +395,7 @@ Result<std::shared_ptr<GuestThread>> create_guest_thread(const ThreadParams& p) 
   l.pcr = block + kPcrOffset;
   l.tls = block + kTlsOffset;
   l.tls_slots = l.tls + tls_static;
+  l.tls_slot_count = slots;
   l.stack_alloc = stack_alloc;
   l.stack_bottom = stack_alloc + kPage;
   l.stack_top = stack_alloc + kPage + stack_size;
@@ -374,9 +404,11 @@ Result<std::shared_ptr<GuestThread>> create_guest_thread(const ThreadParams& p) 
   if (tls && tls->raw_data_size != 0 && tls->raw_data_address != 0)
     std::memcpy(base + l.tls, base + tls->raw_data_address, std::min(tls->raw_data_size, tls->data_size));
 
-  uint8_t cpu = threads.next_cpu();
+  // An internal thread takes neither a guest thread id nor a round-robin CPU slot: the title's main thread stays
+  // thread 1 even when the worker starts first.
+  uint8_t cpu = internal ? 0 : threads.next_cpu();
   if (p.cpu_mask != 0 && std::countr_zero(p.cpu_mask) < 6) cpu = static_cast<uint8_t>(std::countr_zero(p.cpu_mask));
-  const uint32_t id = threads.next_id();
+  const uint32_t id = internal ? kInternalThreadId : threads.next_id();
 
   // KTHREAD (Xenia X_KTHREAD offsets, guest_structs.h). The header size byte cannot hold 0xAB0 / 4; left 0.
   auto* kt = reinterpret_cast<X_KTHREAD*>(base + l.kthread);
@@ -400,8 +432,22 @@ Result<std::shared_ptr<GuestThread>> create_guest_thread(const ThreadParams& p) 
   pcr->current_thread = l.kthread;
   pcr->current_cpu = cpu;
 
-  auto thread = std::make_shared<GuestThread>(k, id, p, l, cpu);
-  thread->set_guest_header(l.kthread);
+  return std::make_shared<GuestThread>(k, id, p, l, cpu);
+}
+
+}  // namespace
+
+Result<std::shared_ptr<GuestThread>> create_internal_guest_thread(uint32_t stack_size) {
+  ThreadParams p;
+  p.stack_size = stack_size;
+  return allocate_thread(p, true);
+}
+
+Result<std::shared_ptr<GuestThread>> create_guest_thread(const ThreadParams& p) {
+  Kernel& k = kernel();
+  Threads& threads = k.threads();
+  LR_TRY_ASSIGN(thread, allocate_thread(p, false));
+  thread->set_guest_header(thread->kthread());
   thread->set_handle(k.objects().add(thread));
   threads.add(thread);
 

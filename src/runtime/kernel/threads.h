@@ -59,7 +59,7 @@ struct GuestApc {
 class GuestThread final : public KObject {
  public:
   struct Layout {
-    uint32_t block, kthread, pcr, tls, tls_slots, stack_alloc, stack_bottom, stack_top;
+    uint32_t block, kthread, pcr, tls, tls_slots, tls_slot_count, stack_alloc, stack_bottom, stack_top;
   };
   GuestThread(Kernel& k, uint32_t id, const ThreadParams& p, const Layout& l, uint8_t cpu);
   ~GuestThread() override;
@@ -99,6 +99,8 @@ class GuestThread final : public KObject {
   // Internal to threads.cpp.
   void set_handle(uint32_t h) { handle_ = h; }
   void run(const ThreadParams& p);
+  // Runs `body` as this (internal) thread on the calling host thread: see create_internal_guest_thread.
+  void run_internal(void (*body)(void*), void* arg);
 
  private:
   void finish(uint32_t code);
@@ -182,6 +184,18 @@ class Threads {
 // Creates a guest thread (memory, KTHREAD/PCR/TLS, handle in Kernel::objects()) and starts its host thread.
 // InsufficientResources when guest memory runs out, IoError when the host thread cannot be created.
 Result<std::shared_ptr<GuestThread>> create_guest_thread(const ThreadParams& p);
+
+// A kernel-internal guest thread (the timer/DPC worker, runtime/kernel/timers.h): a KTHREAD, KPCR and guest stack
+// like any guest thread, so guest routines (DPCs) can run on it, but it is not a guest-visible thread: no handle
+// and no ObjectTable entry, not in Threads::live() (so neither KeTlsAlloc, ObLookupThreadByThreadId nor the
+// deadlock detector see it), no host thread of its own and not counted by wait_for_guest_threads_for_tests. Its
+// TLS block has no XEX template and kMinTlsSlots slots, and creating it does not freeze the image TLS layout
+// (Threads::set_image still works), so it may start before the image is set. The owner runs it with
+// run_internal(body, arg) on a host thread it manages (kHostStackSize stack): the calling host thread becomes this
+// guest thread (current_thread(), its KTHREAD as dispatcher token, current guest frame at the top of its stack)
+// while body runs. UnimplementedImport from body ends the process with exit 3 and the usual report, any other
+// exception (ExTerminateThread included) with exit 4. The guest memory is freed with the last reference.
+Result<std::shared_ptr<GuestThread>> create_internal_guest_thread(uint32_t stack_size);
 
 // The guest thread running on the calling host thread; nullptr on non-guest host threads.
 GuestThread* current_thread();
