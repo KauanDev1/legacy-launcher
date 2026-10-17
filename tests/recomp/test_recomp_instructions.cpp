@@ -34,6 +34,7 @@ PPCFunc* find_function(uint32_t address) {
 PPCContext run_case(uint32_t address, PPCContext in, lr::runtime::GuestMemory& mem) {
   PPCFunc* fn = find_function(address);
   REQUIRE(fn != nullptr);
+  in.fpscr.loadFromHost();  // valid FP environment, as XenonRecomp's own harness does
   fn(in, mem.base());
   return in;
 }
