@@ -60,12 +60,18 @@ sync_script='
 set -euo pipefail
 git config --global --add safe.directory "*"
 stage=$(mktemp -d)
+list=$(mktemp)
 cd /src
-rc=0
-git ls-files --recurse-submodules -z | tar --null -T - -cf - 2>/dev/null | (cd "$stage" && tar xf -) || rc=$?
+# tracked (with submodules) + untracked non-ignored, minus tracked files deleted in the worktree
+{ git ls-files --recurse-submodules -z; git ls-files -z --others --exclude-standard; } | sort -zu > "$list.all"
+git ls-files -z --deleted | sort -zu > "$list.del"
+comm -z -23 "$list.all" "$list.del" > "$list"
+tar --null -T "$list" -cf "$list.tar" || { echo "container.sh: failed to archive sources" >&2; exit 1; }
+tar xf "$list.tar" -C "$stage" || { echo "container.sh: failed to stage sources" >&2; exit 1; }
+[ -n "$(ls -A "$stage")" ] || { echo "container.sh: staged tree is empty, refusing to sync" >&2; exit 1; }
 cd /work
 rsync -a --delete --exclude=/build "$stage"/ /work/
-rm -rf "$stage"
+rm -rf "$stage" "$list" "$list.all" "$list.del" "$list.tar"
 '
 build_script="$sync_script"'
 cmake --preset "$LR_PRESET" >/dev/null
@@ -80,17 +86,30 @@ run_in_container() { # <tty flags> <script> [args...]
 }
 
 extra_mounts=()
+# Optional ISO for integration tests: LEGACYRECOMP_ISO=<host path> (mounted read-only at /iso).
+use_env_iso() {
+  if [ -n "${LEGACYRECOMP_ISO:-}" ] && [ -f "$LEGACYRECOMP_ISO" ]; then
+    local d
+    d=$(cd "$(dirname "$LEGACYRECOMP_ISO")" && { pwd -W 2>/dev/null || pwd; })
+    extra_mounts=(-v "$d:/iso:ro" -e "LEGACYRECOMP_ISO=/iso/$(basename "$LEGACYRECOMP_ISO")")
+  elif [ -n "${LEGACYRECOMP_ISO:-}" ]; then
+    echo "container.sh: LEGACYRECOMP_ISO file not found: $LEGACYRECOMP_ISO" >&2
+    exit 2
+  fi
+}
 tty_flags=""
 [ -t 0 ] && [ -t 1 ] && tty_flags="-it"
 
 case "$cmd" in
   shell)
+    use_env_iso
     run_in_container "$tty_flags" "$sync_script"'exec bash'
     ;;
   build)
     run_in_container "$tty_flags" "$build_script"
     ;;
   test)
+    use_env_iso
     [ $# -ge 1 ] || set -- -L unit
     run_in_container "$tty_flags" "$build_script"'ctest --preset "$LR_PRESET" --output-on-failure "$@"' "$@"
     ;;

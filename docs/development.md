@@ -34,7 +34,7 @@ tools/dev/container.sh run [-- argumentos do jogo]
   rsync). É reconstruída pelo Docker apenas quando o `Dockerfile` muda.
 - O repositório é montado somente leitura em `/src`. Os arquivos **rastreados pelo git** (incluindo
   submódulos) são sincronizados com `rsync --delete` para o volume `lr-build`, montado em `/work`;
-  arquivos novos precisam de `git add` para entrar. O build fica em `/work/build/<preset>` e sobrevive
+  também entram os arquivos novos ainda não rastreados (que não estejam no `.gitignore`); arquivos rastreados mas apagados na árvore de trabalho não são copiados e saem do volume. O build fica em `/work/build/<preset>` e sobrevive
   entre execuções (a sincronização não apaga `build/`).
 - O container roda com `--init` (reaper de processos órfãos); sem isso dois testes de cancelamento falham.
 - Os dados (cache de instalação, jogo extraído, executável gerado) ficam no volume `lr-data`, em `/data`.
@@ -44,4 +44,8 @@ tools/dev/container.sh run [-- argumentos do jogo]
 
 `install --iso <arquivo>` monta a pasta do arquivo, somente leitura, em `/iso` e passa `/iso/<arquivo>`
 ao instalador. Use o disco de um jogo que você possui; nada do jogo é copiado para o repositório.
-Os testes de integração (`-L integration`) ainda não são expostos pelo script.
+Para os testes de integração, defina `LEGACYRECOMP_ISO` no host; o script monta a pasta da ISO somente leitura em `/iso` e repassa `LEGACYRECOMP_ISO=/iso/<arquivo>` ao container (vale também para `shell`):
+
+```
+LEGACYRECOMP_ISO=<caminho no host>/jogo.iso tools/dev/container.sh test -L integration
+```
