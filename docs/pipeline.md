@@ -19,6 +19,12 @@ fica em `work/state.toml`. Tudo roda na máquina do usuário e nada do jogo sai 
 O código gerado tem cerca de 160 MB, o `recompile` + `build` levam alguns minutos e usam bastante RAM por
 job (use `--jobs <n>` para limitar).
 
+O `recompile` nunca falha por avisos do XenonRecomp. Ao terminar, ele conta as instruções que o XenonRecomp não soube traduzir
+(`Unrecognized instruction at ...`) e acrescenta ao fim de `work/logs/recompile.log`, e emite como última mensagem de progresso,
+a linha `unrecognized instructions: N (top: bdzf 754, stfsu 507, ...)` (até 10 mnemônicos, mais `, float16_4 packs: K` se houver).
+`python3 -I tools/recomp_warnings.py work/logs/recompile.log` imprime a tabela completa por mnemônico e o endereço de cada
+`float16_4` (o aviso só traz o endereço, sem operandos); lê apenas o log, nunca a imagem.
+
 ## Toolchain
 
 `lr::pipeline::resolve_toolchain` (`src/pipeline/toolchain.h`) escolhe o compilador da etapa `build`:

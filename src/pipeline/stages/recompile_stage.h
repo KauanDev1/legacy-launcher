@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <cstdint>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -39,5 +41,17 @@ RecompLine classify_recomp_line(std::string_view line);
 
 // Stage error for `count` ERROR lines; `first` holds the first few, quoted in message and hint.
 Error recomp_errors(size_t count, std::span<const std::string> first, const fs::path& log);
+
+// XenonRecomp prints one warning per instruction it cannot translate (the generated function then
+// gets a stub). Counted from the log; the stage never fails on them.
+struct RecompWarnings {
+  std::map<std::string, uint32_t> unrecognized;  // mnemonic -> count
+  uint32_t float16_pack = 0;                     // "Unexpected float16_4 pack instruction"
+};
+RecompWarnings count_recomp_warnings(std::string_view log);
+
+// "unrecognized instructions: N (top: bdzf 754, ...)" (top 10 by count, ties by name), plus
+// ", float16_4 packs: K" when K > 0.
+std::string format_recomp_warnings(const RecompWarnings& w);
 
 }  // namespace lr::pipeline

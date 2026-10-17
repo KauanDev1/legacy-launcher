@@ -2,3 +2,4 @@
 # Scripts run on Linux (also inside containers): never convert them to CRLF.
 *.sh text eol=lf
 tools/dev/Dockerfile text eol=lf
+*.py text eol=lf

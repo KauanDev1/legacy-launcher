@@ -163,3 +163,45 @@ TEST_CASE("recomp_errors reports the count and quotes the first lines", "[unit]"
   CHECK(recomp_errors(1, std::span<const std::string>(first.data(), 1), "/l").message ==
         "XenonRecomp reported 1 error: ERROR: a");
 }
+
+TEST_CASE("count_recomp_warnings counts mnemonics and float16 packs", "[unit]") {
+  const std::string log =
+      "Recompiling functions... 10%\n"
+      "Unrecognized instruction at 0x82200000: bdzf\n"
+      "Unrecognized instruction at 0x82200010: stfsu\r\n"
+      "Unrecognized instruction at 0x82200020: bdzf\n"
+      "Unexpected float16_4 pack instruction at 82300000\n"
+      "Unexpected float16_4 pack instruction at 82300008\n"
+      "ERROR: not a warning\n"
+      "Unrecognized instruction at 0x82200030: bdzf";  // no trailing newline
+  const auto w = count_recomp_warnings(log);
+  CHECK(w.unrecognized.size() == 2);
+  CHECK(w.unrecognized.at("bdzf") == 3);
+  CHECK(w.unrecognized.at("stfsu") == 1);
+  CHECK(w.float16_pack == 2);
+
+  const auto none = count_recomp_warnings("Recompiling functions... 100%\n");
+  CHECK(none.unrecognized.empty());
+  CHECK(none.float16_pack == 0);
+}
+
+TEST_CASE("format_recomp_warnings summarises the top mnemonics", "[unit]") {
+  CHECK(format_recomp_warnings({}) == "unrecognized instructions: 0");
+
+  RecompWarnings w;
+  w.unrecognized = {{"stfsu", 507}, {"bdzf", 754}, {"aaa", 507}};
+  CHECK(format_recomp_warnings(w) == "unrecognized instructions: 1768 (top: bdzf 754, aaa 507, stfsu 507)");
+  w.float16_pack = 4;
+  CHECK(format_recomp_warnings(w) ==
+        "unrecognized instructions: 1768 (top: bdzf 754, aaa 507, stfsu 507), float16_4 packs: 4");
+
+  RecompWarnings many;
+  for (char c = 'a'; c < 'a' + 12; ++c) many.unrecognized[std::string(1, c)] = 1;
+  const auto s = format_recomp_warnings(many);
+  CHECK(s.find("j 1") != std::string::npos);
+  CHECK(s.find("k 1") == std::string::npos);
+
+  RecompWarnings only16;
+  only16.float16_pack = 2;
+  CHECK(format_recomp_warnings(only16) == "unrecognized instructions: 0, float16_4 packs: 2");
+}
