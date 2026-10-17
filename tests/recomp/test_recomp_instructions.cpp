@@ -142,3 +142,88 @@ TEST_CASE("bso after fcmpu of 1.0,2.0 falls through", "[unit][recomp]") {
   in.f2.f64 = 2.0;
   CHECK(run_branch("fcmpu then bso", in) == 1);
 }
+
+namespace {
+
+uint8_t* guest_ptr(uint32_t addr) { return guest_memory().base() + addr; }
+
+void zero_guest(uint32_t addr, size_t n) { std::memset(guest_ptr(addr), 0, n); }
+
+}  // namespace
+
+TEST_CASE("lfsu loads a float and updates rA", "[unit][recomp]") {
+  zero_guest(0x10000, 0x20);
+  const uint8_t be[4] = {0x3F, 0xC0, 0x00, 0x00};  // 1.5f
+  std::memcpy(guest_ptr(0x10008), be, 4);
+  PPCContext in{};
+  in.r3.u64 = 0x10000;
+  const PPCContext out = run_case(case_address("lfsu"), in, guest_memory());
+  CHECK(out.f1.f64 == 1.5);
+  CHECK(out.r3.u32 == 0x10008);
+}
+
+TEST_CASE("lfsux loads a float and updates rA", "[unit][recomp]") {
+  zero_guest(0x10000, 0x20);
+  const uint8_t be[4] = {0xBF, 0xC0, 0x00, 0x00};  // -1.5f
+  std::memcpy(guest_ptr(0x10010), be, 4);
+  PPCContext in{};
+  in.r3.u64 = 0x10000;
+  in.r4.u64 = 0x10;
+  const PPCContext out = run_case(case_address("lfsux"), in, guest_memory());
+  CHECK(out.f1.f64 == -1.5);
+  CHECK(out.r3.u32 == 0x10010);
+  CHECK(out.r4.u32 == 0x10);
+}
+
+TEST_CASE("stfsu stores a float and updates rA", "[unit][recomp]") {
+  zero_guest(0xFF0, 0x20);
+  PPCContext in{};
+  in.r1.u64 = 0x1000;
+  in.f1.f64 = 1.5;
+  const PPCContext out = run_case(case_address("stfsu"), in, guest_memory());
+  CHECK(guest_ptr(0xFF8)[0] == 0x3F);
+  CHECK(guest_ptr(0xFF8)[1] == 0xC0);
+  CHECK(guest_ptr(0xFF8)[2] == 0x00);
+  CHECK(guest_ptr(0xFF8)[3] == 0x00);
+  CHECK(guest_ptr(0xFFC)[0] == 0x00);  // nothing written past the word
+  CHECK(out.r1.u32 == 0xFF8);
+}
+
+TEST_CASE("stfsux stores a float and updates rA", "[unit][recomp]") {
+  zero_guest(0x10000, 0x20);
+  PPCContext in{};
+  in.r3.u64 = 0x10000;
+  in.r4.u64 = 0x8;
+  in.f1.f64 = -1.5;
+  const PPCContext out = run_case(case_address("stfsux"), in, guest_memory());
+  CHECK(guest_ptr(0x10008)[0] == 0xBF);
+  CHECK(guest_ptr(0x10008)[1] == 0xC0);
+  CHECK(guest_ptr(0x10008)[2] == 0x00);
+  CHECK(guest_ptr(0x10008)[3] == 0x00);
+  CHECK(out.r3.u32 == 0x10008);
+  CHECK(out.r4.u32 == 0x8);
+}
+
+TEST_CASE("lhzu zero-extends a halfword and updates rA", "[unit][recomp]") {
+  zero_guest(0x10000, 0x20);
+  const uint8_t be[2] = {0xFF, 0x80};
+  std::memcpy(guest_ptr(0x10002), be, 2);
+  PPCContext in{};
+  in.r5.u64 = 0x10000;
+  in.r4.u64 = 0xFFFFFFFFFFFFFFFFull;
+  const PPCContext out = run_case(case_address("lhzu"), in, guest_memory());
+  CHECK(out.r4.u64 == 0xFF80);
+  CHECK(out.r5.u32 == 0x10002);
+}
+
+TEST_CASE("sthu stores the low halfword and updates rA", "[unit][recomp]") {
+  zero_guest(0x10000, 0x20);
+  PPCContext in{};
+  in.r5.u64 = 0x10004;
+  in.r4.u64 = 0x1234ABCD;
+  const PPCContext out = run_case(case_address("sthu"), in, guest_memory());
+  CHECK(guest_ptr(0x10002)[0] == 0xAB);
+  CHECK(guest_ptr(0x10002)[1] == 0xCD);
+  CHECK(guest_ptr(0x10004)[0] == 0x00);  // only two bytes written
+  CHECK(out.r5.u32 == 0x10002);
+}

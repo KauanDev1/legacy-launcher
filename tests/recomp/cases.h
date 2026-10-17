@@ -36,6 +36,15 @@ inline const std::vector<RecompCase>& recomp_cases() {
       {"bso cr1", 0x82000900, {0x4187000C, 0x38600001, kBlr, 0x38600002, kBlr}},  // bso cr1,+12 (bc 12,7)
       // fcmpu cr0,f1,f2 = 0xFC011000, then bso cr0,+12 (word 1; target is word 4, the `li r3,2`).
       {"fcmpu then bso", 0x82000A00, {0xFC011000, 0x4183000C, 0x38600001, kBlr, 0x38600002, kBlr}},
+      // Load/store with update. D-form: opcode<<26 | reg<<21 | rA<<16 | d; X-form: 0x7C000000 | reg<<21 | rA<<16 |
+      // rB<<11 | XO<<1. Opcodes: lfsu 49 (0xC4000000), stfsu 53 (0xD4000000), lhzu 41 (0xA4000000), sthu 45
+      // (0xB4000000). XO: lfsux 567 (0x46E), stfsux 695 (0x56E).
+      {"lfsu", 0x82000B00, {0xC4230008, kBlr}},    // lfsu f1,8(r3)
+      {"lfsux", 0x82000C00, {0x7C23246E, kBlr}},   // lfsux f1,r3,r4
+      {"stfsu", 0x82000D00, {0xD421FFF8, kBlr}},   // stfsu f1,-8(r1)
+      {"stfsux", 0x82000E00, {0x7C23256E, kBlr}},  // stfsux f1,r3,r4
+      {"lhzu", 0x82000F00, {0xA4850002, kBlr}},    // lhzu r4,2(r5)
+      {"sthu", 0x82001000, {0xB485FFFE, kBlr}},    // sthu r4,-2(r5)
   };
   return cases;
 }
