@@ -11,6 +11,7 @@
 
 #include "common/result.h"
 #include "runtime/guest_memory.h"
+#include "runtime/kernel/objects.h"
 #include "runtime/memory/page_heap.h"
 #include "runtime/memory/physical_heap.h"
 
@@ -65,6 +66,9 @@ class Kernel {
     executable_header_ = header;
   }
 
+  // Handle table and kernel objects (runtime/kernel/objects.h).
+  ObjectTable& objects() { return objects_; }
+
   // Kernel variable name -> guest address of its block (filled by resolve_variable_imports).
   std::map<std::string, uint32_t, std::less<>>& variable_blocks() { return variable_blocks_; }
 
@@ -78,6 +82,7 @@ class Kernel {
   uint32_t executable_module_ = 0;
   uint32_t executable_header_ = 0;
   std::map<std::string, uint32_t, std::less<>> variable_blocks_;
+  ObjectTable objects_;
   runtime::PageHeap heap4k_;
   runtime::PageHeap heap64k_;
   runtime::PhysicalHeap physical_;
