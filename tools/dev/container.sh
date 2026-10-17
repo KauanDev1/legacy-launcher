@@ -64,14 +64,14 @@ list=$(mktemp)
 cd /src
 # tracked (with submodules) + untracked non-ignored, minus tracked files deleted in the worktree
 { git ls-files --recurse-submodules -z; git ls-files -z --others --exclude-standard; } | sort -zu > "$list.all"
-git ls-files -z --deleted | sort -zu > "$list.del"
-comm -z -23 "$list.all" "$list.del" > "$list"
+# drop anything missing from the worktree (tracked files deleted, also inside submodules)
+while IFS= read -r -d "" f; do if [ -e "$f" ] || [ -L "$f" ]; then printf "%s\0" "$f"; fi; done < "$list.all" > "$list"
 tar --null -T "$list" -cf "$list.tar" || { echo "container.sh: failed to archive sources" >&2; exit 1; }
 tar xf "$list.tar" -C "$stage" || { echo "container.sh: failed to stage sources" >&2; exit 1; }
 [ -n "$(ls -A "$stage")" ] || { echo "container.sh: staged tree is empty, refusing to sync" >&2; exit 1; }
 cd /work
 rsync -a --delete --exclude=/build "$stage"/ /work/
-rm -rf "$stage" "$list" "$list.all" "$list.del" "$list.tar"
+rm -rf "$stage" "$list" "$list.all" "$list.tar"
 '
 build_script="$sync_script"'
 cmake --preset "$LR_PRESET" >/dev/null
