@@ -31,6 +31,23 @@ if(TARGET SDL2::SDL2)
   lr_configure_target(lr_fake_game)
   add_dependencies(lr_tests lr_fake_game)
   target_compile_definitions(lr_tests PRIVATE LR_FAKE_GAME_PATH="$<TARGET_FILE:lr_fake_game>")
+
+  # --- template guard: the STAGED main.cpp and rendered thunks compile with the staged headers only ---
+  # lr_fake_game above compiles src/runtime/main.cpp with lr_runtime_core's include dirs (src/), so it cannot see
+  # a header resources.cmake forgot to stage; this test uses the game template's include path instead.
+  set(_lr_x86 0)
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    set(_lr_x86 1)
+  endif()
+  add_test(NAME template_compiles_with_staged_headers
+    COMMAND ${CMAKE_COMMAND} "-DCXX=${CMAKE_CXX_COMPILER}"
+            "-DSOURCES=${LR_RESOURCES_DIR}/runtime/src/main.cpp|${LR_FAKE_STUBS}"
+            "-DGENERATED=${LR_FAKE_DIR}" "-DPPC_CONTEXT_DIR=${LR_RESOURCES_DIR}/tools"
+            "-DRUNTIME_INCLUDE=${LR_RESOURCES_DIR}/runtime/include"
+            "-DEXTRA_INCLUDES=$<JOIN:$<TARGET_PROPERTY:SDL2::SDL2,INTERFACE_INCLUDE_DIRECTORIES>,|>"
+            "-DMARCH=${_lr_x86}"
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/support/check_template_compiles.cmake)
+  set_tests_properties(template_compiles_with_staged_headers PROPERTIES LABELS unit)
 endif()
 
 # --- GPL tripwire: the binutils disassembler (GPL-2.0-or-later) must stay out of our binaries (ADR 0002) ---
