@@ -16,6 +16,7 @@
 #include "imgui.h"
 #include "launcher/gui/theme.h"
 #include "launcher/gui/widgets.h"
+#include "pipeline/game_exit.h"
 #include "pipeline/pipeline.h"
 #include "pipeline/process.h"
 #include "pipeline/state.h"
@@ -246,10 +247,11 @@ void App::play() {
   opts.root = settings_.root;
   game_thread_ = std::thread([sink, opts = std::move(opts)]() {
     auto r = pipeline::launch(opts, std::span<const std::string>{});
-    if (r && r.value() == 3)
-      sink->on_log("M1: o jogo parou na primeira importação de kernel não implementada (esperado neste marco).");
+    if (r && r.value() != 0)
+      sink->on_log(pipeline::describe_game_exit(r.value(), pipeline::game_trace_file(pipeline::data_root(opts)),
+                                                pipeline::ExitTextLanguage::Portuguese));
     else if (r)
-      sink->on_log("O jogo terminou com código " + std::to_string(r.value()) + ".");
+      sink->on_log("O jogo terminou normalmente.");
     sink->post_finished(r ? std::nullopt : std::optional<Error>(r.error()));
   });
 }

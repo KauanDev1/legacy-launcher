@@ -24,6 +24,7 @@
 #include "launcher/cli/args.h"
 #include "launcher/cli/progress_bar.h"
 #include "pipeline/doctor.h"
+#include "pipeline/game_exit.h"
 #include "pipeline/pipeline.h"
 #include "runtime/xex_imports.h"
 
@@ -298,8 +299,9 @@ int run_game(const lr::cli::CliArgs& args, const fs::path& root) {
   opts.root = root;
   auto r = lr::pipeline::launch(opts, args.passthrough);
   if (!r) return report_error(r.error());
-  if (r.value() == 3)
-    std::fprintf(stderr, "M1: game stopped at the first unimplemented kernel import (expected at this milestone).\n");
+  const std::string why = lr::pipeline::describe_game_exit(
+      r.value(), lr::pipeline::game_trace_file(lr::pipeline::data_root(opts)), lr::pipeline::ExitTextLanguage::English);
+  if (!why.empty()) std::fprintf(stderr, "%s\n", why.c_str());
   return r.value();
 }
 

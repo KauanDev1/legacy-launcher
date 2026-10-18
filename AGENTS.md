@@ -21,7 +21,7 @@ Release build and usage:
 ```
 cmake --preset release && cmake --build --preset release
 build/release/bin/legacyrecomp install --iso /path/to/game.iso   # CLI: doctor..build, cached via work/state.toml
-build/release/bin/legacyrecomp run                               # exit 3 = first unimplemented kernel import (expected in M1)
+build/release/bin/legacyrecomp run                               # game exit: 0 ok, 2 usage/load, 3 missing import, 4 fault, 5 guest fatal, 6 deadlock (`run -- --trace-imports` writes work/logs/game-trace.log)
 build/release/bin/legacyrecomp-gui                               # GUI launcher (see docs/gui.md)
 packaging/appimage/build.sh                                      # AppImage + source archive in packaging/appimage/out (docs/packaging.md)
 ```

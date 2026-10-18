@@ -111,9 +111,16 @@ grupo da ferramenta com SIGKILL e encerra a CLI na hora, pelo próprio sinal; ne
 | 0 | fim normal |
 | 1 | o launcher não conseguiu iniciar o jogo (jogo não compilado, `work/image/default_tu1.xex` ausente, falha no `posix_spawn`); a mensagem vai para stderr como `error:` |
 | 2 | uso ou preparação falhou dentro do jogo (imagem ausente, base diferente da compilada, mapeamento de memória) |
-| 3 | importação do kernel não implementada (esperado no M1; o relatório vai para stderr) |
+| 3 | importação do kernel não implementada (o relatório vai para stderr e nomeia a importação; veja `docs/kernel-coverage.md`) |
 | 4 | falha de execução (SIGSEGV, SIGILL etc. tratada pelo handler) |
+| 5 | erro fatal do convidado (`lr::kernel::guest_fatal`: o jogo chegou a um estado de onde o kernel não segue; motivo em stderr) |
+| 6 | deadlock: todas as threads do jogo ficaram bloqueadas além do limite do detector; stderr lista o que cada uma espera |
 | 128 + sinal | o jogo morreu por um sinal não tratado (por exemplo 130 com Ctrl+C, 137 com SIGKILL) |
+
+Para cada código diferente de 0, a CLI (em inglês) e a GUI (em português) mostram uma explicação vinda de
+`lr::pipeline::describe_game_exit` (`src/pipeline/game_exit.h`). Nos códigos 3 a 6 ela sugere rodar
+`legacyrecomp run -- --trace-imports` e ler `<raiz>/work/logs/game-trace.log`, o rastro das chamadas ao kernel
+que antecederam a parada.
 
 ## Solução de problemas por código de erro
 
@@ -127,7 +134,7 @@ grupo da ferramenta com SIGKILL e encerra a CLI na hora, pelo próprio sinal; ne
 | `ToolFailed` | XenonRecomp, XenonAnalyse ou compilador saíram com erro | Veja `work/logs/`; para falta de memória reduza `--jobs` |
 | `IoError` | Falha ao ler ou escrever (permissão, disco cheio) | Confira permissões e espaço; não use tmpfs como pasta de dados |
 | `Cancelled` | Ctrl+C ou botão Cancelar | Rode o comando de novo |
-| `UnimplementedImport` | O jogo chamou uma importação do kernel sem implementação (saída 3) | Esperado no M1; veja `docs/kernel-coverage.md` e `docs/roadmap.md` |
+| `UnimplementedImport` | O jogo chamou uma importação do kernel sem implementação (saída 3) | Veja o relatório em stderr, `docs/kernel-coverage.md` e `docs/roadmap.md`; `legacyrecomp run -- --trace-imports` grava as chamadas anteriores em `work/logs/game-trace.log` |
 | `Internal` | Bug | Abra uma issue com o log de `work/logs/` |
 
 ## Requisito de CPU
