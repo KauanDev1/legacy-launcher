@@ -5,35 +5,18 @@
 #include <cstdio>
 #include <string>
 
+#include "runtime/kernel/files.h"
 #include "runtime/kernel/guest_structs.h"
 #include "runtime/kernel/kernel.h"
 #include "runtime/kernel/registry.h"
 #include "runtime/kernel/status.h"
 
 namespace lr::kernel {
-namespace {
-
-// The text of an X_ANSI_STRING in guest memory; false when the descriptor or its buffer is outside guest memory.
-bool read_ansi(GuestCall& c, GuestPtr<X_ANSI_STRING> p, std::string& out) {
-  if (!p.valid_range(sizeof(X_ANSI_STRING))) return false;
-  const X_ANSI_STRING* s = p.get(c.base);
-  const uint32_t len = s->length, buf = s->buffer;
-  if (len == 0) {
-    out.clear();
-    return true;
-  }
-  if (!GuestPtr<char>{buf}.valid_range(len)) return false;
-  out.assign(reinterpret_cast<const char*>(c.base + buf), len);
-  return true;
-}
-
-}  // namespace
-
 namespace exports {
 
 uint32_t ObCreateSymbolicLink(GuestCall& c, GuestPtr<X_ANSI_STRING> name, GuestPtr<X_ANSI_STRING> target) {
   std::string n, t;
-  if (!read_ansi(c, name, n) || !read_ansi(c, target, t)) return STATUS_INVALID_PARAMETER;
+  if (!read_ansi_string(c.base, name, n) || !read_ansi_string(c.base, target, t)) return STATUS_INVALID_PARAMETER;
   const uint32_t st = kernel().vfs().create_symlink(n, t);
   if (st == STATUS_OBJECT_NAME_COLLISION) {  // Xenia keeps the existing link and reports success
     std::fprintf(stderr, "[kernel] symlink %s already exists, kept\n", n.c_str());
@@ -44,7 +27,7 @@ uint32_t ObCreateSymbolicLink(GuestCall& c, GuestPtr<X_ANSI_STRING> name, GuestP
 
 uint32_t ObDeleteSymbolicLink(GuestCall& c, GuestPtr<X_ANSI_STRING> name) {
   std::string n;
-  if (!read_ansi(c, name, n)) return STATUS_INVALID_PARAMETER;
+  if (!read_ansi_string(c.base, name, n)) return STATUS_INVALID_PARAMETER;
   return kernel().vfs().delete_symlink(n);
 }
 

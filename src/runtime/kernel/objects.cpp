@@ -7,7 +7,8 @@ namespace lr::kernel {
 
 namespace {
 
-// guest header -> object, for ObjectTable::by_guest_header. Process-wide: guest addresses are unique per kernel.
+// guest header or body -> object, for ObjectTable::by_guest_header. Process-wide: guest addresses are unique per
+// kernel.
 struct HeaderRegistry {
   std::mutex mutex;
   std::unordered_map<uint32_t, std::weak_ptr<KObject>> map;
@@ -34,12 +35,14 @@ std::string_view object_type_variable(ObjectKind kind) {
 }
 
 KObject::~KObject() {
-  const uint32_t h = guest_header_;
-  if (h == 0) return;
+  if (guest_header_ == 0 && guest_body_ == 0) return;
   HeaderRegistry& r = registry();
   std::lock_guard<std::mutex> lock(r.mutex);
-  auto it = r.map.find(h);
-  if (it != r.map.end() && it->second.expired()) r.map.erase(it);
+  for (const uint32_t g : {guest_header_, guest_body_}) {
+    if (g == 0) continue;
+    auto it = r.map.find(g);
+    if (it != r.map.end() && it->second.expired()) r.map.erase(it);
+  }
 }
 
 uint32_t KObject::guest_header() const {
@@ -47,15 +50,25 @@ uint32_t KObject::guest_header() const {
   return guest_header_;
 }
 
-void KObject::set_guest_header(uint32_t guest) {
+void KObject::set_guest_header(uint32_t guest) { rebind(&KObject::guest_header_, guest); }
+
+uint32_t KObject::guest_body() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return guest_body_;
+}
+
+void KObject::set_guest_body(uint32_t guest) { rebind(&KObject::guest_body_, guest); }
+
+void KObject::rebind(uint32_t KObject::* field, uint32_t guest) {
   HeaderRegistry& r = registry();
   std::lock_guard<std::mutex> rl(r.mutex);
   std::lock_guard<std::mutex> lock(mutex_);
-  if (guest_header_ != 0) {
-    auto it = r.map.find(guest_header_);
+  uint32_t& cur = this->*field;
+  if (cur != 0) {
+    auto it = r.map.find(cur);
     if (it != r.map.end() && it->second.lock().get() == this) r.map.erase(it);
   }
-  guest_header_ = guest;
+  cur = guest;
   if (guest != 0) r.map[guest] = weak_from_this();
 }
 

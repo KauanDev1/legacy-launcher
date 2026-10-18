@@ -37,14 +37,27 @@ class KObject : public std::enable_shared_from_this<KObject> {
   uint32_t guest_header() const;
   void set_guest_header(uint32_t guest);
 
-  // The address handed to guest code by ObReferenceObjectByHandle (what ObDereferenceObject takes back):
-  // the header address for now, 0 for objects without one.
-  uint32_t guest_object() const { return guest_header(); }
+  // Guest address of the body of an object that is not waitable (a file): ObjectTable::by_guest_header finds the
+  // object by it too, but guest_header() stays 0, so waits keep refusing the object. Same ownership rule as
+  // set_guest_header; the owner frees the guest memory.
+  uint32_t guest_body() const;
+  void set_guest_body(uint32_t guest);
+
+  // The address handed to guest code by ObReferenceObjectByHandle (what ObDereferenceObject takes back): the
+  // header address, else the body address, 0 for objects with neither.
+  uint32_t guest_object() const {
+    const uint32_t h = guest_header();
+    return h != 0 ? h : guest_body();
+  }
 
  private:
+  // Points `field` (guest_header_ or guest_body_) at `guest` and keeps the address registry in step.
+  void rebind(uint32_t KObject::* field, uint32_t guest);
+
   const ObjectKind kind_;
   mutable std::mutex mutex_;
   uint32_t guest_header_ = 0;
+  uint32_t guest_body_ = 0;
 };
 
 inline constexpr uint32_t kHandleBase = 0xF8000000;
@@ -64,7 +77,7 @@ class ObjectTable {
   uint32_t close(uint32_t handle);
   // A new handle to the same object (the object lives until every handle is closed).
   Result<uint32_t> duplicate(uint32_t handle);
-  // The live object whose guest_header() is `guest`, or nullptr.
+  // The live object whose guest_header() or guest_body() is `guest`, or nullptr.
   std::shared_ptr<KObject> by_guest_header(uint32_t guest) const;
 
   // Kernel references taken by ObReferenceObjectByHandle: they keep the object alive after its handles are

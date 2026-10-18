@@ -195,6 +195,77 @@ struct X_IO_STATUS_BLOCK {
 };
 static_assert(sizeof(X_IO_STATUS_BLOCK) == 8);
 
+// --- File information (exports/files.cpp). Times are FILETIME (100 ns since 1601-01-01 UTC). ---
+
+// FileNetworkOpenInformation (class 34) and NtQueryFullAttributesFile output. Xenia src/xenia/kernel/info/file.h
+// X_FILE_NETWORK_OPEN_INFORMATION (static_assert size 56).
+struct X_FILE_NETWORK_OPEN_INFORMATION {
+  be<uint64_t> creation_time;     // 0x00
+  be<uint64_t> last_access_time;  // 0x08
+  be<uint64_t> last_write_time;   // 0x10
+  be<uint64_t> change_time;       // 0x18
+  be<uint64_t> allocation_size;   // 0x20
+  be<uint64_t> end_of_file;       // 0x28
+  be<uint32_t> attributes;        // 0x30
+  be<uint32_t> pad;               // 0x34
+};
+static_assert(sizeof(X_FILE_NETWORK_OPEN_INFORMATION) == 56);
+static_assert(offsetof(X_FILE_NETWORK_OPEN_INFORMATION, end_of_file) == 0x28);
+static_assert(offsetof(X_FILE_NETWORK_OPEN_INFORMATION, attributes) == 0x30);
+
+// FileStandardInformation (class 5). Xenia declares no struct for it; this is the NT FILE_STANDARD_INFORMATION
+// layout (two LARGE_INTEGERs, ULONG links, BOOLEAN delete_pending and directory, padded to 24).
+struct X_FILE_STANDARD_INFORMATION {
+  be<uint64_t> allocation_size;  // 0x00
+  be<uint64_t> end_of_file;      // 0x08
+  be<uint32_t> number_of_links;  // 0x10
+  uint8_t delete_pending;        // 0x14
+  uint8_t directory;             // 0x15
+  uint8_t pad[2];
+};
+static_assert(sizeof(X_FILE_STANDARD_INFORMATION) == 24);
+static_assert(offsetof(X_FILE_STANDARD_INFORMATION, number_of_links) == 0x10);
+static_assert(offsetof(X_FILE_STANDARD_INFORMATION, directory) == 0x15);
+
+// NtQueryDirectoryFile entry: Xenia src/xenia/kernel/xfile.h X_FILE_DIRECTORY_INFORMATION (field offsets from its
+// comments); the ANSI name (file_name_length bytes, no NUL) follows the fixed part at 0x40.
+struct X_FILE_DIRECTORY_INFORMATION {
+  be<uint32_t> next_entry_offset;  // 0x00
+  be<uint32_t> file_index;         // 0x04
+  be<uint64_t> creation_time;      // 0x08
+  be<uint64_t> last_access_time;   // 0x10
+  be<uint64_t> last_write_time;    // 0x18
+  be<uint64_t> change_time;        // 0x20
+  be<uint64_t> end_of_file;        // 0x28
+  be<uint64_t> allocation_size;    // 0x30
+  be<uint32_t> attributes;         // 0x38
+  be<uint32_t> file_name_length;   // 0x3C
+};
+static_assert(sizeof(X_FILE_DIRECTORY_INFORMATION) == 0x40);
+static_assert(offsetof(X_FILE_DIRECTORY_INFORMATION, end_of_file) == 0x28);
+static_assert(offsetof(X_FILE_DIRECTORY_INFORMATION, attributes) == 0x38);
+static_assert(offsetof(X_FILE_DIRECTORY_INFORMATION, file_name_length) == 0x3C);
+
+// FileFsSizeInformation (volume class 3): NT FILE_FS_SIZE_INFORMATION; Xenia copies the four device values in this
+// order (xboxkrnl_io_info.cc).
+struct X_FILE_FS_SIZE_INFORMATION {
+  be<uint64_t> total_allocation_units;      // 0x00
+  be<uint64_t> available_allocation_units;  // 0x08
+  be<uint32_t> sectors_per_allocation_unit; // 0x10
+  be<uint32_t> bytes_per_sector;            // 0x14
+};
+static_assert(sizeof(X_FILE_FS_SIZE_INFORMATION) == 24);
+static_assert(offsetof(X_FILE_FS_SIZE_INFORMATION, bytes_per_sector) == 0x14);
+
+// FileFsAttributeInformation (volume class 5): fixed part; the ANSI file system name follows at 12 (Xenia checks
+// info_length >= 12 + name size).
+struct X_FILE_FS_ATTRIBUTE_INFORMATION {
+  be<uint32_t> attributes;                 // 0x00
+  be<uint32_t> component_name_max_length;  // 0x04
+  be<uint32_t> name_length;                // 0x08
+};
+static_assert(sizeof(X_FILE_FS_ATTRIBUTE_INFORMATION) == 12);
+
 struct X_LARGE_INTEGER {
   be<int64_t> quad_part;
 };

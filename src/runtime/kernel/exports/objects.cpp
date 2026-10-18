@@ -39,8 +39,8 @@ uint32_t NtDuplicateObject(GuestCall& c, uint32_t handle, U32Ptr new_handle, uin
 
 // ObReferenceObjectByHandle(handle, object_type*, out_object*): writes the object's guest address and takes a
 // kernel reference released by ObDereferenceObject. object_type 0 accepts any kind; otherwise it must equal the
-// address of the kind's Ex*ObjectType variable block. An object without a guest body (guest_object() == 0, e.g. a
-// file) is refused with STATUS_OBJECT_TYPE_MISMATCH: nothing is written and no kernel reference is taken, since
+// address of the kind's Ex*ObjectType variable block. An object without a guest address (guest_object() == 0, e.g. a
+// bare KObject) is refused with STATUS_OBJECT_TYPE_MISMATCH: nothing is written and no kernel reference is taken, since
 // ObDereferenceObject could never find it again to release it.
 uint32_t ObReferenceObjectByHandle(GuestCall& c, uint32_t handle, uint32_t object_type, U32Ptr out_object) {
   auto& table = kernel().objects();
