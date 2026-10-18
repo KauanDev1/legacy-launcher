@@ -22,6 +22,16 @@ PPCFuncMapping PPCFuncMappings[] = {
 	{ 0x820002C0, sub_820002C0 },
 	{ 0x820002E0, sub_820002E0 },
 	{ 0x82000300, sub_82000300 },
-	{ 0x82000320, sub_82000320 },
+	{ 0x82000340, sub_82000340 },
+	{ 0x82000360, sub_82000360 },
+	{ 0x82000380, sub_82000380 },
+	{ 0x820003C0, __imp__NtAllocateVirtualMemory },
+	{ 0x820003C4, __imp__RtlInitializeCriticalSection },
+	{ 0x820003C8, __imp__NtCreateEvent },
+	{ 0x820003CC, __imp__NtCreateFile },
+	{ 0x820003D0, __imp__NtReadFile },
+	{ 0x820003D4, __imp__NtSetEvent },
+	{ 0x820003D8, __imp__ObReferenceObjectByHandle },
+	{ 0x820003DC, __imp__VdInitializeEngines },
 	{ 0, nullptr }
 };

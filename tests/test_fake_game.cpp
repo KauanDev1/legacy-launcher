@@ -82,7 +82,7 @@ TEST_CASE("fake game --coverage lists three states", "[unit]") {
   CHECK(r.out.find("| FakeStub | function | stub |") != std::string::npos);
   CHECK(r.out.find("| FakeCallback | function | implemented |") != std::string::npos);
   CHECK(r.out.find("| FakeMissing | function | missing |") != std::string::npos);
-  CHECK(r.out.find("Implemented: 5, stub: 1, missing: 1 / 7 functions + 0 variables") != std::string::npos);
+  CHECK(r.out.find("Implemented: 12, stub: 1, missing: 2 / 15 functions + 0 variables") != std::string::npos);
 }
 
 TEST_CASE("fake game --coverage --image adds the XEX's variable imports", "[unit]") {
@@ -111,7 +111,7 @@ TEST_CASE("fake game --coverage --image adds the XEX's variable imports", "[unit
   CHECK(r.out.find("| XboxKrnlVersion4Digit | variable | missing |") != std::string::npos);
   CHECK(r.out.find("DbgPrint") == std::string::npos);  // a function: its row comes from the generated thunks
   CHECK(r.out.find("| KeTimeStampBundle | variable | implemented |") != std::string::npos);
-  CHECK(r.out.find("Implemented: 7, stub: 1, missing: 2 / 7 functions + 3 variables") != std::string::npos);
+  CHECK(r.out.find("Implemented: 14, stub: 1, missing: 3 / 15 functions + 3 variables") != std::string::npos);
 }
 
 // The XEX TLS header (key 0x00020104) is validated at load: an unusable one is a load error (exit 2), never a
@@ -239,12 +239,12 @@ TEST_CASE("missing import on a secondary guest thread exits 3 with a Thread line
   CHECK(r.out.find("Trail (last 1): FakeMissing") != std::string::npos);
 }
 
-// sub_82000300 (thread 1) waits forever for thread 2 (sub_82000320), which waits forever for thread 1's KTHREAD:
+// sub_82000340 (thread 1) waits forever for thread 2 (sub_82000360), which waits forever for thread 1's KTHREAD:
 // with LR_DEADLOCK_SECONDS=1 the detector reports both waits with their object kinds and trails, then exits 6.
 TEST_CASE("two guest threads waiting on each other exit 6 with both waits listed", "[unit][threads][deadlock]") {
   TempDir td;
   const auto start = std::chrono::steady_clock::now();
-  auto r = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x82000300)}, {"LR_DEADLOCK_SECONDS=1"});
+  auto r = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x82000340)}, {"LR_DEADLOCK_SECONDS=1"});
   INFO(r.out);
   CHECK(r.code == 6);
   CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(30));
@@ -254,6 +254,68 @@ TEST_CASE("two guest threads waiting on each other exit 6 with both waits listed
   CHECK(r.out.find("(thread)") != std::string::npos);
   CHECK(r.out.find("Trail (last 2): ExCreateThread -> NtWaitForSingleObjectEx") != std::string::npos);
   CHECK(r.out.find("Trail (last 1): KeWaitForSingleObject") != std::string::npos);
+}
+
+// The M2 finish line in miniature, through the generated thunks only. sub_82000300 (thread 1) allocates a scratch
+// block (NtAllocateVirtualMemory), initialises a critical section in it, creates a notification event and starts
+// sub_82000380 on thread 2 (ExCreateThread). The worker opens game:\data.bin (NtCreateFile, 9 arguments: the
+// ninth on the guest stack), reads its first 4 bytes into the scratch block (NtReadFile) and sets the event. Thread
+// 1 turns the event handle into its dispatcher object (ObReferenceObjectByHandle), waits on it
+// (KeWaitForSingleObject) and calls VdInitializeEngines with the 4 bytes read in r3, big-endian: the run stops
+// there with exit 3, and the trace line of that call carries the bytes. Any failed status on either thread calls
+// FakeMissing instead (the report then names it and the call site).
+TEST_CASE("fake guest boots like a game", "[unit][threads][files]") {
+  TempDir td;
+  fs::create_directories(td.path / "game");
+  std::ofstream(td.path / "game" / "data.bin", std::ios::binary) << "LR27 and the rest of the file";
+  const fs::path trace = td.path / "trace.log";
+  auto r = run_game(td.path, {"--headless", "--data", (td.path / "game").string(), "--user", (td.path / "user").string(),
+                              "--trace-imports", "--trace-file", trace.string(), "--image",
+                              write_image(td.path, 0x82000300)});
+  INFO(r.out);
+  CHECK(r.code == 3);
+  CHECK(r.out.find("Unimplemented import: VdInitializeEngines\nCalled from: 0x8200031C\nThread: 1\n") !=
+        std::string::npos);
+
+  // Trace lines are "[tid] Name r3=... -> result"; the two threads interleave, so order is checked per thread.
+  std::ifstream f(trace);
+  std::vector<std::string> lines;
+  for (std::string l; std::getline(f, l);) lines.push_back(l);
+  INFO([&] {
+    std::string all;
+    for (const auto& l : lines) all += l + "\n";
+    return all;
+  }());
+  auto tid_of = [](const std::string& l) { return l.substr(0, l.find(' ')); };
+  auto name_of = [](const std::string& l) {
+    const size_t b = l.find(' ') + 1;
+    return l.substr(b, l.find(' ', b) - b);
+  };
+  std::vector<std::string> main_calls, worker_calls;
+  std::string worker_tid;
+  size_t read_at = lines.size(), wait_at = lines.size();
+  for (size_t i = 0; i < lines.size(); ++i) {
+    const std::string name = name_of(lines[i]);
+    if (tid_of(lines[i]) == "[1]") {
+      main_calls.push_back(name);
+      if (name == "KeWaitForSingleObject") wait_at = i;
+    } else {
+      if (worker_tid.empty()) worker_tid = tid_of(lines[i]);
+      CHECK(tid_of(lines[i]) == worker_tid);
+      worker_calls.push_back(name);
+      if (name == "NtReadFile") read_at = i;
+    }
+    if (name != "VdInitializeEngines" && name != "RtlInitializeCriticalSection")
+      CHECK(lines[i].ends_with("-> 0x00000000"));  // every status is STATUS_SUCCESS
+  }
+  CHECK(main_calls == std::vector<std::string>{"NtAllocateVirtualMemory", "RtlInitializeCriticalSection", "NtCreateEvent",
+                                               "ExCreateThread", "ObReferenceObjectByHandle", "KeWaitForSingleObject",
+                                               "VdInitializeEngines"});
+  CHECK(worker_calls == std::vector<std::string>{"NtCreateFile", "NtReadFile", "NtSetEvent"});
+  CHECK(read_at < wait_at);  // the wait returned only after the worker had read the file
+  REQUIRE_FALSE(lines.empty());
+  CHECK(lines.back().starts_with("[1] VdInitializeEngines r3=0x4C523237 "));  // "LR27", the first 4 bytes of data.bin
+  CHECK(lines.back().ends_with("-> missing"));
 }
 
 // sub_82000180 calls FakeImplemented(41) -> 42 and FakeStub(7) -> 0 on thread 1, nothing else.

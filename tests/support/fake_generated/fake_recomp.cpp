@@ -146,20 +146,162 @@ PPC_FUNC(sub_820001E0) {
 
 // Second thread of the deadlock pair: KeWaitForSingleObject(main thread's KTHREAD, 0, 0, non-alertable, no
 // timeout), i.e. an infinite wait on the thread that is itself waiting for this one.
-PPC_FUNC(sub_82000320) {
+PPC_FUNC(sub_82000360) {
   ctx.r3.u64 = PPC_LOAD_U32(0x82000010);
   ctx.r4.u64 = 0;
   ctx.r5.u64 = 0;
   ctx.r6.u64 = 0;
   ctx.r7.u64 = 0;
-  ctx.lr = 0x82000324;
+  ctx.lr = 0x82000364;
   __imp__KeWaitForSingleObject(ctx, base);
 }
 
 // Entry point: a two-thread deadlock. Stores this thread's KTHREAD (KPCR +0x100) at guest 0x82000010, starts
-// sub_82000320 (which waits on that KTHREAD forever) and waits for it forever: the deadlock detector ends the run
+// sub_82000360 (which waits on that KTHREAD forever) and waits for it forever: the deadlock detector ends the run
 // with exit 6.
-PPC_FUNC(sub_82000300) {
+PPC_FUNC(sub_82000340) {
   PPC_STORE_U32(0x82000010, PPC_LOAD_U32(uint32_t(ctx.r13.u64) + 0x100));
-  create_and_wait(ctx, base, 0x82000320, 0, 0x82000304);
+  create_and_wait(ctx, base, 0x82000360, 0, 0x82000344);
+}
+
+// --- Fake game boot (sub_82000300 + worker sub_82000380): threads, files and waits through the thunks only. ---
+// Offsets inside the scratch block sub_82000300 allocates and hands to the worker as its start context.
+namespace boot {
+constexpr uint32_t kCritSec = 0x00;  // RTL_CRITICAL_SECTION (0x1C bytes)
+constexpr uint32_t kEvent = 0x20;    // event handle (written by thread 1)
+constexpr uint32_t kData = 0x24;     // the 4 bytes read from game:\data.bin
+constexpr uint32_t kFile = 0x30;     // file handle
+constexpr uint32_t kIosb = 0x38;     // X_IO_STATUS_BLOCK
+constexpr uint32_t kAttrs = 0x40;    // X_OBJECT_ATTRIBUTES
+constexpr uint32_t kName = 0x50;     // X_ANSI_STRING
+constexpr uint32_t kPath = 0x60;     // path characters
+constexpr uint32_t kOffset = 0x80;   // byte offset (be int64)
+constexpr uint32_t kFrame = 0x100;   // guest stack frame of each function; locals at r1 + 0x60
+}  // namespace boot
+
+// Worker (thread 2, r3 = scratch block): NtCreateFile(game:\data.bin) with its ninth argument (create options) in
+// the caller's parameter area at r1 + 0x54, NtReadFile of 4 bytes at offset 0 into the block, NtSetEvent on the
+// event thread 1 waits on. A failed status (or a short read) calls FakeMissing from 0x820003A0.
+PPC_FUNC(sub_82000380) {
+  using namespace boot;
+  const uint32_t s = ctx.r3.u32;
+  ctx.r1.u64 -= kFrame;
+  const auto fail = [&] {
+    ctx.lr = 0x820003A0;
+    __imp__FakeMissing(ctx, base);
+  };
+  static constexpr char kPathText[] = "game:\\data.bin";
+  constexpr uint16_t kPathLen = sizeof(kPathText) - 1;
+  for (uint32_t i = 0; i < kPathLen; ++i) PPC_STORE_U8(s + kPath + i, uint8_t(kPathText[i]));
+  PPC_STORE_U16(s + kName + 0, kPathLen);      // length
+  PPC_STORE_U16(s + kName + 2, kPathLen + 1);  // maximum_length
+  PPC_STORE_U32(s + kName + 4, s + kPath);     // buffer
+  PPC_STORE_U32(s + kAttrs + 0, 0);            // root_directory
+  PPC_STORE_U32(s + kAttrs + 4, s + kName);    // name_ptr
+  PPC_STORE_U32(s + kAttrs + 8, 0x40);         // OBJ_CASE_INSENSITIVE
+
+  ctx.r3.u64 = s + kFile;
+  ctx.r4.u64 = 0x80100000;  // GENERIC_READ | SYNCHRONIZE
+  ctx.r5.u64 = s + kAttrs;
+  ctx.r6.u64 = s + kIosb;
+  ctx.r7.u64 = 0;           // allocation_size*
+  ctx.r8.u64 = 0x80;        // FILE_ATTRIBUTE_NORMAL
+  ctx.r9.u64 = 1;           // FILE_SHARE_READ
+  ctx.r10.u64 = 1;          // FILE_OPEN
+  PPC_STORE_U64(uint32_t(ctx.r1.u64) + 0x50, 0x60);  // FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE
+  ctx.lr = 0x82000384;
+  __imp__NtCreateFile(ctx, base);
+  if (ctx.r3.u32 != 0) fail();
+
+  PPC_STORE_U64(s + kOffset, 0);
+  ctx.r3.u64 = PPC_LOAD_U32(s + kFile);
+  ctx.r4.u64 = 0;  // event
+  ctx.r5.u64 = 0;  // apc_routine
+  ctx.r6.u64 = 0;  // apc_context
+  ctx.r7.u64 = s + kIosb;
+  ctx.r8.u64 = s + kData;
+  ctx.r9.u64 = 4;
+  ctx.r10.u64 = s + kOffset;
+  ctx.lr = 0x82000388;
+  __imp__NtReadFile(ctx, base);
+  if (ctx.r3.u32 != 0 || PPC_LOAD_U32(s + kIosb + 4) != 4) fail();
+
+  ctx.r3.u64 = PPC_LOAD_U32(s + kEvent);
+  ctx.r4.u64 = 0;  // previous_state*
+  ctx.lr = 0x8200038C;
+  __imp__NtSetEvent(ctx, base);
+  if (ctx.r3.u32 != 0) fail();
+
+  ctx.r1.u64 += kFrame;
+  ctx.r3.u64 = 0;
+}
+
+// Entry point: boots like a game. NtAllocateVirtualMemory(64 KiB scratch block), RtlInitializeCriticalSection in
+// it, NtCreateEvent (notification, not signaled), ExCreateThread(sub_82000380, block), ObReferenceObjectByHandle
+// on the event (any type) and KeWaitForSingleObject on the object it returns, then VdInitializeEngines with the 4
+// bytes the worker read in r3 (missing: exit 3 from 0x8200031C). A failed status calls FakeMissing from 0x82000320.
+PPC_FUNC(sub_82000300) {
+  using namespace boot;
+  ctx.r1.u64 -= kFrame;
+  const uint32_t l = uint32_t(ctx.r1.u64) + 0x60;  // locals: base, size, event, thread, thread id, event object
+  const auto fail = [&] {
+    ctx.lr = 0x82000320;
+    __imp__FakeMissing(ctx, base);
+  };
+  PPC_STORE_U32(l + 0x00, 0);  // anywhere
+  PPC_STORE_U32(l + 0x04, 0x10000);
+  ctx.r3.u64 = l + 0x00;
+  ctx.r4.u64 = l + 0x04;
+  ctx.r5.u64 = 0x3000;  // MEM_COMMIT | MEM_RESERVE
+  ctx.r6.u64 = 0x04;    // PAGE_READWRITE
+  ctx.r7.u64 = 0;
+  ctx.lr = 0x82000304;
+  __imp__NtAllocateVirtualMemory(ctx, base);
+  if (ctx.r3.u32 != 0) fail();
+  const uint32_t s = PPC_LOAD_U32(l + 0x00);
+
+  ctx.r3.u64 = s + kCritSec;
+  ctx.lr = 0x82000308;
+  __imp__RtlInitializeCriticalSection(ctx, base);
+
+  ctx.r3.u64 = l + 0x08;
+  ctx.r4.u64 = 0;  // object_attributes
+  ctx.r5.u64 = 0;  // NotificationEvent
+  ctx.r6.u64 = 0;  // not signaled
+  ctx.lr = 0x8200030C;
+  __imp__NtCreateEvent(ctx, base);
+  if (ctx.r3.u32 != 0) fail();
+  PPC_STORE_U32(s + kEvent, PPC_LOAD_U32(l + 0x08));
+
+  ctx.r3.u64 = l + 0x0C;
+  ctx.r4.u64 = 0;  // default stack size
+  ctx.r5.u64 = l + 0x10;
+  ctx.r6.u64 = 0;  // xapi_startup
+  ctx.r7.u64 = 0x82000380;
+  ctx.r8.u64 = s;
+  ctx.r9.u64 = 0;  // flags: start now
+  ctx.lr = 0x82000310;
+  __imp__ExCreateThread(ctx, base);
+  if (ctx.r3.u32 != 0) fail();
+
+  ctx.r3.u64 = PPC_LOAD_U32(l + 0x08);
+  ctx.r4.u64 = 0;  // any object type
+  ctx.r5.u64 = l + 0x14;
+  ctx.lr = 0x82000314;
+  __imp__ObReferenceObjectByHandle(ctx, base);
+  if (ctx.r3.u32 != 0) fail();
+
+  ctx.r3.u64 = PPC_LOAD_U32(l + 0x14);
+  ctx.r4.u64 = 0;  // Executive
+  ctx.r5.u64 = 0;  // KernelMode
+  ctx.r6.u64 = 0;  // not alertable
+  ctx.r7.u64 = 0;  // no timeout
+  ctx.lr = 0x82000318;
+  __imp__KeWaitForSingleObject(ctx, base);
+  if (ctx.r3.u32 != 0) fail();
+
+  ctx.r3.u64 = PPC_LOAD_U32(s + kData);
+  ctx.lr = 0x8200031C;
+  __imp__VdInitializeEngines(ctx, base);
+  ctx.r1.u64 += kFrame;
 }
