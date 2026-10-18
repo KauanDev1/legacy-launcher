@@ -2,6 +2,7 @@
 #include "runtime/kernel/vfs.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <optional>
 #include <system_error>
 
@@ -88,16 +89,24 @@ void Vfs::mount(std::string device, fs::path host_dir, bool read_only) {
   mounts_[key_of(p->absolute, p->tokens, p->tokens.size())] = Mount{std::move(host_dir), read_only};
 }
 
-void Vfs::mount_defaults(const fs::path& game_dir, const fs::path& user_dir) {
+bool Vfs::mount_defaults(const fs::path& game_dir, const fs::path& user_dir) {
+  bool ok = true;
   mount("\\Device\\Cdrom0", game_dir, true);
   if (!user_dir.empty()) {
     std::error_code ec;
     fs::create_directories(user_dir / "cache", ec);
-    mount("\\Device\\Harddisk0\\Cache0", user_dir / "cache", false);
+    if (ec || !fs::is_directory(user_dir / "cache")) {
+      std::fprintf(stderr, "[kernel] warning: cannot create %s: %s; cache: is unavailable\n",
+                   (user_dir / "cache").c_str(), ec ? ec.message().c_str() : "not a directory");
+      ok = false;
+    } else {
+      mount("\\Device\\Harddisk0\\Cache0", user_dir / "cache", false);
+    }
   }
   create_symlink("game:", "\\Device\\Cdrom0");
   create_symlink("d:", "\\Device\\Cdrom0");
   create_symlink("cache:", "\\Device\\Harddisk0\\Cache0");
+  return ok;
 }
 
 uint32_t Vfs::create_symlink(std::string_view link, std::string_view target) {
@@ -118,13 +127,13 @@ uint32_t Vfs::delete_symlink(std::string_view link) {
   return links_.erase(key_of(l->absolute, l->tokens, l->tokens.size())) ? STATUS_SUCCESS : STATUS_OBJECT_NAME_NOT_FOUND;
 }
 
-std::vector<std::string> Vfs::list_dir(const fs::path& dir) {
-  std::vector<std::string> names;
+bool Vfs::list_dir(const fs::path& dir, std::vector<std::string>& names) {
+  names.clear();
   std::error_code ec;
   for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
     names.push_back(it->path().filename().string());
   std::sort(names.begin(), names.end());
-  return names;
+  return !ec;
 }
 
 bool Vfs::find_child(const fs::path& dir, const std::string& name, bool read_only, std::string& out) const {
@@ -132,8 +141,10 @@ bool Vfs::find_child(const fs::path& dir, const std::string& name, bool read_onl
     std::lock_guard lk(index_mu_);
     auto it = index_.find(dir.string());
     if (it == index_.end()) {
+      std::vector<std::string> names;
+      if (!list_dir(dir, names)) return false;  // listing failed: cache nothing, retry on the next lookup
       std::unordered_map<std::string, std::string> m;
-      for (auto& n : list_dir(dir)) m.emplace(lower(n), n);  // sorted: the smallest spelling wins a clash
+      for (auto& n : names) m.emplace(lower(n), n);  // sorted: the smallest spelling wins a clash
       it = index_.emplace(dir.string(), std::move(m)).first;
     }
     auto f = it->second.find(lower(name));
@@ -146,7 +157,9 @@ bool Vfs::find_child(const fs::path& dir, const std::string& name, bool read_onl
     return true;
   }
   const std::string want = lower(name);
-  for (auto& n : list_dir(dir))
+  std::vector<std::string> names;
+  list_dir(dir, names);
+  for (auto& n : names)
     if (lower(n) == want) {
       out = n;
       return true;

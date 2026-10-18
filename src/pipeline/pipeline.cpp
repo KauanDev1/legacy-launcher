@@ -74,10 +74,14 @@ Result<int> launch(const Options& options, std::span<const std::string> extra_ar
     return Error{ErrorCode::NotFound, "patched image missing: " + image.string(),
                  "run `legacyrecomp install --iso <iso>` again"};
 
-  // user/ holds the saves and the cache; the pipeline never deletes it. The game runs without it when creation fails.
+  // user/ holds the saves and the cache; the pipeline never deletes it. Creation failure aborts the launch.
   {
     std::error_code ec;
     fs::create_directories(p.user, ec);
+    if (ec || !fs::is_directory(p.user))
+      return Error{ErrorCode::IoError,
+                   "cannot create user data folder " + p.user.string() + ": " + (ec ? ec.message() : "not a directory"),
+                   "check the permissions of the data root or choose another one with --root"};
   }
 
   // --trace-file always: the game only writes it when --trace-imports is among the extra arguments (spec section 11).

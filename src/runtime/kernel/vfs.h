@@ -4,8 +4,9 @@
 // devices. Matching is ASCII case-insensitive everywhere. Task 22 builds the Nt*File imports on top of resolve().
 //
 // Case-insensitive lookup: read-only mounts build a lowercase name index per directory on first use and keep it for
-// the whole run (the game tree never changes); writable mounts try an exact match and otherwise list the directory
+// the whole run (the game tree never changes; a failed listing is not cached); writable mounts try an exact match and otherwise list the directory
 // on every lookup (no cache: the guest creates and deletes files, so a stale cache would be worse than the cost).
+// Host symlinks inside a mount are followed (the guest cannot create them).
 #pragma once
 
 #include <cstdint>
@@ -35,8 +36,9 @@ class Vfs {
   Vfs& operator=(const Vfs&) = delete;
 
   // Defaults: \Device\Cdrom0 -> game_dir (ro), \Device\Harddisk0\Cache0 -> <user_dir>/cache (rw, created); symlinks
-  // game: and d: -> \Device\Cdrom0, cache: -> \Device\Harddisk0\Cache0. An empty user_dir mounts no cache.
-  void mount_defaults(const std::filesystem::path& game_dir, const std::filesystem::path& user_dir);
+  // game: and d: -> \Device\Cdrom0, cache: -> \Device\Harddisk0\Cache0. An empty user_dir mounts no cache. If <user_dir>/cache cannot be created the cache device is not
+  // mounted (cache: then resolves to NotFound), a warning goes to stderr and false is returned; the kernel carries on.
+  bool mount_defaults(const std::filesystem::path& game_dir, const std::filesystem::path& user_dir);
 
   // `device` such as "\\Device\\Cdrom0" (case-insensitive). Replaces an existing mount of the same name.
   void mount(std::string device, std::filesystem::path host_dir, bool read_only);
@@ -61,7 +63,7 @@ class Vfs {
     bool absolute;
     std::vector<std::string> tokens;
   };
-  static std::vector<std::string> list_dir(const std::filesystem::path& dir);
+  static bool list_dir(const std::filesystem::path& dir, std::vector<std::string>& names);  // false: listing failed
   bool find_child(const std::filesystem::path& dir, const std::string& name, bool read_only, std::string& out) const;
 
   mutable std::mutex mu_;  // mounts_ and links_

@@ -2,6 +2,8 @@
 // Guest path layer (runtime/kernel/vfs.h) and the Ob*SymbolicLink imports.
 #include <catch2/catch_test_macros.hpp>
 
+#include <unistd.h>
+
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -183,7 +185,9 @@ TEST_CASE("Ob*SymbolicLink imports drive the kernel VFS", "[unit][vfs]") {
     return str;
   };
   CHECK(static_cast<uint32_t>(f.call("ObCreateSymbolicLink", ansi("\\??\\media:"), ansi("\\Device\\Cdrom0\\Media"))) == STATUS_SUCCESS);
-  CHECK(static_cast<uint32_t>(f.call("ObCreateSymbolicLink", ansi("MEDIA:"), ansi("\\Device\\Cdrom0"))) == STATUS_OBJECT_NAME_COLLISION);
+  // A duplicate keeps the existing link and succeeds (as Xenia does); the original target still applies.
+  CHECK(static_cast<uint32_t>(f.call("ObCreateSymbolicLink", ansi("MEDIA:"), ansi("\\Device\\Cdrom0"))) == STATUS_SUCCESS);
+  CHECK(kernel().vfs().resolve("media:\\a.bin").value().exists);
   auto r = kernel().vfs().resolve("media:\\A.BIN");
   REQUIRE(r);
   CHECK(r.value().exists);
@@ -194,4 +198,32 @@ TEST_CASE("Ob*SymbolicLink imports drive the kernel VFS", "[unit][vfs]") {
   // The default mounts come from the kernel config; cache: is created under user_dir.
   CHECK(fs::is_directory(f.user_tmp.path / "cache"));
   CHECK(kernel().vfs().resolve("game:\\Media\\a.bin").value().read_only);
+}
+
+TEST_CASE("mount_defaults skips cache: and reports when user/cache cannot be created", "[unit][vfs]") {
+  TempDir t;
+  touch(t.path / "game" / "a.bin");
+  std::ofstream(t.path / "user") << "a regular file blocks the folder";
+  Vfs vfs;
+  CHECK_FALSE(vfs.mount_defaults(t.path / "game", t.path / "user"));
+  CHECK(vfs.resolve("game:\\a.bin").value().exists);  // the game mount still works
+  CHECK_FALSE(vfs.resolve("cache:\\x"));
+}
+
+TEST_CASE("a failed directory listing is not cached in the read-only index", "[unit][vfs]") {
+  Tree t;
+  const fs::path sub = t.game / "Later";
+  fs::create_directories(sub);
+  fs::permissions(sub, fs::perms::none);
+  const bool blocked = !std::ifstream(sub / "nothing").is_open() && ::access(sub.c_str(), R_OK) != 0;
+  auto first = t.vfs.resolve("game:\\Later\\File.BIN");
+  fs::permissions(sub, fs::perms::owner_all);
+  if (!blocked) SKIP("directory permissions are not enforced (running as root)");
+  REQUIRE(first);
+  CHECK_FALSE(first.value().exists);
+  touch(sub / "file.bin");
+  auto second = t.vfs.resolve("game:\\Later\\File.BIN");
+  REQUIRE(second);
+  CHECK(second.value().exists);
+  CHECK(second.value().host == sub / "file.bin");
 }

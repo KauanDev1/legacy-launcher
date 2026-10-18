@@ -200,3 +200,19 @@ TEST_CASE("launch passes --data <root>/game and --user <root>/user and creates u
   CHECK(ss.str().find("--user\n" + (t.path / "user").string() + "\n") != std::string::npos);
   CHECK(fs::is_directory(t.path / "user"));
 }
+
+TEST_CASE("launch fails with IoError when user/ cannot be created", "[unit][vfs]") {
+  TempDir t;
+  write(t.path / "work" / "image" / "default_tu1.xex", "image");
+  const fs::path game = t.path / "bin" / "legacyrecomp-game";
+  write(game, "#!/bin/sh\nexit 0\n");
+  fs::permissions(game, fs::perms::owner_all);
+  write(t.path / "user", "a regular file blocks the folder");
+  Options opts;
+  opts.root = t.path;
+  auto r = launch(opts, {});
+  REQUIRE_FALSE(r);
+  CHECK(r.error().code == lr::ErrorCode::IoError);
+  CHECK(r.error().message.find((t.path / "user").string()) != std::string::npos);
+  CHECK_FALSE(r.error().hint.empty());
+}

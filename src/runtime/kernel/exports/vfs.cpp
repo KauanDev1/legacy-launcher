@@ -2,6 +2,7 @@
 // ObCreateSymbolicLink / ObDeleteSymbolicLink over the VFS (runtime/kernel/vfs.h). Argument order follows Xenia's
 // xboxkrnl_ob.cc (semantic reference only): both take pointers to X_ANSI_STRING.
 #include <cstdint>
+#include <cstdio>
 #include <string>
 
 #include "runtime/kernel/guest_structs.h"
@@ -33,7 +34,12 @@ namespace exports {
 uint32_t ObCreateSymbolicLink(GuestCall& c, GuestPtr<X_ANSI_STRING> name, GuestPtr<X_ANSI_STRING> target) {
   std::string n, t;
   if (!read_ansi(c, name, n) || !read_ansi(c, target, t)) return STATUS_INVALID_PARAMETER;
-  return kernel().vfs().create_symlink(n, t);
+  const uint32_t st = kernel().vfs().create_symlink(n, t);
+  if (st == STATUS_OBJECT_NAME_COLLISION) {  // Xenia keeps the existing link and reports success
+    std::fprintf(stderr, "[kernel] symlink %s already exists, kept\n", n.c_str());
+    return STATUS_SUCCESS;
+  }
+  return st;
 }
 
 uint32_t ObDeleteSymbolicLink(GuestCall& c, GuestPtr<X_ANSI_STRING> name) {
