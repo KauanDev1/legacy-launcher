@@ -100,7 +100,11 @@ bool Vfs::mount_defaults(const fs::path& game_dir, const fs::path& user_dir) {
                    (user_dir / "cache").c_str(), ec ? ec.message().c_str() : "not a directory");
       ok = false;
     } else {
-      mount("\\Device\\Harddisk0\\Cache0", user_dir / "cache", false);
+      // Spec section 9: cache: and the hard disk partitions share <user>/cache (Partition0 is the whole disk,
+      // Partition1 the data partition; the game sees one writable folder whichever device it names).
+      for (const char* dev : {"\\Device\\Harddisk0\\Cache0", "\\Device\\Harddisk0\\Partition0",
+                              "\\Device\\Harddisk0\\Partition1"})
+        mount(dev, user_dir / "cache", false);
     }
   }
   create_symlink("game:", "\\Device\\Cdrom0");

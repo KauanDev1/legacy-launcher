@@ -200,6 +200,22 @@ TEST_CASE("Ob*SymbolicLink imports drive the kernel VFS", "[unit][vfs]") {
   CHECK(kernel().vfs().resolve("game:\\Media\\a.bin").value().read_only);
 }
 
+TEST_CASE("hard disk partitions share the writable <user>/cache folder", "[unit][vfs]") {
+  // Spec section 9: cache: and the disk partitions go to <root>/user/cache.
+  Tree t;
+  fs::create_directories(t.user / "cache" / "Saves");
+  for (const char* dev : {"\\Device\\Harddisk0\\Partition0", "\\Device\\Harddisk0\\Partition1"}) {
+    auto r = t.vfs.resolve(std::string(dev) + "\\Saves\\World.dat");
+    REQUIRE(r);
+    CHECK(r.value().host == t.user / "cache" / "Saves" / "World.dat");
+    CHECK_FALSE(r.value().read_only);
+  }
+  touch(t.user / "cache" / "content.bin");
+  CHECK(t.vfs.resolve("\\Device\\Harddisk0\\Partition1\\CONTENT.BIN").value().exists);
+  CHECK(t.vfs.resolve("cache:\\content.bin").value().host ==
+        t.vfs.resolve("\\Device\\Harddisk0\\Partition0\\content.bin").value().host);
+}
+
 TEST_CASE("mount_defaults skips cache: and reports when user/cache cannot be created", "[unit][vfs]") {
   TempDir t;
   touch(t.path / "game" / "a.bin");
@@ -208,6 +224,7 @@ TEST_CASE("mount_defaults skips cache: and reports when user/cache cannot be cre
   CHECK_FALSE(vfs.mount_defaults(t.path / "game", t.path / "user"));
   CHECK(vfs.resolve("game:\\a.bin").value().exists);  // the game mount still works
   CHECK_FALSE(vfs.resolve("cache:\\x"));
+  CHECK_FALSE(vfs.resolve("\\Device\\Harddisk0\\Partition1\\x"));
 }
 
 TEST_CASE("a failed directory listing is not cached in the read-only index", "[unit][vfs]") {

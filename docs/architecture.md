@@ -326,7 +326,10 @@ handles de arquivo, enquanto as esperas continuam recusando-os (o `guest_header(
 
 `Kernel::vfs()` (`runtime/kernel/vfs.h`) traduz caminhos do convidado (`game:\...`, `\??\...`,
 `\Device\Cdrom0\...`, `cache:\...`) para caminhos do host, sem diferenciar maiúsculas; `game:` é só leitura e
-`cache:` fica em `<user>/cache`. As importações de arquivo (`exports/files.cpp`, semântica do
+`cache:` fica em `<user>/cache`. Os dispositivos de disco `\Device\Harddisk0\Partition0` (o disco inteiro) e
+`\Device\Harddisk0\Partition1` (a partição de dados) também são montados, graváveis, na mesma pasta
+`<user>/cache` que `\Device\Harddisk0\Cache0` (spec, seção 9): o jogo vê uma única pasta gravável qualquer que
+seja o dispositivo que nomeia, e os saves ficam todos num lugar só. As importações de arquivo (`exports/files.cpp`, semântica do
 `xboxkrnl_io.cc`/`xboxkrnl_io_info.cc`/`xfile.cc` do Xenia, só referência) usam o `resolve()` dele:
 
 - **`FileObject`** (`runtime/kernel/files.h`): um descritor do host aberto com `O_CLOEXEC` (arquivo ou
