@@ -42,10 +42,19 @@ constexpr uint32_t STATUS_FILE_IS_A_DIRECTORY = 0xC00000BA;
 constexpr uint32_t STATUS_NOT_A_DIRECTORY = 0xC0000103;
 
 constexpr uint32_t ERROR_SUCCESS = 0;
+constexpr uint32_t ERROR_INVALID_HANDLE = 6;
 constexpr uint32_t ERROR_NO_MORE_FILES = 18;
+constexpr uint32_t ERROR_INVALID_PARAMETER = 87;
+constexpr uint32_t ERROR_INSUFFICIENT_BUFFER = 122;
+constexpr uint32_t ERROR_IO_INCOMPLETE = 996;
 constexpr uint32_t ERROR_IO_PENDING = 997;
 constexpr uint32_t ERROR_DEVICE_NOT_CONNECTED = 1167;
 constexpr uint32_t ERROR_NOT_FOUND = 1168;
+constexpr uint32_t ERROR_NO_SUCH_USER = 1317;
 constexpr uint32_t ERROR_FUNCTION_FAILED = 1627;
+
+// HRESULT_FROM_WIN32 values returned by the XamUser* queries.
+constexpr uint32_t X_E_INVALIDARG = 0x80070057;
+constexpr uint32_t X_E_NO_SUCH_USER = 0x80070525;
 
 }  // namespace lr::kernel

@@ -154,6 +154,27 @@ falha padrão da categoria, e manter `UnimplementedImport` só para importaçõe
 *comportamento* realmente ausente, em vez de parar no primeiro nome. Manter os três estados da tabela de cobertura:
 implemented / stub / missing.
 
+## Estado no M2: XAM mínima, consultas de vídeo e sondas de hardware ausente
+
+Registradas pela Task 26 (`src/runtime/kernel/exports/xam.cpp`, `video.cpp`, `net.cpp`; detalhes em
+`docs/architecture.md`, seção "XAM mínima, vídeo e rede"). Todo o resto das categorias 6, 7, 17 a 28 continua
+`missing` até o rastreio real (Task 28) mostrar que o jogo chama.
+
+- **implemented**: `XamCreateEnumeratorHandle`, `XamEnumerate`, `XamGetPrivateEnumStructureFromHandle`,
+  `XamGetOverlappedResult`, `XamTaskSchedule`, `XamNotifyCreateListener`, `XNotifyGetNext`,
+  `XamUserGetSigninState`, `XamUserGetXUID`, `XamUserGetName`, `XamUserGetSigninInfo`,
+  `XamUserReadProfileSettings`, `XamContentGetDeviceState` (sem dispositivo: `ERROR_DEVICE_NOT_CONNECTED`),
+  `XamContentCreateDeviceEnumerator` (vazio), `XamContentGetLicenseMask` (licença completa),
+  `XamShowDirtyDiscErrorUI` (`guest_fatal("dirty disc")`, saída 5).
+- **stub**: `XNotifyPositionUI`, `XamIsUIActive` (0), `XamInputGetCapabilities` (`ERROR_DEVICE_NOT_CONNECTED`),
+  `XAudioGetSpeakerConfig` (estéreo `0x00010001`), `XGetVideoMode`, `VdQueryVideoMode`,
+  `VdGetCurrentDisplayInformation`, `VdGetCurrentDisplayGamma`, `VdQueryVideoFlags` (3), `XGetAVPack` (6),
+  `XGetVideoCapabilities` (0), `VdIsHSIOTrainingSucceeded` (1), `NetDll_WSAStartup` (0), `NetDll_XNetStartup` (0),
+  `NetDll_XNetGetEthernetLinkStatus` (0, sem link).
+- **missing de propósito**: os `Vd*` que criam ou usam a GPU (`VdInitializeEngines`,
+  `VdSetGraphicsInterruptCallback`, `VdInitializeRingBuffer`, `VdSwap`...): a primeira chamada a um deles é a linha de
+  chegada do M2.
+
 ## Categorias (listas completas)
 
 

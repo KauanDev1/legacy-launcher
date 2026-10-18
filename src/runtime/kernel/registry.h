@@ -86,6 +86,14 @@ void stub_return(GuestCall& c) {
                                      &::lr::kernel::marshal<&::lr::kernel::exports::Name>),         \
        true)
 
+// Registers lr::kernel::exports::Name like LR_KERNEL but with state Stub: a fixed answer that still has to write
+// guest structures (the video mode queries, for instance). Same "why" comment rule as LR_KERNEL_STUB.
+#define LR_KERNEL_STUB_FN(Name)                                                                     \
+  [[maybe_unused]] static const bool lr_kernel_registered_##Name =                                  \
+      (::lr::kernel::register_import(#Name, ::lr::kernel::ImportState::Stub,                        \
+                                     &::lr::kernel::marshal<&::lr::kernel::exports::Name>),         \
+       true)
+
 // Registers import `Name` as a Stub that only returns the constant `value` in r3 (<= 32-bit values are
 // sign-extended, as marshal does). Put a comment next to every use saying why a constant is enough, e.g.
 //   LR_KERNEL_STUB(XamEnableInactivityProcessing, 0);  // no screen saver to suppress on the host

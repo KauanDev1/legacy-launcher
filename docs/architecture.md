@@ -400,6 +400,54 @@ handles de arquivo, enquanto as esperas continuam recusando-os (o `guest_header(
   `XeCryptSha256Final` não sobrescreve o bloco do estado. `XeCryptRotSumSha` e os `XeKeys*` /
   `XeCryptBnQwBeSigVerify` continuam faltando (M4).
 
+### XAM mínima, vídeo e rede
+
+`exports/xam.cpp`, `exports/video.cpp` e `exports/net.cpp` (semântica do Xenia, sem copiar código; layouts em
+`runtime/kernel/xam.h` com `static_assert`). Importações que só devolvem um valor fixo, mesmo escrevendo uma
+estrutura, são registradas como `stub` (`LR_KERNEL_STUB` ou `LR_KERNEL_STUB_FN`).
+
+- **XOVERLAPPED** (`XAM_OVERLAPPED`, 0x1C bytes): toda operação XAM conclui na hora. Com overlapped, preenche
+  `result`, `length`, `context` (handle da thread atual), `extended_error` (HRESULT do resultado), sinaliza o evento
+  (se houver), enfileira a rotina de conclusão como APC na thread atual e devolve `ERROR_IO_PENDING`; sem overlapped
+  devolve o resultado direto. `XamGetOverlappedResult(ov, length*, wait)`: resultado pronto → ele mesmo (`*length`
+  só em sucesso); pendente sem evento ou sem `wait` → `ERROR_IO_INCOMPLETE`; senão espera o evento. Diferença do
+  Xenia: ele adia `XamEnumerate` em 100 ms numa thread de trabalho.
+- **Enumeradores**: objeto `Enumerator` cujo corpo no convidado (pool) é um `X_KENUMERATOR` (0x18 bytes) seguido
+  dos bytes privados. `create_enumerator` (C++) cria um sobre itens fixos; `XamEnumerate` copia até
+  `items_per_enumerate` itens por chamada, `ERROR_INSUFFICIENT_BUFFER` se o lote não cabe e `ERROR_NO_MORE_FILES`
+  no fim. `XamCreateEnumeratorHandle(user_index, app_id, open_message, close_message, extra_size,
+  items_per_enumerate, flags, handle*)` cria um enumerador vazio (no Xenia é um stub que falha; a ordem dos
+  argumentos segue os campos de `XEnumerator::Initialize` e é suposição). `XamGetPrivateEnumStructureFromHandle`
+  devolve o `X_KENUMERATOR` com uma referência de kernel liberada por `ObDereferenceObject`.
+- **Tarefas**: `XamTaskSchedule(callback, mensagem, ?, handle*)` roda `callback(mensagem)` numa thread do convidado
+  nova e escreve o handle real dela (o Xenia escreve um marcador).
+- **Notificações**: o listener é esperável (evento de notificação no pool, sinalizado enquanto há itens). Máscara de
+  64 bits: o id `XNID` tem a área nos bits 25..30 e a versão nos bits 16..24; só entra o que tem a área na máscara
+  e versão ≤ `max_version` (limitado a 10). Todo listener da área do sistema (bit 0) nasce com sign-in alterado
+  (`0x0A`, parâmetro 1 = usuário 0) e dispositivos de armazenamento alterados (`0x0B`); `XNotifyGetNext` entrega
+  cada um uma vez (o mais antigo, ou o primeiro com `match_id`) e depois FALSE. O Xenia só enfileira para o primeiro
+  listener e também manda notificações de UI e de entrada.
+- **Usuário**: um usuário local "Player", XUID offline `0xE000000000000001`, estado 1 (conectado localmente), só no
+  índice 0. Outros índices: estado 0, `X_E_NO_SUCH_USER` (`0x80070525`), índice ≥ 4 `X_E_INVALIDARG`.
+  `XamUserGetXUID` só responde à máscara offline (bit 0). `XamUserReadProfileSettings` não tem perfil gravado:
+  configurações int32/float com padrão no Xenia vêm com `from = 1` e o valor; o resto (strings, binários,
+  desconhecidas) vem sem valor (`from = 0`, só o tipo). Buffer menor que o necessário → `*buffer_size` =
+  necessário e `ERROR_INSUFFICIENT_BUFFER`; o necessário é 8 + por usuário 0x28 por configuração + o tamanho das
+  strings/binários (o espaço que o Xenia reserva).
+- **Conteúdo**: nenhum dispositivo de armazenamento no M2 (`XamContentGetDeviceState` →
+  `ERROR_DEVICE_NOT_CONNECTED`, enumeração de dispositivos vazia com itens de 0x50 bytes) e licença completa
+  (`0xFFFFFFFF`).
+- **Vídeo** (só consultas): 1280x720, widescreen, progressivo, 60 Hz, NTSC (`X_VIDEO_MODE` de 0x30 bytes, com os
+  valores desconhecidos `0x4A`/`0x01` do Xenia); `VdQueryVideoFlags` 3; `VdGetCurrentDisplayInformation` com
+  escalonador 1:1 e overscan 320/180; gama tipo 2, potência 2.22222233; `XGetAVPack` 6 (o valor do Xenia; os jogos
+  tratam qualquer valor fora de 3/4/6/8 como PAL); `VdIsHSIOTrainingSucceeded` 1. Os `Vd*` que criam ou usam a GPU
+  continuam faltando: são a linha de chegada do M2.
+- **Rede, UI, entrada, áudio**: os `NetDll_*` recebem o chamador em r3; `NetDll_WSAStartup` preenche o `WSADATA`
+  (versão pedida, 100 sockets, datagramas de 1024 bytes) e devolve 0, `NetDll_XNetStartup` 0,
+  `NetDll_XNetGetEthernetLinkStatus` 0 (sem link). `XamIsUIActive` 0, `XNotifyPositionUI` no-op,
+  `XamInputGetCapabilities` `ERROR_DEVICE_NOT_CONNECTED`, `XAudioGetSpeakerConfig` estéreo (`0x00010001`) e
+  `XamShowDirtyDiscErrorUI` encerra com `guest_fatal("dirty disc")` (saída 5).
+
 ## Diagnóstico
 
 Os modos de falha do ciclo "rodar, ver onde para, implementar" são importação faltando (saída 3), falha (4), erro
