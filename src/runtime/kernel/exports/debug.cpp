@@ -11,6 +11,7 @@
 #include <string>
 
 #include "runtime/guest_thread.h"
+#include "runtime/kernel/guest_printf.h"
 #include "runtime/kernel/guest_structs.h"
 #include "runtime/kernel/kernel.h"
 #include "runtime/kernel/registry.h"
@@ -40,14 +41,13 @@ std::string hex32(uint32_t v) {
 
 namespace exports {
 
-// DbgPrint(format, ...): until the printf interpreter (Task 24) exists, the format string itself is printed,
-// verbatim, prefixed "[guest] " (at most 4 KiB, no newline added).
+// DbgPrint(format, ...): the guest printf interpreter formats it (variadic arguments from position 1), prefixed
+// "[guest] " (at most 4 KiB of format, no newline added).
 uint32_t DbgPrint(GuestCall& c, uint32_t format) {
   std::string s = "[guest] ";
   if (GuestPtr<char>{format}.valid_range(1)) {
-    const char* p = reinterpret_cast<const char*>(c.base + format);
-    const uint64_t room = (uint64_t{1} << 32) - format;
-    s.append(p, ::strnlen(p, static_cast<size_t>(room < kMaxDbgPrint ? room : kMaxDbgPrint)));
+    CallArgs args(c, 1);
+    s += guest_format(c.base, read_guest_string(c.base, format, kMaxDbgPrint), args);
   } else {
     s += "(null)\n";
   }

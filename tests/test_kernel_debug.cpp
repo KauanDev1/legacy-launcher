@@ -267,7 +267,7 @@ TEST_CASE("DbgPrint prints the format string prefixed [guest]", "[unit][kernel][
     ::_exit(s == 0 ? 0 : 1);
   });
   CHECK(r.code == 0);
-  CHECK(r.err == "[guest] hello %d\n");
+  CHECK(r.err == "[guest] hello 5\n");
 }
 
 TEST_CASE("debug stubs return success and DbgBreakPoint continues", "[unit][kernel][debug]") {
