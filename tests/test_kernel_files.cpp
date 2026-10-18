@@ -187,6 +187,29 @@ TEST_CASE("read past end -> STATUS_END_OF_FILE", "[unit][kernel][files]") {
   CHECK(r.bytes == 0);
 }
 
+TEST_CASE("negative byte offsets and directory reads are refused", "[unit][kernel][files]") {
+  KernelFixture f;
+  write_host(f.game_tmp.path / "a.bin", "abc");
+  write_host(f.user_tmp.path / "cache" / "w.bin", "abc");
+  fs::create_directories(f.game_tmp.path / "Dir");
+  const Opened o = create(f, "game:\\a.bin", kFileOpen);
+  const uint32_t buf = f.alloc(8), iosb = f.alloc(8), off = f.alloc(8);
+  for (const uint64_t v : {0xFFFFFFFFFFFFFFFDull, 0x8000000000000000ull}) {  // -3, INT64_MIN
+    wr64(f, off, v);
+    CHECK(call(f, "NtReadFile", o.handle, 0, 0, 0, iosb, buf, 3, off) == STATUS_INVALID_PARAMETER);
+  }
+  const Opened w = create(f, "cache:\\w.bin", kFileOpen, 0, kGenericRead | kGenericWrite);
+  REQUIRE(w.status == STATUS_SUCCESS);
+  CHECK(call(f, "NtWriteFile", w.handle, 0, 0, 0, iosb, buf, 3, off) == STATUS_INVALID_PARAMETER);
+  const uint32_t seg = f.alloc(4);
+  *f.mem.translate<be<uint32_t>>(seg) = buf;
+  CHECK(call(f, "NtReadFileScatter", o.handle, 0, 0, 0, iosb, seg, 3, off) == STATUS_INVALID_PARAMETER);
+
+  const Opened d = create(f, "game:\\Dir", kFileOpen, kFileDirectoryFile);
+  REQUIRE(d.status == STATUS_SUCCESS);
+  CHECK(read(f, d.handle, buf, 3, 0).status == STATUS_INVALID_DEVICE_REQUEST);
+}
+
 TEST_CASE("NtReadFile with null io status block", "[unit][kernel][files]") {
   KernelFixture f;
   write_host(f.game_tmp.path / "a.bin", "abc");

@@ -272,8 +272,11 @@ uint32_t open_file(const GuestCall& c, U32Ptr handle_out, uint32_t /*access*/, G
 }
 
 // Shared prologue of the I/O calls: a valid IO_STATUS_BLOCK, a file handle and (optional) an event handle.
+// The event object is held for the whole request, so a concurrent NtClose of the event cannot free its pool body
+// before complete_io signals it.
 struct IoRequest {
   std::shared_ptr<FileObject> file;
+  std::shared_ptr<KObject> event;
   uint32_t event_header = 0;
 };
 
@@ -282,9 +285,9 @@ uint32_t begin_io(const GuestCall& c, uint32_t handle, uint32_t event, IosbPtr i
   req.file = file_of(handle);
   if (!req.file) return STATUS_INVALID_HANDLE;
   if (event != 0) {
-    auto ev = kernel().objects().get(event);
-    if (!ev) return STATUS_INVALID_HANDLE;
-    req.event_header = ev->guest_header();
+    req.event = kernel().objects().get(event);
+    if (!req.event) return STATUS_INVALID_HANDLE;
+    req.event_header = req.event->guest_header();
     const uint8_t type = req.event_header != 0 ? c.base[req.event_header] : 0xFF;
     if (type != kNotificationEvent && type != kSynchronizationEvent) return STATUS_OBJECT_TYPE_MISMATCH;
   }
@@ -296,7 +299,7 @@ uint32_t begin_io(const GuestCall& c, uint32_t handle, uint32_t event, IosbPtr i
 uint32_t complete_io(const GuestCall& c, const IoRequest& req, IosbPtr iosb, uint32_t apc_routine,
                      uint32_t apc_context, uint32_t status, uint32_t information) {
   put_iosb(c, iosb, status, information);
-  if (req.event_header != 0) (void)kernel().dispatcher().set_event(req.event_header);
+  if (req.event) (void)kernel().dispatcher().set_event(req.event_header);
   const uint32_t routine = apc_routine & ~1u;
   if (routine != 0 && apc_context != 0) {
     if (GuestThread* t = current_thread()) t->queue_apc({routine, apc_context, iosb.addr, 0});
@@ -304,18 +307,25 @@ uint32_t complete_io(const GuestCall& c, const IoRequest& req, IosbPtr iosb, uin
   return status;
 }
 
-// The starting offset: *byte_offset, or the file position when the pointer is null or holds -1 / -2.
-bool start_offset(const GuestCall& c, OffsetPtr byte_offset, const FileObject& f, uint64_t& out) {
+// The starting offset: *byte_offset, or the file position when the pointer is null or holds -1 / -2. Status:
+// STATUS_ACCESS_VIOLATION for a pointer outside guest memory, STATUS_INVALID_PARAMETER for any other negative offset.
+uint32_t start_offset(const GuestCall& c, OffsetPtr byte_offset, const FileObject& f, uint64_t& out) {
   if (byte_offset.addr == 0) {
     out = f.position;
-    return true;
+    return STATUS_SUCCESS;
   }
-  if (!byte_offset.valid_range(8)) return false;
+  if (!byte_offset.valid_range(8)) return STATUS_ACCESS_VIOLATION;
   be<int64_t> raw;
   std::memcpy(&raw, c.base + byte_offset.addr, 8);
   const int64_t v = raw;
-  out = (v == -1 || v == kUseFilePointer) ? f.position : static_cast<uint64_t>(v);
-  return true;
+  if (v == -1 || v == kUseFilePointer) {
+    out = f.position;
+  } else if (v < 0) {
+    return STATUS_INVALID_PARAMETER;
+  } else {
+    out = static_cast<uint64_t>(v);
+  }
+  return STATUS_SUCCESS;
 }
 
 // pread until `length` bytes, EOF or an error; errno-derived status in `status` on error.
@@ -361,7 +371,7 @@ uint32_t NtReadFile(GuestCall& c, uint32_t handle, uint32_t event, uint32_t apc_
   if (length != 0 && !buffer.valid_range(length)) return STATUS_ACCESS_VIOLATION;
   std::lock_guard lock(f.mutex);
   uint64_t start = 0;
-  if (!start_offset(c, byte_offset, f, start)) return STATUS_ACCESS_VIOLATION;
+  if (const uint32_t s = start_offset(c, byte_offset, f, start); s != STATUS_SUCCESS) return s;
   uint32_t done = 0;
   uint32_t status = length == 0 ? STATUS_SUCCESS : read_at(f.fd(), c.base + buffer.addr, length, start, done);
   if (status == STATUS_SUCCESS && length != 0 && done == 0) status = STATUS_END_OF_FILE;
@@ -381,18 +391,23 @@ uint32_t NtReadFileScatter(GuestCall& c, uint32_t handle, uint32_t event, uint32
   if (f.is_directory()) return STATUS_INVALID_DEVICE_REQUEST;
   const uint32_t pages = static_cast<uint32_t>((uint64_t{length} + kPage - 1) / kPage);
   if (!segments.valid_range(size_t{pages} * 4)) return STATUS_ACCESS_VIOLATION;
+  // One copy of the segment addresses, validated and then used: the guest cannot change them in between.
+  std::vector<uint32_t> pages_at(pages);
   for (uint32_t i = 0; i < pages; ++i) {
+    be<uint32_t> raw;
+    std::memcpy(&raw, c.base + segments.addr + size_t{i} * 4, 4);
+    pages_at[i] = raw;
     const uint32_t chunk = std::min(kPage, length - i * kPage);
-    if (!GuestPtr<uint8_t>{segments.get(c.base)[i]}.valid_range(chunk)) return STATUS_ACCESS_VIOLATION;
+    if (!GuestPtr<uint8_t>{pages_at[i]}.valid_range(chunk)) return STATUS_ACCESS_VIOLATION;
   }
   std::lock_guard lock(f.mutex);
   uint64_t start = 0;
-  if (!start_offset(c, byte_offset, f, start)) return STATUS_ACCESS_VIOLATION;
+  if (const uint32_t s = start_offset(c, byte_offset, f, start); s != STATUS_SUCCESS) return s;
   uint32_t total = 0, status = STATUS_SUCCESS;
   for (uint32_t i = 0; i < pages && status == STATUS_SUCCESS; ++i) {
     const uint32_t chunk = std::min(kPage, length - i * kPage);
     uint32_t done = 0;
-    status = read_at(f.fd(), c.base + uint32_t{segments.get(c.base)[i]}, chunk, start + total, done);
+    status = read_at(f.fd(), c.base + pages_at[i], chunk, start + total, done);
     total += done;
     if (done < chunk) break;  // end of file
   }
@@ -412,13 +427,17 @@ uint32_t NtWriteFile(GuestCall& c, uint32_t handle, uint32_t event, uint32_t apc
   if (length != 0 && !buffer.valid_range(length)) return STATUS_ACCESS_VIOLATION;
   std::lock_guard lock(f.mutex);
   uint64_t start = 0;
-  if (!start_offset(c, byte_offset, f, start)) return STATUS_ACCESS_VIOLATION;
+  if (const uint32_t s = start_offset(c, byte_offset, f, start); s != STATUS_SUCCESS) return s;
   uint32_t done = 0, status = STATUS_SUCCESS;
   while (done < length) {
     const ssize_t n = ::pwrite(f.fd(), c.base + buffer.addr + done, length - done, static_cast<off_t>(start + done));
     if (n < 0) {
       if (errno == EINTR) continue;
       status = errno == ENOSPC ? STATUS_DISK_FULL : status_from_errno(errno);
+      break;
+    }
+    if (n == 0) {  // no progress for a non-zero length: stop instead of spinning
+      status = STATUS_DISK_FULL;
       break;
     }
     done += static_cast<uint32_t>(n);
