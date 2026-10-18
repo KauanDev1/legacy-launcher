@@ -19,9 +19,9 @@
 // Buffering: lines go to a 64 KiB process-wide buffer behind a spinlock (an atomic flag) and are written to the file
 // with write(2) when it fills. It is flushed by flush_import_trace on every exit path that is not a signal handler
 // (normal exit through atexit and main's _exit, exit 3 from the guest thread, guest_fatal's exit 5, the deadlock
-// detector's exit 6, HalReturnToFirmware), and by flush_import_trace_from_signal in the fault handler (exit 4), which
-// only takes the spinlock if it is free and never blocks: if the faulting thread was itself appending a line, the
-// buffered lines are lost. Disabled (the default), each thunk pays one atomic load.
+// detector's exit 6, HalReturnToFirmware) and every second by the deadlock detector while it runs; and by
+// flush_import_trace_from_signal in the fault handler (exit 4), which only takes the spinlock if it is free and never
+// blocks: if the faulting thread was itself appending a line, the buffered lines are lost. Disabled (the default), each thunk pays one atomic load.
 
 namespace lr::kernel {
 

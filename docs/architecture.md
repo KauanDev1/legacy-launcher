@@ -336,7 +336,8 @@ do relatório de saída 3, e uma que nunca volta (`KeBugCheckEx`, `ExTerminateTh
 tem linha. O destino é `--trace-file <caminho>` (diretórios criados; sem ele, stderr). O `legacyrecomp run`
 (`pipeline::launch`) sempre passa `--trace-file <raiz>/work/logs/game-trace.log`, que sozinho não faz nada.
 As linhas vão para um buffer de 64 KiB protegido por um spinlock (uma flag atômica) e são escritas com `write(2)`
-quando ele enche, na saída normal (`atexit` e o `_exit` do `main.cpp`) e em todo caminho fatal: saída 3 (topo da
+quando ele enche, a cada segundo pelo detector de impasse (quando ele roda), na saída normal (`atexit` e o
+`_exit` do `main.cpp`) e em todo caminho fatal: saída 3 (topo da
 thread), 5 (`guest_fatal`), 6 (detector) e `HalReturnToFirmware`. O handler de falhas (saída 4) só tenta o
 spinlock, sem bloquear (seguro em sinal): se a própria thread que falhou estava escrevendo uma linha, as linhas no
 buffer se perdem. Desligado, cada thunk paga uma leitura atômica.
@@ -362,13 +363,19 @@ o inicializou; várias esperas com `(any)`/`(all)`), esvazia o stdio e o trace e
 cada thread é lida pelo handle da sua trilha (`current_trail_handle`/`trail_of`), seguro porque a thread está
 bloqueada.
 
+O único sinalizador do lado do host hoje é o worker de timers/DPCs (e as APCs). Todo sinalizador futuro do host que
+possa acordar uma thread do convidado (E/S assíncrona, notificações da XAM, interrupções emuladas) precisa contar
+como trabalho pendente para o detector, senão uma espera legítima por ele vira falso impasse (saída 6). Se a thread
+do detector não puder ser criada, o jogo avisa em stderr e roda sem ele. Antes de sair, o detector repete a
+observação depois de montar o relatório: se algo mudou nesse meio tempo, descarta o relatório e continua observando.
+
 **Importações de depuração** (`exports/debug.cpp`, semântica do `xboxkrnl_debug.cc`/`xboxkrnl_hal.cc` do Xenia,
 só referência): `DbgPrint` imprime a string de formato literal com prefixo `[guest] ` (até o interpretador de
 `printf`); `DbgBreakPoint` registra e continua; `KeBugCheck(código)`/`KeBugCheckEx(código, p1..p4)` →
 `guest_fatal("KeBugCheckEx 0x%08X (0x..., ...)")`; `HalReturnToFirmware` esvazia o trace e sai com 0;
 `RtlCaptureContext` preenche o `X_CONTEXT` do convidado (`guest_structs.h`, 0xA40 bytes; o Xenia não define
-esse tipo, o layout é o do `CONTEXT` público do Xbox 360) com r1, r3..r10, r13 e lr (`iar` = lr), resto 0,
-`ContextFlags` = controle | inteiros; `RtlRaiseException` → `guest_fatal` com o código da exceção, exceto
+esse tipo, o layout é o do `CONTEXT` público do Xbox 360) escrevendo só os campos conhecidos (`ContextFlags` = controle | inteiros, `iar` = lr, lr, r1, r3..r10 e r13) e
+nada mais: como o layout não foi conferido, zerar 0xA40 bytes poderia sobrescrever a pilha de quem chamou; `RtlRaiseException` → `guest_fatal` com o código da exceção, exceto
 `0x406D1388` (o `SetThreadName` do MSVC, que o Xenia também trata e retorna); `RtlUnwind` e
 `__C_specific_handler` → `guest_fatal` com o nome (sem SEH do convidado). Stubs com sucesso:
 `EtxProducerRegister`/`Unregister`/`Log`, `KeLockL2`/`KeUnlockL2`.

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdio>
 #include <memory>
+#include <system_error>
 #include <unordered_map>
 #include <vector>
 
@@ -71,7 +72,12 @@ void DeadlockDetector::on_guest_thread_created() {
   std::lock_guard<std::mutex> lock(mutex_);
   if (started_ || stop_) return;
   started_ = true;
-  thread_ = std::thread([this, seconds] { loop(seconds); });
+  // create_guest_thread returns a Result: a host thread that cannot start must not throw out of it.
+  try {
+    thread_ = std::thread([this, seconds] { loop(seconds); });
+  } catch (const std::system_error& e) {
+    std::fprintf(stderr, "warning: cannot start the deadlock detector (%s); running without it\n", e.what());
+  }
 }
 
 void DeadlockDetector::stop() {
@@ -89,19 +95,27 @@ void DeadlockDetector::loop(uint32_t seconds) {
   bool blocked = false;
   uint64_t blocked_activity = 0;
   Clock::time_point since{};
-  std::unique_lock<std::mutex> lock(mutex_);
-  while (!stop_) {
-    if (cv_.wait_for(lock, std::chrono::seconds(1), [this] { return stop_; })) break;
-    lock.unlock();
-    // One observation, valid only if no thread entered or left a wait while it was taken.
+  // One observation: true when every guest thread is blocked and no thread entered or left a wait while it was taken
+  // (`activity` = the dispatcher's counter during it).
+  auto observe = [&](uint64_t& activity) {
     const uint64_t a1 = d.activity();
     std::vector<uint32_t> tokens;
     for (const auto& t : kernel_.threads().live()) tokens.push_back(t->kthread());
     const std::vector<WaitInfo> waits = d.snapshot();
     const bool pending = kernel_.timers().has_pending_work();
-    const uint64_t a2 = d.activity();
+    activity = d.activity();
+    return a1 == activity && all_threads_blocked(tokens, waits, pending);
+  };
+  std::unique_lock<std::mutex> lock(mutex_);
+  while (!stop_) {
+    if (cv_.wait_for(lock, std::chrono::seconds(1), [this] { return stop_; })) break;
+    lock.unlock();
+    // A hung game the user kills keeps its most recent trace lines.
+    flush_import_trace();
+    uint64_t a1 = 0;
+    const bool now_blocked = observe(a1);
     const auto now = Clock::now();
-    if (a1 != a2 || !all_threads_blocked(tokens, waits, pending)) {
+    if (!now_blocked) {
       blocked = false;
     } else if (!blocked || a1 != blocked_activity) {
       blocked = true;
@@ -109,6 +123,14 @@ void DeadlockDetector::loop(uint32_t seconds) {
       since = now;
     } else if (now - since >= std::chrono::seconds(seconds)) {
       const std::string msg = report(seconds);
+      // Still the same blocked state after building the report (and reading the trails)? Otherwise a thread moved
+      // meanwhile: discard the report and keep watching.
+      uint64_t a3 = 0;
+      if (!observe(a3) || a3 != blocked_activity) {
+        blocked = false;
+        lock.lock();
+        continue;
+      }
       std::fputs(msg.c_str(), stderr);
       std::fflush(nullptr);
       flush_import_trace();

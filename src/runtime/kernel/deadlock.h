@@ -22,6 +22,12 @@
 //
 // for every live guest thread (ascending id), flushes stdio and the import trace and calls _exit(kExitDeadlock) = 6.
 // Not counted: the kernel worker (internal, never a dispatcher waiter) and host threads (run_main_thread's wait).
+// While it runs, it also flushes the import trace every second, so a hung game the user kills keeps its latest lines.
+//
+// Pending work: the only host-side signalers today are the timer/DPC worker (Timers::has_pending_work) and APCs. Any
+// future host-side signaler that can wake a blocked guest thread (async I/O completion, XAM notifications, emulated
+// interrupts, ...) MUST be reported as pending work to all_threads_blocked, or a guest legitimately waiting on it
+// forever is a false deadlock (exit 6).
 
 namespace lr::kernel {
 

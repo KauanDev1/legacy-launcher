@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -236,10 +237,24 @@ TEST_CASE("RtlCaptureContext fills the guest CONTEXT from the call registers", "
   CHECK(x.gpr[4] == 4u);
   CHECK(x.gpr[10] == 10u);
   CHECK(x.gpr[13] == 0x7000u);
-  CHECK(x.gpr[0] == 0u);
-  CHECK(x.gpr[31] == 0u);
-  CHECK(x.ctr == 0u);
-  CHECK(x.vr[127][3] == 0u);
+  // Only the known fields are written; the rest of the (unverified) layout keeps whatever the guest had there.
+  constexpr uint64_t kFill = 0xABABABABABABABABull;
+  CHECK(x.msr == 0xABABABABu);
+  CHECK(x.ctr == kFill);
+  CHECK(x.gpr[0] == kFill);
+  CHECK(x.gpr[2] == kFill);
+  CHECK(x.gpr[11] == kFill);
+  CHECK(x.gpr[12] == kFill);
+  CHECK(x.gpr[14] == kFill);
+  CHECK(x.gpr[31] == kFill);
+  CHECK(x.cr == 0xABABABABu);
+  CHECK(x.vr[127][3] == 0xABABABABu);
+  const uint8_t* bytes = f.mem.translate<uint8_t>(ctx);
+  for (size_t i = offsetof(X_CONTEXT, gpr) + 14 * 8; i < sizeof(X_CONTEXT); ++i) {
+    if (bytes[i] != 0xAB) {
+      FAIL("byte " << i << " of the CONTEXT was written");
+    }
+  }
 }
 
 TEST_CASE("DbgPrint prints the format string prefixed [guest]", "[unit][kernel][debug]") {

@@ -4,6 +4,7 @@
 // cannot recover from goes through guest_fatal (exit 5) so the run stops with a named reason and the import trail.
 #include <unistd.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -75,14 +76,15 @@ void HalReturnToFirmware(uint32_t routine) {
   _exit(runtime::kExitOk);
 }
 
-// RtlCaptureContext(context*): only what the thunk knows is real: r1, r3..r10, r13 and lr (iar = lr, the caller's
-// resume address, as on NT); every other register, the FP and the VMX sections are 0. ContextFlags = control |
-// integer.
+// RtlCaptureContext(context*): writes only what the thunk knows: ContextFlags (control | integer), iar = lr (the
+// caller's resume address, as on NT), lr, r1, r3..r10 and r13. Nothing else is touched (no zeroing): the X_CONTEXT
+// layout is unverified (guest_structs.h), and if the real CONTEXT were smaller than 0xA40 bytes a full write would
+// clobber the caller's stack. Every written field lies in the first kWrittenBytes (control section and gpr[0..13]).
 void RtlCaptureContext(GuestCall& c, uint32_t context) {
-  if (!GuestPtr<X_CONTEXT>{context}.valid_range(sizeof(X_CONTEXT)))
+  constexpr size_t kWrittenBytes = offsetof(X_CONTEXT, gpr) + 14 * sizeof(be<uint64_t>);
+  if (!GuestPtr<X_CONTEXT>{context}.valid_range(kWrittenBytes))
     guest_fatal("RtlCaptureContext with an invalid CONTEXT pointer " + hex32(context));
   auto* x = reinterpret_cast<X_CONTEXT*>(c.base + context);
-  std::memset(static_cast<void*>(x), 0, sizeof(X_CONTEXT));
   x->context_flags = kContextControl | kContextInteger;
   x->lr = c.lr;
   x->iar = c.lr;
