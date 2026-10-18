@@ -116,6 +116,9 @@ class LzxContext final : public KObject {
     lzx_->bit_buffer = 0;
     lzx_->bits_left = 0;
     lzx_->input_end = 0;
+    // lzxd decodes one frame past an exact multiple of 32 KiB (a zero-size one when the length is set): keep the
+    // frame counter equal to the real number of frames so the next call decodes the right ones.
+    lzx_->frame = static_cast<unsigned>(lzx_->offset / 32768);
     lzxd_set_output_length(lzx_, lzx_->offset + static_cast<off_t>(want));
     const int err = lzxd_decompress(lzx_, static_cast<off_t>(want));
     *produced = static_cast<uint32_t>(out_.pos);

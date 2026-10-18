@@ -136,3 +136,31 @@ TEST_CASE("corrupt input returns an error status, no crash", "[unit][kernel][lzx
     CHECK(t.create(1u << 30) != 0);
   }
 }
+
+namespace {
+// A NON-first block (no E8 header bit): 3 bits type 3 + 24 bits length = 27 bits, padded to a word boundary.
+std::vector<uint8_t> uncompressed_next_block(const std::vector<uint8_t>& data) {
+  const uint32_t len = static_cast<uint32_t>(data.size());
+  const uint32_t bits = (0x3u << 24 | len) << 5;
+  std::vector<uint8_t> s = {static_cast<uint8_t>(bits >> 16), static_cast<uint8_t>(bits >> 24),
+                            static_cast<uint8_t>(bits), static_cast<uint8_t>(bits >> 8)};
+  for (int r = 0; r < 3; ++r) s.insert(s.end(), {1, 0, 0, 0});
+  s.insert(s.end(), data.begin(), data.end());
+  return s;
+}
+}  // namespace
+
+TEST_CASE("continuation across LDIDecompress calls without a reset", "[unit][kernel][lzx]") {
+  Lzx t;
+  REQUIRE(t.create() == 0);
+  const auto a = pattern(32768, 11), b = pattern(32768, 77), c = pattern(1024, 3);
+  REQUIRE(t.decompress(uncompressed_stream(a), 32768) == 0);
+  CHECK(t.produced() == 32768);
+  CHECK(t.dst_equals(a));
+  REQUIRE(t.decompress(uncompressed_next_block(b), 32768) == 0);
+  CHECK(t.produced() == 32768);
+  CHECK(t.dst_equals(b));
+  REQUIRE(t.decompress(uncompressed_next_block(c), 1024) == 0);  // short final block
+  CHECK(t.produced() == 1024);
+  CHECK(t.dst_equals(c));
+}
