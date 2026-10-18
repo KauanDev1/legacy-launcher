@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -75,6 +76,15 @@ std::vector<char> read_file(const std::string& path, bool& ok) {
 }
 
 bool is_xex2(const std::vector<char>& b) { return b.size() >= 4 && std::memcmp(b.data(), "XEX2", 4) == 0; }
+
+// Ends the process now: flushes stdio and the import trace and skips static destructors. Every exit once a kernel
+// thread may run (resolve_variable_imports starts the kernel worker for KeTimeStampBundle; guest threads later)
+// goes through here, so no destructor tears the kernel down under a running thread.
+[[noreturn]] void exit_now(int rc) {
+  std::fflush(nullptr);
+  lr::kernel::flush_import_trace();
+  _exit(rc);
+}
 
 // LR_DEADLOCK_SECONDS: the detector threshold (tests use 1). Unset or not a number: 10; 0 disables the detector.
 uint32_t deadlock_seconds() {
@@ -217,9 +227,7 @@ int run_with_window(uint32_t entry, uint32_t stack_size) {
   }
   if (closed && !done) {
     // The user closed the window while the guest is still running: report success and take the guest down with us.
-    std::fflush(nullptr);
-    lr::kernel::flush_import_trace();
-    _exit(0);
+    exit_now(kExitOk);
   }
   runner.join();
   SDL_DestroyWindow(win);
@@ -306,7 +314,7 @@ int main(int argc, char** argv) {
                                 : lr::Result<void>(header.error());
     if (!r) {
       std::fprintf(stderr, "error: cannot resolve the imports of %s: %s\n", opt.image.c_str(), r.error().message.c_str());
-      return kExitUsage;
+      exit_now(kExitUsage);
     }
   }
 
@@ -318,15 +326,15 @@ int main(int argc, char** argv) {
   }
   if (auto r = install_function_table(mem.value(), PPC_IMAGE_BASE + PPC_IMAGE_SIZE, PPC_CODE_BASE, PPC_CODE_SIZE, maps); !r) {
     std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
-    return kExitUsage;
+    exit_now(kExitUsage);
   }
   if (!entry_fn) {
     std::fprintf(stderr, "error: no recompiled function at entry point 0x%08X\n", img.value().entry);
-    return kExitUsage;
+    exit_now(kExitUsage);
   }
   if (auto r = install_fault_handlers(mem.value()); !r) {
     std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
-    return kExitUsage;
+    exit_now(kExitUsage);
   }
 
   g_guest_base = mem.value().base();
@@ -336,7 +344,5 @@ int main(int argc, char** argv) {
   const int rc = opt.headless ? lr::kernel::run_main_thread(entry, stack_size) : run_with_window(entry, stack_size);
   // The main guest thread has returned (or the window failed): end the process now, taking any other guest threads
   // down with it, without running static destructors under their feet.
-  std::fflush(nullptr);
-  lr::kernel::flush_import_trace();
-  _exit(rc);
+  exit_now(rc);
 }
