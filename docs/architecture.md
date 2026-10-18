@@ -408,8 +408,8 @@ estrutura, são registradas como `stub` (`LR_KERNEL_STUB` ou `LR_KERNEL_STUB_FN`
 
 - **XOVERLAPPED** (`XAM_OVERLAPPED`, 0x1C bytes): toda operação XAM conclui na hora. Com overlapped, preenche
   `result`, `length`, `context` (handle da thread atual), `extended_error` (HRESULT do resultado), sinaliza o evento
-  (se houver), enfileira a rotina de conclusão como APC na thread atual e devolve `ERROR_IO_PENDING`; sem overlapped
-  devolve o resultado direto. `XamGetOverlappedResult(ov, length*, wait)`: resultado pronto → ele mesmo (`*length`
+  (se o handle for de um evento; outro tipo de objeto, como um semáforo, é ignorado sem erro), enfileira a rotina
+  de conclusão como APC na thread atual e devolve `ERROR_IO_PENDING`; sem overlapped devolve o resultado direto. `XamGetOverlappedResult(ov, length*, wait)`: resultado pronto → ele mesmo (`*length`
   só em sucesso); pendente sem evento ou sem `wait` → `ERROR_IO_INCOMPLETE`; senão espera o evento. Diferença do
   Xenia: ele adia `XamEnumerate` em 100 ms numa thread de trabalho.
 - **Enumeradores**: objeto `Enumerator` cujo corpo no convidado (pool) é um `X_KENUMERATOR` (0x18 bytes) seguido
@@ -418,7 +418,8 @@ estrutura, são registradas como `stub` (`LR_KERNEL_STUB` ou `LR_KERNEL_STUB_FN`
   no fim. `XamCreateEnumeratorHandle(user_index, app_id, open_message, close_message, extra_size,
   items_per_enumerate, flags, handle*)` cria um enumerador vazio (no Xenia é um stub que falha; a ordem dos
   argumentos segue os campos de `XEnumerator::Initialize` e é suposição). `XamGetPrivateEnumStructureFromHandle`
-  devolve o `X_KENUMERATOR` com uma referência de kernel liberada por `ObDereferenceObject`.
+  devolve o `X_KENUMERATOR` com uma referência de kernel liberada por `ObDereferenceObject` (ponteiro de saída inválido →
+  `STATUS_INVALID_PARAMETER`, sem referência).
 - **Tarefas**: `XamTaskSchedule(callback, mensagem, ?, handle*)` roda `callback(mensagem)` numa thread do convidado
   nova e escreve o handle real dela (o Xenia escreve um marcador).
 - **Notificações**: o listener é esperável (evento de notificação no pool, sinalizado enquanto há itens). Máscara de
@@ -428,8 +429,10 @@ estrutura, são registradas como `stub` (`LR_KERNEL_STUB` ou `LR_KERNEL_STUB_FN`
   cada um uma vez (o mais antigo, ou o primeiro com `match_id`) e depois FALSE. O Xenia só enfileira para o primeiro
   listener e também manda notificações de UI e de entrada.
 - **Usuário**: um usuário local "Player", XUID offline `0xE000000000000001`, estado 1 (conectado localmente), só no
-  índice 0. Outros índices: estado 0, `X_E_NO_SUCH_USER` (`0x80070525`), índice ≥ 4 `X_E_INVALIDARG`.
-  `XamUserGetXUID` só responde à máscara offline (bit 0). `XamUserReadProfileSettings` não tem perfil gravado:
+  índice 0. Outros índices: estado 0, `X_E_NO_SUCH_USER` (`0x80070525`); índice ≥ 4 → `X_E_INVALIDARG` em
+  `XamUserGetXUID`, `XamUserGetName` e `XamUserGetSigninInfo`.
+  `XamUserGetXUID` responde a qualquer bit de tipo (offline 1, online 2 e 4), como o perfil local do Xenia; máscara sem
+  esses bits → `X_E_NO_SUCH_USER`. `XamUserReadProfileSettings` não tem perfil gravado:
   configurações int32/float com padrão no Xenia vêm com `from = 1` e o valor; o resto (strings, binários,
   desconhecidas) vem sem valor (`from = 0`, só o tipo). Buffer menor que o necessário → `*buffer_size` =
   necessário e `ERROR_INSUFFICIENT_BUFFER`; o necessário é 8 + por usuário 0x28 por configuração + o tamanho das

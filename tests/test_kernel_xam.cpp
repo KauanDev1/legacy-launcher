@@ -126,6 +126,9 @@ TEST_CASE("enumerator returns items then no more files", "[unit][kernel][xam]") 
     CHECK(rd(f, obj + 0x08) == 0x5678u);  // close_message
     CHECK(rd(f, obj + 0x10) == 4u);       // items_per_enumerate
     f.call("ObDereferenceObject", obj);
+    // An invalid out pointer takes no kernel reference.
+    CHECK(u32(f.call("XamGetPrivateEnumStructureFromHandle", handle, 0u)) == STATUS_INVALID_PARAMETER);
+    CHECK_FALSE(kernel().objects().release_kernel_ref(kernel().objects().get(handle).get()));
     CHECK(f.call("XamEnumerate", handle, 0u, buf, 16u, count, 0u) == ERROR_NO_MORE_FILES);
     CHECK(f.call("NtClose", handle) == STATUS_SUCCESS);
   }
@@ -141,6 +144,14 @@ TEST_CASE("enumerator returns items then no more files", "[unit][kernel][xam]") 
     const uint32_t mask = f.alloc(4);
     CHECK(f.call("XamContentGetLicenseMask", mask, 0u) == ERROR_SUCCESS);
     CHECK(rd(f, mask) == 0xFFFFFFFFu);
+    // Only an event is set through the overlapped: a semaphore handle there is ignored.
+    const uint32_t sem_out = f.alloc(4);
+    REQUIRE(f.call("NtCreateSemaphore", sem_out, 0u, 0u, 1u) == STATUS_SUCCESS);
+    const uint32_t ov2 = f.alloc(sizeof(XAM_OVERLAPPED));
+    wr(f, ov2 + offsetof(XAM_OVERLAPPED, event), rd(f, sem_out));
+    CHECK(f.call("XamContentGetLicenseMask", mask, ov2) == ERROR_IO_PENDING);
+    CHECK(rd(f, ov2) == ERROR_SUCCESS);
+    CHECK(poll(f, rd(f, sem_out)) == STATUS_TIMEOUT);
   }
 }
 
@@ -250,7 +261,12 @@ TEST_CASE("user is signed in offline as Player", "[unit][kernel][xam]") {
   CHECK(f.call("XamUserGetXUID", 0u, 1u, xuid) == 0);
   CHECK(rd64(f, xuid) == kLocalXuid);
   CHECK(rd64(f, xuid) == 0xE000000000000001ull);
-  CHECK(u32(f.call("XamUserGetXUID", 0u, 2u, xuid)) == 0x80070525u);  // online XUID: none (offline user)
+  // As Xenia, the local profile answers every XUID type: offline (1) and online (2, 4).
+  wr(f, xuid, 0);
+  CHECK(f.call("XamUserGetXUID", 0u, 2u, xuid) == 0);
+  CHECK(rd64(f, xuid) == kLocalXuid);
+  CHECK(f.call("XamUserGetXUID", 0u, 4u, xuid) == 0);
+  CHECK(u32(f.call("XamUserGetXUID", 0u, 0u, xuid)) == 0x80070525u);
   CHECK(u32(f.call("XamUserGetXUID", 1u, 1u, xuid)) == 0x80070525u);
   CHECK(u32(f.call("XamUserGetXUID", 4u, 1u, xuid)) == 0x80070057u);
 
@@ -265,6 +281,7 @@ TEST_CASE("user is signed in offline as Player", "[unit][kernel][xam]") {
   CHECK(rd(f, info + 0x0C) == 1);
   CHECK(std::string(f.mem.translate<char>(info + 0x18)) == "Player");
   CHECK(u32(f.call("XamUserGetSigninInfo", 1u, 0u, info)) == 0x80070525u);
+  CHECK(u32(f.call("XamUserGetSigninInfo", 4u, 0u, info)) == 0x80070057u);
   CHECK(rd64(f, info) == 0);
 
   SECTION("XamUserReadProfileSettings: size query, then defaults") {

@@ -42,7 +42,9 @@ using OverlappedPtr = GuestPtr<XAM_OVERLAPPED>;
 
 constexpr uint32_t kMaxUsers = 4;
 constexpr uint32_t kSigninStateLocal = 1;   // eXUserSigninState_SignedInLocally
-constexpr uint32_t kUserTypeOffline = 1;    // XamUserGetXUID type mask bit of an offline XUID
+// XamUserGetXUID type mask bits the local profile answers: offline (1) and online (2, 4), as Xenia, whose local
+// profile matches every XUID type.
+constexpr uint32_t kUserTypeMask = 1 | 2 | 4;
 constexpr uint32_t kContentDeviceDataSize = 0x50;  // X_CONTENT_DEVICE_DATA (Xenia xam_content_device.cc)
 constexpr uint32_t kFullLicense = 0xFFFFFFFF;
 
@@ -227,7 +229,11 @@ void complete_overlapped(uint32_t overlapped, uint32_t result, uint32_t length) 
   ov->length = length;
   ov->extended_error = hresult_from_win32(result);
   if (const uint32_t ev = ov->event; ev != 0) {
-    if (auto obj = k.objects().get(ev); obj && obj->guest_header() != 0) k.dispatcher().set_event(obj->guest_header());
+    // Only an event handle is set; any other object (a semaphore, a thread...) is ignored: the operation itself
+    // completed, and the guest sees the result in the overlapped.
+    auto obj = k.objects().get(ev);
+    if (obj && obj->kind() == ObjectKind::Event && obj->guest_header() != 0)
+      k.dispatcher().set_event(obj->guest_header());
   }
   if (const uint32_t routine = ov->completion_routine; routine != 0 && t != nullptr)
     t->queue_apc({routine, result, length, overlapped});
@@ -272,8 +278,9 @@ uint32_t XamEnumerate(GuestCall& c, uint32_t handle, uint32_t /*flags*/, uint32_
 uint32_t XamGetPrivateEnumStructureFromHandle(GuestCall& c, uint32_t handle, U32Ptr out) {
   auto e = enumerator_by_handle(handle);
   if (!e) return STATUS_INVALID_HANDLE;
+  if (!out.valid_range(4)) return STATUS_INVALID_PARAMETER;  // no reference taken: nobody could release it
   kernel().objects().add_kernel_ref(e);
-  put(c, out, e->guest_body());
+  *out.get(c.base) = e->guest_body();
   return STATUS_SUCCESS;
 }
 
@@ -350,13 +357,13 @@ uint32_t XNotifyGetNext(GuestCall& c, uint32_t handle, uint32_t match_id, U32Ptr
 
 uint32_t XamUserGetSigninState(uint32_t user_index) { return user_index == 0 ? kSigninStateLocal : 0; }
 
-// XamUserGetXUID(user_index, type_mask, xuid*): the offline XUID when the mask asks for offline XUIDs.
+// XamUserGetXUID(user_index, type_mask, xuid*): the local XUID for any offline/online type bit.
 uint32_t XamUserGetXUID(GuestCall& c, uint32_t user_index, uint32_t type_mask, U64Ptr xuid_out) {
   if (!xuid_out.valid_range(8)) return X_E_INVALIDARG;
   if (user_index >= kMaxUsers) return X_E_INVALIDARG;
   uint64_t xuid = 0;
   uint32_t result = X_E_NO_SUCH_USER;
-  if (user_index == 0 && (type_mask & kUserTypeOffline) != 0) {
+  if (user_index == 0 && (type_mask & kUserTypeMask) != 0) {
     xuid = kLocalXuid;
     result = ERROR_SUCCESS;
   }
@@ -382,6 +389,7 @@ uint32_t XamUserGetSigninInfo(GuestCall& c, uint32_t user_index, uint32_t /*flag
   if (!GuestPtr<uint8_t>{info}.valid_range(0x28)) return X_E_INVALIDARG;
   uint8_t* p = c.base + info;
   std::memset(p, 0, 0x28);
+  if (user_index >= kMaxUsers) return X_E_INVALIDARG;
   if (user_index != 0) return X_E_NO_SUCH_USER;
   *reinterpret_cast<be<uint64_t>*>(p) = kLocalXuid;
   *reinterpret_cast<be<uint32_t>*>(p + 0x0C) = kSigninStateLocal;
