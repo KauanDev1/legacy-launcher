@@ -261,9 +261,11 @@ TEST_CASE("two guest threads waiting on each other exit 6 with both waits listed
 // sub_82000380 on thread 2 (ExCreateThread). The worker opens game:\data.bin (NtCreateFile, 9 arguments: the
 // ninth on the guest stack), reads its first 4 bytes into the scratch block (NtReadFile) and sets the event. Thread
 // 1 turns the event handle into its dispatcher object (ObReferenceObjectByHandle), waits on it
-// (KeWaitForSingleObject) and calls VdInitializeEngines with the 4 bytes read in r3, big-endian: the run stops
-// there with exit 3, and the trace line of that call carries the bytes. Any failed status on either thread calls
-// FakeMissing instead (the report then names it and the call site).
+// (KeWaitForSingleObject), then waits for the worker thread to end (NtWaitForSingleObjectEx: trace lines are written
+// after a call returns, so this makes every worker line precede it) and calls VdInitializeEngines with the 4 bytes
+// read in r3, big-endian: the run stops there with exit 3, and the trace line of that call carries the bytes. Any
+// failed status on either thread calls FakeMissing instead (the report then names it and the call site). The ninth
+// NtCreateFile argument is surrounded by FILE_DIRECTORY_FILE sentinels, so a thunk reading the wrong stack word fails.
 TEST_CASE("fake guest boots like a game", "[unit][threads][files]") {
   TempDir td;
   fs::create_directories(td.path / "game");
@@ -274,7 +276,7 @@ TEST_CASE("fake guest boots like a game", "[unit][threads][files]") {
                               write_image(td.path, 0x82000300)});
   INFO(r.out);
   CHECK(r.code == 3);
-  CHECK(r.out.find("Unimplemented import: VdInitializeEngines\nCalled from: 0x8200031C\nThread: 1\n") !=
+  CHECK(r.out.find("Unimplemented import: VdInitializeEngines\nCalled from: 0x82000320\nThread: 1\n") !=
         std::string::npos);
 
   // Trace lines are "[tid] Name r3=... -> result"; the two threads interleave, so order is checked per thread.
@@ -293,29 +295,34 @@ TEST_CASE("fake guest boots like a game", "[unit][threads][files]") {
   };
   std::vector<std::string> main_calls, worker_calls;
   std::string worker_tid;
-  size_t read_at = lines.size(), wait_at = lines.size();
+  const size_t none = lines.size();
+  size_t read_at = none, set_at = none, wait_at = 0, join_at = 0, vd_at = none;
   for (size_t i = 0; i < lines.size(); ++i) {
     const std::string name = name_of(lines[i]);
     if (tid_of(lines[i]) == "[1]") {
       main_calls.push_back(name);
       if (name == "KeWaitForSingleObject") wait_at = i;
+      if (name == "NtWaitForSingleObjectEx") join_at = i;
+      if (name == "VdInitializeEngines") vd_at = i;
     } else {
       if (worker_tid.empty()) worker_tid = tid_of(lines[i]);
       CHECK(tid_of(lines[i]) == worker_tid);
       worker_calls.push_back(name);
       if (name == "NtReadFile") read_at = i;
+      if (name == "NtSetEvent") set_at = i;
     }
     if (name != "VdInitializeEngines" && name != "RtlInitializeCriticalSection")
       CHECK(lines[i].ends_with("-> 0x00000000"));  // every status is STATUS_SUCCESS
   }
   CHECK(main_calls == std::vector<std::string>{"NtAllocateVirtualMemory", "RtlInitializeCriticalSection", "NtCreateEvent",
                                                "ExCreateThread", "ObReferenceObjectByHandle", "KeWaitForSingleObject",
-                                               "VdInitializeEngines"});
+                                               "NtWaitForSingleObjectEx", "VdInitializeEngines"});
   CHECK(worker_calls == std::vector<std::string>{"NtCreateFile", "NtReadFile", "NtSetEvent"});
-  CHECK(read_at < wait_at);  // the wait returned only after the worker had read the file
-  REQUIRE_FALSE(lines.empty());
-  CHECK(lines.back().starts_with("[1] VdInitializeEngines r3=0x4C523237 "));  // "LR27", the first 4 bytes of data.bin
-  CHECK(lines.back().ends_with("-> missing"));
+  CHECK(read_at < wait_at);  // the event wait returned only after the worker had read the file
+  CHECK(set_at < join_at);   // the thread wait returned only after the worker (and its trace lines) had finished
+  REQUIRE(vd_at != none);
+  CHECK(lines[vd_at].starts_with("[1] VdInitializeEngines r3=0x4C523237 "));  // "LR27", the first 4 bytes of data.bin
+  CHECK(lines[vd_at].ends_with("-> missing"));
 }
 
 // sub_82000180 calls FakeImplemented(41) -> 42 and FakeStub(7) -> 0 on thread 1, nothing else.

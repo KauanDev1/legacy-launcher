@@ -208,7 +208,14 @@ PPC_FUNC(sub_82000380) {
   ctx.r8.u64 = 0x80;        // FILE_ATTRIBUTE_NORMAL
   ctx.r9.u64 = 1;           // FILE_SHARE_READ
   ctx.r10.u64 = 1;          // FILE_OPEN
-  PPC_STORE_U64(uint32_t(ctx.r1.u64) + 0x50, 0x60);  // FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE
+  // Ninth argument: the low half of slot 0 of the parameter area, r1 + 0x54. The neighbouring words (high half at
+  // +0x50, the next slot's low half at +0x5C) hold FILE_DIRECTORY_FILE, which fails on a file with
+  // STATUS_NOT_A_DIRECTORY: a thunk reading the wrong word cannot pass.
+  const uint32_t params = uint32_t(ctx.r1.u64) + 0x50;
+  PPC_STORE_U32(params + 0x0, 0x01);  // FILE_DIRECTORY_FILE (sentinel)
+  PPC_STORE_U32(params + 0x4, 0x60);  // FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE
+  PPC_STORE_U32(params + 0x8, 0x01);  // sentinel
+  PPC_STORE_U32(params + 0xC, 0x01);  // sentinel
   ctx.lr = 0x82000384;
   __imp__NtCreateFile(ctx, base);
   if (ctx.r3.u32 != 0) fail();
@@ -238,14 +245,15 @@ PPC_FUNC(sub_82000380) {
 
 // Entry point: boots like a game. NtAllocateVirtualMemory(64 KiB scratch block), RtlInitializeCriticalSection in
 // it, NtCreateEvent (notification, not signaled), ExCreateThread(sub_82000380, block), ObReferenceObjectByHandle
-// on the event (any type) and KeWaitForSingleObject on the object it returns, then VdInitializeEngines with the 4
-// bytes the worker read in r3 (missing: exit 3 from 0x8200031C). A failed status calls FakeMissing from 0x82000320.
+// on the event (any type) and KeWaitForSingleObject on the object it returns, NtWaitForSingleObjectEx on the worker
+// thread, then VdInitializeEngines with the 4 bytes the worker read in r3 (missing: exit 3 from 0x82000320). A
+// failed status calls FakeMissing from 0x82000324.
 PPC_FUNC(sub_82000300) {
   using namespace boot;
   ctx.r1.u64 -= kFrame;
   const uint32_t l = uint32_t(ctx.r1.u64) + 0x60;  // locals: base, size, event, thread, thread id, event object
   const auto fail = [&] {
-    ctx.lr = 0x82000320;
+    ctx.lr = 0x82000324;
     __imp__FakeMissing(ctx, base);
   };
   PPC_STORE_U32(l + 0x00, 0);  // anywhere
@@ -300,8 +308,18 @@ PPC_FUNC(sub_82000300) {
   __imp__KeWaitForSingleObject(ctx, base);
   if (ctx.r3.u32 != 0) fail();
 
-  ctx.r3.u64 = PPC_LOAD_U32(s + kData);
+  // Then the worker thread itself: once it has ended, every import it called has been traced, so the trace is the
+  // same on every run.
+  ctx.r3.u64 = PPC_LOAD_U32(l + 0x0C);
+  ctx.r4.u64 = 0;  // KernelMode
+  ctx.r5.u64 = 0;  // not alertable
+  ctx.r6.u64 = 0;  // no timeout
   ctx.lr = 0x8200031C;
+  __imp__NtWaitForSingleObjectEx(ctx, base);
+  if (ctx.r3.u32 != 0) fail();
+
+  ctx.r3.u64 = PPC_LOAD_U32(s + kData);
+  ctx.lr = 0x82000320;
   __imp__VdInitializeEngines(ctx, base);
   ctx.r1.u64 += kFrame;
 }
