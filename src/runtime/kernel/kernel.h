@@ -82,6 +82,16 @@ class Kernel {
     executable_header_ = header;
   }
 
+  // Import ordinal -> thunk guest address, per library ("xboxkrnl.exe", "xam.xex"): every function import of the
+  // executable (filled by resolve_variable_imports). XexGetProcedureAddress answers from it.
+  std::map<std::pair<std::string, uint16_t>, uint32_t>& import_thunks() { return import_thunks_; }
+
+  // Handle (fake X_LDR_DATA_TABLE_ENTRY in the kernel data area) of system module `name` ("xboxkrnl.exe",
+  // "xam.xex"), created on first use; 0 for any other name or when the data area is full. Thread-safe.
+  uint32_t system_module(std::string_view name);
+  // The library name behind a system module handle, or empty.
+  std::string system_module_name(uint32_t handle);
+
   // Handle table and kernel objects (runtime/kernel/objects.h).
   ObjectTable& objects() { return objects_; }
 
@@ -113,6 +123,9 @@ class Kernel {
   uint32_t executable_module_ = 0;
   uint32_t executable_header_ = 0;
   std::map<std::string, uint32_t, std::less<>> variable_blocks_;
+  std::map<std::pair<std::string, uint16_t>, uint32_t> import_thunks_;
+  std::mutex modules_mutex_;
+  std::map<std::string, uint32_t, std::less<>> system_modules_;
   runtime::PageHeap heap4k_;
   runtime::PageHeap heap64k_;
   runtime::PhysicalHeap physical_;

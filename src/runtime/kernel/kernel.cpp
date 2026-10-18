@@ -10,6 +10,7 @@
 #include <string>
 
 #include "runtime/guest_thread.h"
+#include "runtime/kernel/guest_structs.h"
 #include "runtime/kernel/registry.h"
 #include "runtime/kernel/trace.h"
 #include "runtime/memory_map.h"
@@ -140,6 +141,33 @@ void guest_fatal(std::string_view what) {
   std::fflush(nullptr);
   flush_import_trace();
   _exit(runtime::kExitGuestFatal);
+}
+
+}  // namespace lr::kernel
+
+namespace lr::kernel {
+
+uint32_t Kernel::system_module(std::string_view name) {
+  if (name != "xboxkrnl.exe" && name != "xam.xex") return 0;
+  std::lock_guard<std::mutex> lock(modules_mutex_);
+  const auto it = system_modules_.find(name);
+  if (it != system_modules_.end()) return it->second;
+  const uint32_t ldr = kernel_data_alloc(sizeof(X_LDR_DATA_TABLE_ENTRY), 0x10);
+  if (ldr == 0) return 0;
+  auto* e = mem_.translate<X_LDR_DATA_TABLE_ENTRY>(ldr);
+  e->in_load_order_links = {ldr, ldr};
+  e->in_memory_order_links = {ldr + 0x08, ldr + 0x08};
+  e->in_initialization_order_links = {ldr + 0x10, ldr + 0x10};
+  e->load_count = 1;
+  system_modules_.emplace(std::string(name), ldr);
+  return ldr;
+}
+
+std::string Kernel::system_module_name(uint32_t handle) {
+  std::lock_guard<std::mutex> lock(modules_mutex_);
+  for (const auto& [n, h] : system_modules_)
+    if (h == handle) return n;
+  return {};
 }
 
 }  // namespace lr::kernel

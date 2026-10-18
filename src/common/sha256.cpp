@@ -110,3 +110,19 @@ Result<std::string> sha256_file(const std::filesystem::path& path) {
 }
 
 }  // namespace lr
+
+namespace lr {
+
+void Sha256::load(const uint32_t (&h)[8], uint64_t total_len, const uint8_t (&buf)[64]) {
+  std::copy(h, h + 8, state_.begin());
+  total_len_ = total_len;
+  buf_len_ = static_cast<size_t>(total_len % 64);
+  std::memcpy(buf_.data(), buf, buf_.size());
+}
+
+void Sha256::store(uint32_t (&h)[8], uint8_t (&buf)[64]) const {
+  std::copy(state_.begin(), state_.end(), h);
+  std::memcpy(buf, buf_.data(), buf_.size());
+}
+
+}  // namespace lr

@@ -265,6 +265,13 @@ int main(int argc, char** argv) {
   cfg.game_dir = opt.data.empty() ? std::filesystem::path(opt.image).parent_path() : std::filesystem::path(opt.data);
   if (!opt.user.empty()) cfg.user_dir = opt.user;
   cfg.strict_memory = opt.strict_memory;
+  // Console language comes from the host locale (LC_ALL wins over LANG); XGetLanguage maps it (docs/architecture.md).
+  for (const char* var : {"LC_ALL", "LANG"}) {
+    if (const char* v = std::getenv(var); v != nullptr && *v != 0) {
+      cfg.language = v;
+      break;
+    }
+  }
   cfg.trace_imports = opt.trace_imports;
   if (!opt.trace_file.empty()) cfg.trace_file = opt.trace_file;
   cfg.deadlock_seconds = deadlock_seconds();

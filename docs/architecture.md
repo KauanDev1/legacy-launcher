@@ -370,6 +370,36 @@ handles de arquivo, enquanto as esperas continuam recusando-os (o `guest_header(
   `FscSetCacheElementCount` → `STATUS_SUCCESS` (os valores do Xenia). `NtWriteFileGather` e `NtFlushBuffersFile`
   continuam faltando (M4).
 
+### Consultas ao XEX, configuração do console e criptografia
+
+`exports/xex.cpp`, `exports/config.cpp` e `exports/crypto.cpp` (semântica do Xenia, sem copiar código).
+
+- **Cabeçalho do XEX**: `RtlImageXexHeaderField(cabeçalho, chave)` percorre a tabela de cabeçalhos opcionais da
+  cópia do cabeçalho no convidado (`kKernelDataBase`); chave com byte baixo `0x00`/`0x01` devolve o valor, as
+  demais um ponteiro do convidado para os dados; chave ausente → 0. `XexCheckExecutablePrivilege` lê o bit
+  indicado dos flags de sistema (`0x00030000`), `XamGetExecutionId` devolve o ponteiro para as informações de
+  execução (`0x00040006`) e `XexGetModuleSection` procura em `0x000002FF`.
+- **Módulos**: `XexGetModuleHandle` aceita NULL ou `default.xex` (a entrada LDR do executável) e
+  `xboxkrnl.exe`/`xam.xex` (entradas LDR falsas, criadas na primeira consulta e guardadas no `Kernel`); outro
+  nome → `*saída = 0`, `ERROR_NOT_FOUND`. `XexGetProcedureAddress(módulo, ordinal)` devolve o thunk da
+  importação (`Kernel::import_thunks()`, preenchido por `resolve_variable_imports`); só existem ordinais que o
+  executável importa, o resto (e a busca por nome) dá `0xC0000263`. `XexLoadImage` e `XamLoaderLaunchTitle`
+  continuam faltando (M5). `XamLoaderGetLaunchData[Size]` → `ERROR_NOT_FOUND`; `XamLoaderTerminateTitle` sai com 0.
+- **Valores fixos** (os padrões do Xenia): título `0x584111F7`; região do jogo (`XGetGameRegion`) `0xFFFF`
+  (sem região); versão do dashboard (`XamGetSystemVersion`) 0; `ExGetXConfigSetting`: região AV
+  (categoria 2, configuração 2) `0x00001000`, flags de vídeo do usuário `0x00040000`, país 103 (1 byte), fuso
+  horário e flags de varejo 0; configuração ou categoria desconhecida → `0xC00000F0` / `0xC00000EF`, buffer
+  pequeno → `STATUS_BUFFER_TOO_SMALL`, e `*required_size` só é escrito em caso de sucesso.
+- **Idioma**: `main.cpp` copia `LC_ALL` (ou `LANG`) para `KernelConfig::language`; `XGetLanguage` e
+  `USER_LANGUAGE` mapeiam o prefixo: en 1, ja 2, de 3, fr 4, es 5, it 6, ko 7, zh_TW/zh_HK 8, pt 9, outros zh 10,
+  pl 11, ru 12; qualquer outro valor (incluindo `C`) → 1.
+- **Criptografia**: `XeCryptShaInit/Update/Final`, `XeCryptSha` (até três buffers), `XeCryptSha256Init/Update/Final`
+  e `XeCryptRandom` (`getrandom`). O estado fica todo na memória do convidado (`XECRYPT_SHA_STATE` de 0x58 bytes:
+  contagem, 5 palavras, bloco de 64 bytes; versão SHA-256 de 0x64 bytes, tudo big-endian), porque o jogo copia
+  estados; uma `lr::Sha1`/`lr::Sha256` é reconstruída a cada chamada (`load`/`store`). Diferença do Xenia:
+  `XeCryptSha256Final` não sobrescreve o bloco do estado. `XeCryptRotSumSha` e os `XeKeys*` /
+  `XeCryptBnQwBeSigVerify` continuam faltando (M4).
+
 ## Diagnóstico
 
 Os modos de falha do ciclo "rodar, ver onde para, implementar" são importação faltando (saída 3), falha (4), erro

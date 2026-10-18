@@ -189,6 +189,7 @@ Result<void> resolve_variable_imports(runtime::GuestMemory& mem, const runtime::
       }
       target = page;
     }
+    if (r.thunk != 0) k.import_thunks()[{r.library, r.ordinal}] = r.thunk;
     *mem.translate<runtime::be<uint32_t>>(r.slot) = target;
   }
   // Only a title that reads the bundle pays for the 1 ms update loop.
