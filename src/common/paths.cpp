@@ -10,6 +10,7 @@ DataPaths DataPaths::from_root(fs::path root) {
   DataPaths p;
   p.root = std::move(root);
   p.game = p.root / "game";
+  p.user = p.root / "user";
   p.work = p.root / "work";
   p.logs = p.work / "logs";
   p.bin = p.root / "bin";

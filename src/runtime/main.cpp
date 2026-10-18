@@ -3,7 +3,7 @@
 // generated ppc_config.h / ppc_recomp_*.cpp / ppc_func_mapping.cpp and the generated import thunks, and links
 // lr_runtime_core with --whole-archive so its LR_KERNEL / LR_KERNEL_STUB registrations are kept.
 //
-// Usage: <game> --image <xex> [--data <dir>] [--headless] [--coverage] [--strict-memory] [--trace-imports]
+// Usage: <game> --image <xex> [--data <dir>] [--user <dir>] [--headless] [--coverage] [--strict-memory] [--trace-imports]
 //        [--trace-file <path>]
 // --trace-imports logs every import call (runtime/kernel/trace.h) to --trace-file, or stderr without one; the
 // launcher always passes --trace-file, which alone does nothing. LR_DEADLOCK_SECONDS (default 10, 0 = off) sets the
@@ -50,7 +50,8 @@ using namespace lr::runtime;
 
 struct Options {
   std::string image;
-  std::string data;
+  std::string data;  // --data: the extracted game (read-only mount); default: the image directory
+  std::string user;  // --user: writable data (saves, cache)
   bool headless = false;
   bool coverage = false;
   bool strict_memory = false;  // uncommitted heap pages PROT_NONE (lr::kernel::KernelConfig::strict_memory)
@@ -61,7 +62,7 @@ struct Options {
 int usage(const char* msg) {
   if (msg) std::fprintf(stderr, "error: %s\n", msg);
   std::fprintf(stderr,
-               "usage: game --image <xex> [--data <dir>] [--headless] [--coverage] [--strict-memory] "
+               "usage: game --image <xex> [--data <dir>] [--user <dir>] [--headless] [--coverage] [--strict-memory] "
                "[--trace-imports] [--trace-file <path>]\n");
   return kExitUsage;
 }
@@ -236,9 +237,9 @@ int main(int argc, char** argv) {
     else if (a == "--coverage") opt.coverage = true;
     else if (a == "--strict-memory") opt.strict_memory = true;
     else if (a == "--trace-imports") opt.trace_imports = true;
-    else if (a == "--image" || a == "--data" || a == "--trace-file") {
+    else if (a == "--image" || a == "--data" || a == "--user" || a == "--trace-file") {
       if (i + 1 >= argc) return usage(("missing value for " + a).c_str());
-      (a == "--image" ? opt.image : a == "--data" ? opt.data : opt.trace_file) = argv[++i];
+      (a == "--image" ? opt.image : a == "--data" ? opt.data : a == "--user" ? opt.user : opt.trace_file) = argv[++i];
     } else {
       return usage(("unknown argument " + a).c_str());
     }
@@ -261,8 +262,8 @@ int main(int argc, char** argv) {
 
   // Kernel first: load_image maps the XEX header and the LDR entry into the kernel data area.
   lr::kernel::KernelConfig cfg;
-  cfg.game_dir = std::filesystem::path(opt.image).parent_path();
-  if (!opt.data.empty()) cfg.user_dir = opt.data;
+  cfg.game_dir = opt.data.empty() ? std::filesystem::path(opt.image).parent_path() : std::filesystem::path(opt.data);
+  if (!opt.user.empty()) cfg.user_dir = opt.user;
   cfg.strict_memory = opt.strict_memory;
   cfg.trace_imports = opt.trace_imports;
   if (!opt.trace_file.empty()) cfg.trace_file = opt.trace_file;

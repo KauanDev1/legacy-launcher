@@ -182,3 +182,21 @@ TEST_CASE("launch passes --trace-file <root>/work/logs/game-trace.log to the gam
   CHECK(ss.str().find("--trace-file\n" + expect_file + "\n") != std::string::npos);
   CHECK(ss.str().find("--trace-imports\n") != std::string::npos);  // extra arguments still reach the game
 }
+
+TEST_CASE("launch passes --data <root>/game and --user <root>/user and creates user/", "[unit][vfs]") {
+  TempDir t;
+  write(t.path / "work" / "image" / "default_tu1.xex", "image");
+  const fs::path game = t.path / "bin" / "legacyrecomp-game";
+  const fs::path args = t.path / "args.txt";
+  write(game, "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done > '" + args.string() + "'\nexit 0\n");
+  fs::permissions(game, fs::perms::owner_all);
+  Options opts;
+  opts.root = t.path;
+  REQUIRE(launch(opts, {}));
+  std::ifstream f(args);
+  std::stringstream ss;
+  ss << f.rdbuf();
+  CHECK(ss.str().find("--data\n" + (t.path / "game").string() + "\n") != std::string::npos);
+  CHECK(ss.str().find("--user\n" + (t.path / "user").string() + "\n") != std::string::npos);
+  CHECK(fs::is_directory(t.path / "user"));
+}

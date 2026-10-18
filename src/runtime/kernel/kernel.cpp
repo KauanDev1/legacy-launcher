@@ -30,7 +30,9 @@ Kernel::Kernel(runtime::GuestMemory& mem, KernelConfig cfg)
       stacks_(runtime::kStacksBase, runtime::kStacksEnd, 0x1000),
       timers_(*this),
       dispatcher_(mem.base()),
-      deadlock_(*this) {}
+      deadlock_(*this) {
+  vfs_.mount_defaults(cfg_.game_dir, cfg_.user_dir);
+}
 
 Kernel::~Kernel() {
   deadlock_.stop();

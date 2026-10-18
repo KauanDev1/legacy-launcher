@@ -18,6 +18,7 @@ TEST_CASE("DataPaths::from_root", "[unit]") {
   auto p = lr::DataPaths::from_root("/r");
   CHECK(p.root == fs::path("/r"));
   CHECK(p.game == fs::path("/r/game"));
+  CHECK(p.user == fs::path("/r/user"));
   CHECK(p.work == fs::path("/r/work"));
   CHECK(p.logs == fs::path("/r/work/logs"));
   CHECK(p.bin == fs::path("/r/bin"));

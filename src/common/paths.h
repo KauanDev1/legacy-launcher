@@ -9,7 +9,7 @@
 namespace lr {
 
 struct DataPaths {
-  std::filesystem::path root, game, work, logs, bin, input, image, analysis, generated, build,
+  std::filesystem::path root, game, user, work, logs, bin, input, image, analysis, generated, build,
       state_file;
   static DataPaths from_root(std::filesystem::path root);
 };

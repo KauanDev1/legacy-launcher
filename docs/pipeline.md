@@ -46,6 +46,7 @@ Precedência: `--root` > variável `LEGACYRECOMP_ROOT` > `$XDG_DATA_HOME/legacyr
 ```
 <root>/
   game/                  dados extraídos do jogo (pertence ao LegacyRecomp: é apagado a cada extract)
+  user/                  dados do jogador (saves, cache:): o pipeline nunca apaga, nem no extract (ao contrário de game/)
   bin/legacyrecomp-game  executável compilado
   work/
     state.toml           estado das etapas

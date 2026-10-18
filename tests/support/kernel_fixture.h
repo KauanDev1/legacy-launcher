@@ -15,6 +15,7 @@
 #include "runtime/kernel/glue.h"
 #include "runtime/kernel/kernel.h"
 #include "runtime/kernel/registry.h"
+#include "support/temp_dir.h"
 
 namespace lr::testing {
 
@@ -28,7 +29,10 @@ struct KernelFixture {
 
   // Each fixture instance replaces the process-wide Kernel (reset_kernel_for_tests + init_kernel), so several
   // fixtures in one process (Catch2 sections, several test cases) each get a kernel bound to their own memory.
+  // game_tmp / user_tmp: private empty directories, the kernel's game_dir / user_dir unless cfg sets them.
   explicit KernelFixture(lr::kernel::KernelConfig cfg = {}) : mem(reserve()) {
+    if (cfg.game_dir.empty()) cfg.game_dir = game_tmp.path;
+    if (cfg.user_dir.empty()) cfg.user_dir = user_tmp.path;
     lr::kernel::reset_kernel_for_tests();
     auto r = lr::kernel::init_kernel(mem, std::move(cfg));
     REQUIRE(r);
@@ -41,6 +45,7 @@ struct KernelFixture {
   KernelFixture(const KernelFixture&) = delete;
   KernelFixture& operator=(const KernelFixture&) = delete;
 
+  lr::testing::TempDir game_tmp{"lr_game"}, user_tmp{"lr_user"};  // before mem: removed after the kernel is gone
   lr::runtime::GuestMemory mem;
 
   // Calls the registered import `import` with integer arguments (positions 0..7 in r3..r10, the rest on the

@@ -74,8 +74,15 @@ Result<int> launch(const Options& options, std::span<const std::string> extra_ar
     return Error{ErrorCode::NotFound, "patched image missing: " + image.string(),
                  "run `legacyrecomp install --iso <iso>` again"};
 
+  // user/ holds the saves and the cache; the pipeline never deletes it. The game runs without it when creation fails.
+  {
+    std::error_code ec;
+    fs::create_directories(p.user, ec);
+  }
+
   // --trace-file always: the game only writes it when --trace-imports is among the extra arguments (spec section 11).
   std::vector<std::string> args = {game.string(), "--image", image.string(), "--data", p.game.string(),
+                                   "--user", p.user.string(),
                                    "--trace-file", (p.logs / "game-trace.log").string()};
   args.insert(args.end(), extra_args.begin(), extra_args.end());
   std::vector<char*> argv;

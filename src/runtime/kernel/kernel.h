@@ -16,6 +16,7 @@
 #include "runtime/kernel/objects.h"
 #include "runtime/kernel/threads.h"
 #include "runtime/kernel/timers.h"
+#include "runtime/kernel/vfs.h"
 #include "runtime/memory/page_heap.h"
 #include "runtime/memory/physical_heap.h"
 
@@ -93,6 +94,9 @@ class Kernel {
   // Clocks, timers, DPCs and the kernel worker thread (runtime/kernel/timers.h).
   Timers& timers() { return timers_; }
 
+  // Guest path layer (runtime/kernel/vfs.h), mounted from config(): game_dir read-only, user_dir writable.
+  Vfs& vfs() { return vfs_; }
+
   // The deadlock detector (runtime/kernel/deadlock.h).
   DeadlockDetector& deadlock() { return deadlock_; }
 
@@ -120,6 +124,7 @@ class Kernel {
   // After the heaps: objects are destroyed first, so objects backed by pool memory can still free it.
   ObjectTable objects_;
   Dispatcher dispatcher_;
+  Vfs vfs_;
   // Last: its watcher reads the members above; ~Kernel stops it first anyway.
   DeadlockDetector deadlock_;
 };
