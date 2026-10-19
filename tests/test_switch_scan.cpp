@@ -319,3 +319,130 @@ TEST_CASE("scan_switch_tables treats ldu/stdu as writing rA", "[unit]") {
     CHECK(s2.tables.size() == (probe == ld_12 ? 1u : 0u));
   }
 }
+
+namespace {
+
+uint32_t rlwinm(uint32_t a, uint32_t s, uint32_t sh, uint32_t mb, uint32_t me) {
+  return (21u << 26) | (s << 21) | (a << 16) | (sh << 11) | (mb << 6) | (me << 1);
+}
+uint32_t lhzx(uint32_t d, uint32_t a, uint32_t b) { return x31(d, a, b, 279); }
+
+void half(FakeImage& img, uint32_t addr, uint32_t v) {
+  img.bytes[addr - kBase] = static_cast<uint8_t>(v >> 8);
+  img.bytes[addr - kBase + 1] = static_cast<uint8_t>(v);
+}
+
+// Halfword table at 0x300 with byte offsets relative to the table itself. The compiler hoisted
+// the table address above the bound check and scales the index with `add rI, rIdx, rIdx`.
+//   lis r12; cmplwi cr6, r11, 34; addi r12, r12, 0x300; bgt cr6, default
+//   add r10, r11, r11; lhzx r0, r12, r10; add r0, r0, r12; mtctr r0; bctr
+constexpr uint32_t kHalfCases = 35, kHalfTable = kBase + 0x300;
+uint32_t half_offset(uint32_t v) { return 0x50 + 4 * ((v * 7) % kHalfCases); }
+
+void halfword_relative_switch(FakeImage& img) {
+  img.code(kBase, {lis(12, 0x8200), cmplwi(6, 11, kHalfCases - 1), addi(12, 12, 0x300), bgt(6, 0x100),
+                   add(10, 11, 11), lhzx(0, 12, 10), add(0, 0, 12), mtctr(0), kBctr});
+  for (uint32_t v = 0; v < kHalfCases; ++v) half(img, kHalfTable + 2 * v, half_offset(v));
+}
+
+}  // namespace
+
+TEST_CASE("scan_switch_tables: halfword relative table resolves 35 labels", "[unit]") {
+  FakeImage img;
+  halfword_relative_switch(img);
+  auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+  REQUIRE(scan.tables.size() == 1);
+  CHECK(scan.unresolved.empty());
+  const auto& t = scan.tables[0];
+  CHECK(t.base == kBase + 0x20);
+  CHECK(t.r == 11);
+  CHECK(t.default_label == kBase + 0x10C);
+  REQUIRE(t.labels.size() == kHalfCases);
+  for (uint32_t v = 0; v < kHalfCases; ++v) CHECK(t.labels[v] == kHalfTable + half_offset(v));
+}
+
+TEST_CASE("scan_switch_tables: byte relative table resolves 17 labels", "[unit]") {
+  FakeImage img;
+  // Byte table at 0x380 with offsets relative to the table; table address built across the guard,
+  // and the index copied by mr before the compare.
+  //   mr r31, r4; lis r9; cmplwi cr6, r4, 16; bgt cr6, default; addi r9, r9, 0x380
+  //   lbzx r8, r9, r31; add r8, r8, r9; mtctr r8; bctr
+  constexpr uint32_t kCases = 17, kTable = kBase + 0x380;
+  img.code(kBase + 0x40, {x31(4, 31, 4, 444), lis(9, 0x8200), cmplwi(6, 4, kCases - 1), bgt(6, 0x80),
+                          addi(9, 9, 0x380), lbzx(8, 9, 31), add(8, 8, 9), mtctr(8), kBctr});
+  auto offset = [](uint32_t v) { return 0x14 + 4 * ((v * 5) % kCases); };
+  for (uint32_t v = 0; v < kCases; ++v) img.bytes[kTable - kBase + v] = static_cast<uint8_t>(offset(v));
+
+  auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+  REQUIRE(scan.tables.size() == 1);
+  CHECK(scan.unresolved.empty());
+  const auto& t = scan.tables[0];
+  CHECK(t.base == kBase + 0x60);
+  CHECK(t.r == 4);
+  CHECK(t.default_label == kBase + 0x4C + 0x80);
+  REQUIRE(t.labels.size() == kCases);
+  for (uint32_t v = 0; v < kCases; ++v) CHECK(t.labels[v] == kTable + offset(v));
+}
+
+TEST_CASE("scan_switch_tables: relative table with scale 2", "[unit]") {
+  FakeImage img;
+  // Index scaled before the compare, halfword entries counted in instructions from a separate
+  // code base, everything after the guard:
+  //   rlwinm r10, r11, 1, 0, 30; cmplwi cr6, r11, 3; bgt cr6, default; lis r12; addi r12, r12, 0x900
+  //   lhzx r0, r12, r10; lis r9; addi r9, r9, 0x100; rlwinm r0, r0, 2, 0, 29; add r0, r0, r9; mtctr r0; bctr
+  img.code(kBase + 0x80, {rlwinm(10, 11, 1, 0, 30), cmplwi(6, 11, 3), bgt(6, 0x40), lis(12, 0x8200),
+                          addi(12, 12, 0x900), lhzx(0, 12, 10), lis(9, 0x8200), addi(9, 9, 0x100),
+                          rlwinm(0, 0, 2, 0, 29), add(0, 0, 9), mtctr(0), kBctr});
+  const uint32_t entries[] = {0, 3, 1, 0xBF};
+  for (uint32_t v = 0; v < 4; ++v) half(img, kBase + 0x900 + 2 * v, entries[v]);
+
+  auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+  REQUIRE(scan.tables.size() == 1);
+  CHECK(scan.tables[0].r == 11);
+  CHECK(scan.tables[0].labels == std::vector<uint32_t>{kBase + 0x100, kBase + 0x10C, kBase + 0x104, kBase + 0x3FC});
+}
+
+TEST_CASE("scan_switch_tables: relative table without bound is unresolved", "[unit]") {
+  FakeImage img;
+  // Same code as the halfword table, minus the cmplwi/bgt: the number of cases is unknown, so no
+  // table is emitted; the site is reported for a human look.
+  img.code(kBase, {kBlr, lis(12, 0x8200), addi(12, 12, 0x300), add(10, 11, 11), lhzx(0, 12, 10), add(0, 0, 12),
+                   mtctr(0), kBctr});
+  for (uint32_t v = 0; v < kHalfCases; ++v) half(img, kHalfTable + 2 * v, half_offset(v));
+  auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+  CHECK(scan.tables.empty());
+  CHECK(scan.unbounded == std::vector<uint32_t>{kBase + 0x1C});
+}
+
+TEST_CASE("scan_switch_tables: relative table label outside code section rejects table", "[unit]") {
+  SECTION("label past the end of the code section") {
+    FakeImage img;
+    halfword_relative_switch(img);
+    half(img, kHalfTable + 2 * 20, 0x100);  // 0x300 + 0x100 = 0x400: first byte after the code
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(scan.tables.empty());
+    CHECK(scan.unresolved == std::vector<uint32_t>{kBase + 0x20});
+  }
+  SECTION("misaligned label") {
+    FakeImage img;
+    halfword_relative_switch(img);
+    half(img, kHalfTable + 2 * 34, 0x52);
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(scan.tables.empty());
+    CHECK(scan.unresolved == std::vector<uint32_t>{kBase + 0x20});
+  }
+}
+
+TEST_CASE("scan_switch_tables: relative table hoisting stops at the index copy", "[unit]") {
+  FakeImage img;
+  // r31 is read before `mr r31, r11` makes it a copy of the index: the scaled index in r10 is not
+  // known, so the site must stay unresolved instead of yielding labels computed from a stale r31.
+  //   rlwinm r10, r31, 1, 0, 30; mr r31, r11; cmplwi cr6, r11, 34; bgt cr6, default
+  //   lis r12; addi r12, r12, 0x300; lhzx r0, r12, r10; add r0, r0, r12; mtctr r0; bctr
+  img.code(kBase, {rlwinm(10, 31, 1, 0, 30), x31(11, 31, 11, 444), cmplwi(6, 11, kHalfCases - 1), bgt(6, 0x100),
+                   lis(12, 0x8200), addi(12, 12, 0x300), lhzx(0, 12, 10), add(0, 0, 12), mtctr(0), kBctr});
+  for (uint32_t v = 0; v < kHalfCases; ++v) half(img, kHalfTable + 2 * v, half_offset(v));
+  auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+  CHECK(scan.tables.empty());
+  CHECK(scan.unresolved == std::vector<uint32_t>{kBase + 0x24});
+}

@@ -90,6 +90,16 @@ tempo de execução. Por isso a etapa `analyse` roda também `src/pipeline/switc
   ordem das instruções e dos `nop`; instruções que não tocam a cadeia (FPU, VMX/VMX128, stores) são
   ignoradas; cópias do índice com `mr` antes da guarda são seguidas.
 - Sem guarda, aceita um índice limitado por máscara (`clrlwi`/`rlwinm ..., 31`/`andi.`) com `2^k` entradas.
+- A avaliação começa antes do `cmplwi`, no início do bloco linear, parando numa instrução que escreva o
+  índice ou uma de suas cópias `mr` (ou numa instrução desconhecida): o compilador costuma subir o
+  `lis`/`addi` da tabela e a escala do índice (`rlwinm rI, rIdx, 1, 0, 30`) para antes da guarda.
+- Tabelas relativas (M3): além de tabelas de palavras absolutas (`lwzx`), resolve tabelas de deslocamentos
+  `lhzx rT, rTabela, rI` (índice escalado por 2 com `rlwinm` ou `add rI, rX, rX`) ou `lbzx rT, rTabela,
+  rIdx`, opcionalmente `rlwinm rT, rT, s, ...`, seguidas de `add rT, rT, rBase` → `mtctr rT` → `bctr`, com
+  `rBase` sendo a própria tabela ou outro endereço montado por `lis`/`addi`; rótulo = `rBase + (entrada <<
+  s)`. Mesmos critérios: limite por `cmplwi`/máscara, todo rótulo alinhado a 4 dentro da seção de código,
+  no máximo 4096 casos. Sem limite, o sítio continua na lista "sem guarda" abaixo. Os sítios do
+  experimento (`0x82AB1528`, 35 casos; `0x8294E434`, 17 casos) são conferidos com a ISO na Tarefa 4 do M3.
 - Resultado na imagem TU1: **222 tabelas** (7 298 rótulos, até 440 casos), todas com rótulos em código.
 
 Funções folha (sem quadro de pilha) não têm entrada no `.pdata`, e a análise do XenonRecomp para no

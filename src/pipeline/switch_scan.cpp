@@ -212,7 +212,7 @@ std::optional<uint32_t> evaluate(const Memory& mem, std::span<const uint32_t> wi
 }
 
 struct Guard {
-  uint32_t window_start = 0;   // first address evaluated (after cmplwi)
+  uint32_t window_start = 0;   // first address evaluated (block start, or after the last write of the index)
   uint32_t branch_addr = 0;    // the bgt / bgtlr
   uint32_t index = 0;
   uint32_t aliases = 0;        // bit n: rN holds a copy of the index (mr before the cmplwi)
@@ -242,6 +242,25 @@ uint32_t find_aliases(const Memory& mem, uint32_t cmp_addr, uint32_t index) {
     if (clean) aliases |= 1u << other;
   }
   return aliases;
+}
+
+// The compiler hoists table addresses (`lis`/`addi`) and index scaling (`rlwinm rI, rIdx, 1, 0, 30`)
+// above the bound check, so evaluation starts at the earliest straight-line instruction before the
+// cmplwi at `cmp_addr` that keeps the index intact: the walk stops at a branch, an unknown
+// instruction, or one that writes the index or one of its `mr` copies (so a copy is never read before
+// the `mr` that makes it one). Returns the first address to evaluate.
+uint32_t hoist_start(const Memory& mem, uint32_t cmp_addr, uint32_t index, uint32_t aliases) {
+  const uint32_t keep = (1u << index) | aliases;
+  uint32_t start = cmp_addr;
+  for (int k = 1; k <= kMaxWindow; ++k) {
+    const uint32_t a = cmp_addr - 4u * static_cast<uint32_t>(k);
+    auto w = mem.read(a, 4);
+    if (!w || is_branch(*w)) break;
+    const auto written = gpr_written(*w);
+    if (!written || (*written & keep)) break;
+    start = a;
+  }
+  return start;
 }
 
 enum class GuardStatus { None, Incomplete, Found };
@@ -277,8 +296,9 @@ std::optional<Guard> find_guard(const Memory& mem, uint32_t addr, GuardStatus& s
       if (op(*c) == 10 && ((*c >> 23) & 7) == crf && ((*c >> 21) & 1) == 0) {  // cmplwi crf, rI, max
         g.index = ra(*c);
         g.max = uimm(*c);
-        g.window_start = baddr - 4u * static_cast<uint32_t>(j) + 4;
-        g.aliases = find_aliases(mem, g.window_start - 4, g.index);
+        const uint32_t cmp_addr = baddr - 4u * static_cast<uint32_t>(j);
+        g.aliases = find_aliases(mem, cmp_addr, g.index);
+        g.window_start = hoist_start(mem, cmp_addr, g.index, g.aliases);
         status = GuardStatus::Found;
         return g;
       }
