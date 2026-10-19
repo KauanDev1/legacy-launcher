@@ -427,6 +427,10 @@ estrutura, são registradas como `stub` (`LR_KERNEL_STUB` ou `LR_KERNEL_STUB_FN`
   `STATUS_INVALID_PARAMETER`, sem referência).
 - **Tarefas**: `XamTaskSchedule(callback, mensagem, ?, handle*)` roda `callback(mensagem)` numa thread do convidado
   nova e escreve o handle real dela (o Xenia escreve um marcador).
+- **Mensagens XMsg** (`exports/msg.cpp`): só existe o app XAM (`0xFE`), com as mensagens que o Xenia responde:
+  `0x00022005` e `0x00021012` dão sucesso sem tocar o buffer, `0x00020021` escreve 0 no ponteiro em buffer+0x44;
+  outra mensagem → `X_E_FAIL`, outro app → `X_E_NOTFOUND` (`X_E_INVALIDARG` em `XMsgStartIORequest`). Tudo
+  conclui na hora (com overlapped: `ERROR_IO_PENDING`). O último erro da thread não é ajustado.
 - **Notificações**: o listener é esperável (evento de notificação no pool, sinalizado enquanto há itens). Máscara de
   64 bits: o id `XNID` tem a área nos bits 25..30 e a versão nos bits 16..24; só entra o que tem a área na máscara
   e versão ≤ `max_version` (limitado a 10). Todo listener da área do sistema (bit 0) nasce com sign-in alterado

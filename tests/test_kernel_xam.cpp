@@ -361,3 +361,31 @@ TEST_CASE("WSAStartup stub returns 0", "[unit][kernel][xam][net]") {
   CHECK(f.call("NetDll_XNetStartup", 1u, 0u) == 0);
   CHECK(f.call("NetDll_XNetGetEthernetLinkStatus", 1u) == 0);  // no link
 }
+
+TEST_CASE("XMsg requests to the XAM app (0xFE) complete at once", "[unit][kernel][xam]") {
+  KernelFixture f;
+  constexpr uint32_t kXamApp = 0xFE, kXFail = 0x80004005, kXNotFound = 0x80070490;
+  // 0x00022005: 8-byte buffer, success, nothing written.
+  const uint32_t buf = f.alloc(0x4C);
+  wr(f, buf, 0x11111111);
+  wr(f, buf + 4, 0x22222222);
+  CHECK(f.call("XMsgStartIORequest", kXamApp, 0x00022005u, 0u, buf, 8u) == 0u);
+  CHECK(rd(f, buf) == 0x11111111u);
+  // Through an overlapped: ERROR_IO_PENDING, the result lands in the overlapped.
+  const uint32_t ov = f.alloc(sizeof(XAM_OVERLAPPED));
+  wr(f, ov, 0xFFFFFFFF);
+  CHECK(f.call("XMsgStartIORequest", kXamApp, 0x00022005u, ov, buf, 8u) == ERROR_IO_PENDING);
+  CHECK(rd(f, ov + offsetof(XAM_OVERLAPPED, result)) == 0u);
+  // 0x00020021: 0x4C-byte buffer, writes 0 through the pointer at +0x44.
+  const uint32_t out = f.alloc(4);
+  wr(f, out, 0x33333333);
+  wr(f, buf + 0x44, out);
+  CHECK(f.call("XMsgStartIORequest", kXamApp, 0x00020021u, 0u, buf, 0x4Cu) == 0u);
+  CHECK(rd(f, out) == 0u);
+  CHECK(f.call("XMsgInProcessCall", kXamApp, 0x00021012u, 0u, 0u) == 0u);
+  // Unknown messages fail; unknown apps are "not found" (X_E_INVALIDARG from XMsgStartIORequest, as Xenia).
+  CHECK(static_cast<uint32_t>(f.call("XMsgStartIORequest", kXamApp, 0x00029999u, 0u, buf, 8u)) == kXFail);
+  CHECK(static_cast<uint32_t>(f.call("XMsgStartIORequest", 0x42u, 0x00022005u, 0u, buf, 8u)) == X_E_INVALIDARG);
+  CHECK(static_cast<uint32_t>(f.call("XMsgInProcessCall", 0x42u, 0x00021012u, 0u, 0u)) == kXNotFound);
+  CHECK(f.call("XMsgSystemProcessCall", kXamApp, 0x00022005u, buf, 8u) == 0u);
+}
