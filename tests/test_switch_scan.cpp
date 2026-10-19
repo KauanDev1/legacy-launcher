@@ -402,7 +402,7 @@ TEST_CASE("scan_switch_tables: relative table with scale 2", "[unit]") {
   CHECK(scan.tables[0].labels == std::vector<uint32_t>{kBase + 0x100, kBase + 0x10C, kBase + 0x104, kBase + 0x3FC});
 }
 
-TEST_CASE("scan_switch_tables: relative table without bound is unresolved", "[unit]") {
+TEST_CASE("scan_switch_tables: relative table without bound is reported unbounded", "[unit]") {
   FakeImage img;
   // Same code as the halfword table, minus the cmplwi/bgt: the number of cases is unknown, so no
   // table is emitted; the site is reported for a human look.
@@ -445,4 +445,49 @@ TEST_CASE("scan_switch_tables: relative table hoisting stops at the index copy",
   auto scan = scan_switch_tables(img.bytes, kBase, kCode);
   CHECK(scan.tables.empty());
   CHECK(scan.unresolved == std::vector<uint32_t>{kBase + 0x24});
+}
+
+TEST_CASE("scan_switch_tables: relative table hoisting stops at a branch target", "[unit]") {
+  // lis r12 (0x00); addi r12, r12, 0x300 (0x04); cmplwi cr6, r11, 34 (0x08); bgt cr6 (0x0C);
+  // add r10, r11, r11; lhzx r0, r12, r10; add r0, r0, r12; mtctr r0; bctr (0x20).
+  // Another path entering between the lis and the cmplwi brings its own r12: the base is unknown.
+  auto build = [](FakeImage& img) {
+    img.code(kBase, {lis(12, 0x8200), addi(12, 12, 0x300), cmplwi(6, 11, kHalfCases - 1), bgt(6, 0x100),
+                     add(10, 11, 11), lhzx(0, 12, 10), add(0, 0, 12), mtctr(0), kBctr});
+    for (uint32_t v = 0; v < kHalfCases; ++v) half(img, kHalfTable + 2 * v, half_offset(v));
+  };
+  auto b = [](uint32_t from, uint32_t to) { return (18u << 26) | ((to - from) & 0x03FFFFFC); };
+  auto beq = [](uint32_t from, uint32_t to) { return (16u << 26) | (12u << 21) | (2u << 16) | ((to - from) & 0xFFFC); };
+  SECTION("b into the hoisted range") {
+    FakeImage img;
+    build(img);
+    img.word(kBase + 0x40, b(kBase + 0x40, kBase + 0x04));
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(scan.tables.empty());
+    CHECK(scan.unresolved == std::vector<uint32_t>{kBase + 0x20});
+  }
+  SECTION("bc into the hoisted range") {
+    FakeImage img;
+    build(img);
+    img.word(kBase + 0x40, beq(kBase + 0x40, kBase + 0x04));
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(scan.tables.empty());
+    CHECK(scan.unresolved == std::vector<uint32_t>{kBase + 0x20});
+  }
+  SECTION("a target at the window start is fine") {
+    FakeImage img;
+    build(img);
+    img.word(kBase + 0x40, b(kBase + 0x40, kBase));
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    REQUIRE(scan.tables.size() == 1);
+    CHECK(scan.tables[0].labels.size() == kHalfCases);
+  }
+  SECTION("never hoists below the code range start") {
+    FakeImage img;
+    build(img);
+    const std::vector<std::pair<uint32_t, uint32_t>> code = {{kBase + 4, 0x3FC}};
+    auto scan = scan_switch_tables(img.bytes, kBase, code);
+    CHECK(scan.tables.empty());
+    CHECK(scan.unresolved == std::vector<uint32_t>{kBase + 0x20});
+  }
 }

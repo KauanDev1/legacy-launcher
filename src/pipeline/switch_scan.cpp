@@ -248,19 +248,47 @@ uint32_t find_aliases(const Memory& mem, uint32_t cmp_addr, uint32_t index) {
 // above the bound check, so evaluation starts at the earliest straight-line instruction before the
 // cmplwi at `cmp_addr` that keeps the index intact: the walk stops at a branch, an unknown
 // instruction, or one that writes the index or one of its `mr` copies (so a copy is never read before
-// the `mr` that makes it one). Returns the first address to evaluate.
-uint32_t hoist_start(const Memory& mem, uint32_t cmp_addr, uint32_t index, uint32_t aliases) {
+// the `mr` that makes it one). It never crosses a branch target (`targets`): code reached from
+// another path (tail merge, cross-jumping) may have set the registers differently, so a target is
+// at most the window start. Never goes below `range_start`. Returns the first address to evaluate.
+uint32_t hoist_start(const Memory& mem, uint32_t cmp_addr, uint32_t index, uint32_t aliases,
+                     const std::set<uint32_t>& targets, uint32_t range_start) {
   const uint32_t keep = (1u << index) | aliases;
   uint32_t start = cmp_addr;
+  if (targets.contains(cmp_addr)) return start;
   for (int k = 1; k <= kMaxWindow; ++k) {
     const uint32_t a = cmp_addr - 4u * static_cast<uint32_t>(k);
+    if (a < range_start || a > cmp_addr) break;
     auto w = mem.read(a, 4);
     if (!w || is_branch(*w)) break;
     const auto written = gpr_written(*w);
     if (!written || (*written & keep)) break;
     start = a;
+    if (targets.contains(a)) break;
   }
   return start;
+}
+
+// Targets of every relative b/bc (with or without link) in `code`.
+std::set<uint32_t> branch_targets(const Memory& mem, std::span<const std::pair<uint32_t, uint32_t>> code) {
+  std::set<uint32_t> out;
+  for (auto [start, size] : code) {
+    for (uint32_t a = (start + 3) & ~3u; a + 4 <= start + size; a += 4) {
+      auto w = mem.read(a, 4);
+      if (!w) break;
+      const uint32_t i = *w;
+      if ((op(i) != 18 && op(i) != 16) || (i & 2)) continue;  // relative forms only
+      int32_t disp;
+      if (op(i) == 18) {
+        disp = static_cast<int32_t>(i & 0x03FFFFFC);
+        if (disp & 0x02000000) disp -= 0x04000000;
+      } else {
+        disp = static_cast<int16_t>(i & 0xFFFC);
+      }
+      out.insert(a + static_cast<uint32_t>(disp));
+    }
+  }
+  return out;
 }
 
 enum class GuardStatus { None, Incomplete, Found };
@@ -268,7 +296,8 @@ enum class GuardStatus { None, Incomplete, Found };
 // Looks backwards from the bctr at `addr` for "cmplwi crN, rI, max ... bgt crN" with only
 // straight-line code in between. None: the code before the bctr is not a bounded switch
 // (e.g. a virtual call). Incomplete: a bgt-style guard without a recognisable compare.
-std::optional<Guard> find_guard(const Memory& mem, uint32_t addr, GuardStatus& status) {
+std::optional<Guard> find_guard(const Memory& mem, uint32_t addr, GuardStatus& status,
+                                const std::set<uint32_t>& targets, uint32_t range_start) {
   status = GuardStatus::None;
   for (int k = 1; k <= kMaxWindow; ++k) {
     auto w = mem.read(addr - 4u * static_cast<uint32_t>(k), 4);
@@ -298,7 +327,7 @@ std::optional<Guard> find_guard(const Memory& mem, uint32_t addr, GuardStatus& s
         g.max = uimm(*c);
         const uint32_t cmp_addr = baddr - 4u * static_cast<uint32_t>(j);
         g.aliases = find_aliases(mem, cmp_addr, g.index);
-        g.window_start = hoist_start(mem, cmp_addr, g.index, g.aliases);
+        g.window_start = hoist_start(mem, cmp_addr, g.index, g.aliases, targets, range_start);
         status = GuardStatus::Found;
         return g;
       }
@@ -373,6 +402,7 @@ SwitchScan scan_switch_tables(std::span<const uint8_t> image, uint32_t image_bas
                               std::span<const std::pair<uint32_t, uint32_t>> code) {
   SwitchScan out;
   const Memory mem(image, image_base);
+  const std::set<uint32_t> targets = branch_targets(mem, code);
   for (auto [start, size] : code) {
     for (uint32_t addr = (start + 3) & ~3u; addr + 4 <= start + size; addr += 4) {
       auto w = mem.read(addr, 4);
@@ -380,7 +410,7 @@ SwitchScan scan_switch_tables(std::span<const uint8_t> image, uint32_t image_bas
       if (*w != kBctr) continue;
 
       GuardStatus status;
-      auto guard = find_guard(mem, addr, status);
+      auto guard = find_guard(mem, addr, status, targets, start);
       if (!guard) {
         if (auto t = masked_table(mem, addr, start, size)) {
           out.tables.push_back(std::move(*t));

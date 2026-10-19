@@ -32,7 +32,8 @@ struct SwitchScan {
 // (`cmplwi crN, rI, max` + `bgt crN` / `bgtlr crN`) and the `bctr` for every index 0..max.
 // Independent of instruction order and of `nop` padding, so it covers the patterns XenonAnalyse
 // misses in this compiler's output. Evaluation starts at the earliest straight-line instruction
-// before the cmplwi that leaves the index (and its `mr` copies) untouched, so table addresses and
+// before the cmplwi that leaves the index (and its `mr` copies) untouched and is not preceded by a
+// branch target (another path could bring other register values), so table addresses and
 // index scaling hoisted above the bound check are seen. Besides absolute word tables (`lwzx`) this
 // resolves relative tables: `lhzx rT, rTable, rI` (rI = index << 1, by `rlwinm` or `add rI, rX, rX`)
 // or `lbzx rT, rTable, rIdx`, optionally `rlwinm rT, rT, s, ...`, then `add rT, rT, rBase` (rBase the

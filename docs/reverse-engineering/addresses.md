@@ -91,7 +91,9 @@ tempo de execução. Por isso a etapa `analyse` roda também `src/pipeline/switc
   ignoradas; cópias do índice com `mr` antes da guarda são seguidas.
 - Sem guarda, aceita um índice limitado por máscara (`clrlwi`/`rlwinm ..., 31`/`andi.`) com `2^k` entradas.
 - A avaliação começa antes do `cmplwi`, no início do bloco linear, parando numa instrução que escreva o
-  índice ou uma de suas cópias `mr` (ou numa instrução desconhecida): o compilador costuma subir o
+  índice ou uma de suas cópias `mr` (ou numa instrução desconhecida), sem nunca passar para antes de um
+  alvo de desvio (`b`/`bc`/`bl` relativos: outro caminho poderia trazer outros valores nos registradores)
+  nem do início da seção de código: o compilador costuma subir o
   `lis`/`addi` da tabela e a escala do índice (`rlwinm rI, rIdx, 1, 0, 30`) para antes da guarda.
 - Tabelas relativas (M3): além de tabelas de palavras absolutas (`lwzx`), resolve tabelas de deslocamentos
   `lhzx rT, rTabela, rI` (índice escalado por 2 com `rlwinm` ou `add rI, rX, rX`) ou `lbzx rT, rTabela,
