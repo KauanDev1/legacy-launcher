@@ -228,3 +228,28 @@ Formato: o quê, por quê, custo se estiver errada.
 - Por quê: (a) o plano se contradizia e os códigos de `Result` eram a metade concreta; (b) evita referências presas
   em objetos sem cabeçalho; (c)–(d) falhar alto em vez de comportamento silencioso; (e) nada de 8–27 dependia da 7.
 - Custo se errado: mudanças pequenas e locais (um mapeamento, uma constante).
+
+### M20. Outras decisões do registro de execução (várias tarefas)
+- **Tarefas que usam a ISO** (7, 28 e 29): só rodaram depois que o dono confirmou que a imagem é do disco dele
+  (confirmado em 2026-10-18); até lá eram pontos de verificação humanos (regra do projeto e spec §12). Custo se
+  errado: só um ciclo mais lento.
+- **Tarefa 6**: `tools/recomp_warnings.py` lista os sites float16_4 só pelo endereço, porque o aviso do XenonRecomp
+  não traz os operandos; a Tarefa 7 os classificou com `tools/vpkd3d_sites.py`. Custo se errado: nenhum.
+- **Tarefa 17** (ver também M6): `Threads::set_image` é recusado depois que existe qualquer thread do convidado (o
+  layout de TLS fica fixo), e `KeDelayExecutionThread` com ponteiro de intervalo nulo faz só um yield, em vez de
+  esperar para sempre. Custo se errado: nenhum código do jogo depende do contrário (evita corrupção e travamento).
+- **Tarefas 2 e 11**: o `run_case` do harness `tests/recomp` carrega o ambiente de ponto flutuante do host
+  (`fpscr.loadFromHost`) antes de cada caso; `PageHeap::allocation_size` aceita qualquer endereço de dentro da
+  alocação (como o `QuerySize` do Xenia); o gancho de commit recebe uma flag de "não zerar" para `MEM_NOZERO`.
+  Custo se errado: nenhum (os testes de `fcmpu`/`lfsu` e a Tarefa 13 dependem disso).
+- **Tarefa 7**: o configure confere que cada patch do XenonRecomp foi de fato aplicado e reaplica quando um arquivo
+  tocado sumiu da cópia; um build de release nunca sai com o recompilador sem patches em silêncio. Custo se errado:
+  nenhum.
+- **Tarefa 21**: uma listagem de diretório que falhou não entra no índice somente leitura do VFS (a próxima busca
+  tenta de novo). Custo se errado: uma listagem a mais por busca num diretório inacessível.
+- **Tarefa 26**: `XamUserGetXUID` responde às máscaras de tipo 1, 2 e 4 (o perfil local do Xenia é do tipo 1|2; a
+  máscara 4 vai além do Xenia, ver M14); `XamUserGetSigninInfo` com índice >= 4 devolve `X_E_INVALIDARG`; o
+  `complete_overlapped` só sinaliza o `hEvent` quando ele é um objeto Event. Custo se errado: uma resposta diferente
+  numa máscara rara.
+- **Tarefa 14**: `KeTimeStampBundle` apareceu como `stub` na cobertura até a Tarefa 18 passar a atualizá-lo a cada
+  1 ms; desde então é `implemented`. Custo se errado: nenhum.

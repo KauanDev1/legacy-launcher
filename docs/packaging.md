@@ -42,9 +42,11 @@ do Ninja), `sha256sum`, `readelf`, `openssl` (opcional, confere a assinatura min
 desenvolvimento dos backends do SDL2 que se quer embutir (X11 e extensões, Wayland com `wayland-scanner`,
 libdecor, PipeWire, PulseAudio, ALSA, D-Bus, IBus, udev, DRM/GBM). O SDL2 desliga sozinho o backend cujo
 header não encontra; o resumo fica em `cache/build/sdl2.log`. FUSE não é necessário (o `appimagetool` roda
-com `APPIMAGE_EXTRACT_AND_RUN=1`). O binário `git` é obrigatório duas vezes: para o arquivo-fonte e no configure
-do LegacyRecomp, que aplica os patches de `thirdparty/patches/xenonrecomp/` com `git apply` (ADR 0004, M7); o
-script precisa rodar num checkout git com os submódulos.
+com `APPIMAGE_EXTRACT_AND_RUN=1`). O binário `git` é obrigatório na máquina que gera o AppImage (ou que compila
+de um checkout): para o arquivo-fonte e no configure do LegacyRecomp, que aplica os patches de
+`thirdparty/patches/xenonrecomp/` com `git apply` (ADR 0004, M7); o script precisa rodar num checkout git com os
+submódulos. O AppImage instalado não precisa de `git` (o aceite do M2 rodou numa máquina sem ele). A versão padrão
+do `build.sh` continua `0.1.0-m1`: numa release, defina `LR_VERSION` (o aceite do M2 usou `0.2.0-m2`).
 
 O que o `build.sh` faz:
 
