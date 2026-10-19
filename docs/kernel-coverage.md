@@ -20,7 +20,8 @@ Troque `<root>` pela pasta de dados (padrão `~/.local/share/legacyrecomp`). Sub
 saída do comando e mantenha este cabeçalho. Gerado na Task 28 do M2 (2026-10-18), a partir do binário do jogo
 construído no commit que fecha o M2: a execução sem interface gráfica (`legacyrecomp run -- --headless`) para com
 saída 3 em `VdInitializeEngines`, a primeira importação de vídeo que cria a GPU (a linha de chegada do M2). A ordem
-real das chamadas até ali está em `docs/reverse-engineering/kernel-imports.md`.
+real das chamadas até ali está em `docs/reverse-engineering/kernel-imports.md`. Regerado na Task 29 (2026-10-18), com
+as mesmas linhas da tabela e a contagem final separada em funções e variáveis.
 
 | Import | Kind | Status |
 |---|---|---|
@@ -499,4 +500,5 @@ real das chamadas até ali está em `docs/reverse-engineering/kernel-imports.md`
 | KeDebugMonitorData | variable | implemented |
 | ExThreadObjectType | variable | implemented |
 
-Implemented: 173, stub: 29, missing: 272 / 459 functions + 15 variables
+Functions: implemented 163, stub 29, missing 267 / 459
+Variables: implemented 10, stub 0, missing 5 / 15

@@ -117,23 +117,27 @@ int print_coverage(const std::string& image) {
         if (r.thunk == 0) variables.push_back(std::move(r));
     }
   }
-  size_t implemented = 0, stub = 0, missing = 0;
+  // Spec section 5.3: functions and variables are counted separately ("N funções + M variáveis").
+  struct Counts {
+    size_t implemented = 0, stub = 0, missing = 0;
+    const char* add(ImportState s) {
+      switch (s) {
+        case ImportState::Implemented:
+          ++implemented;
+          return "implemented";
+        case ImportState::Stub:
+          ++stub;
+          return "stub";
+        case ImportState::Missing:
+          break;
+      }
+      ++missing;
+      return "missing";
+    }
+  } functions, vars;
   std::printf("| Import | Kind | Status |\n|---|---|---|\n");
   for (size_t i = 0; i < lr_import_count; ++i) {
-    const char* status = "missing";
-    switch (lr::kernel::find_import(lr_import_names[i]).state) {
-      case ImportState::Implemented:
-        status = "implemented";
-        ++implemented;
-        break;
-      case ImportState::Stub:
-        status = "stub";
-        ++stub;
-        break;
-      case ImportState::Missing:
-        ++missing;
-        break;
-    }
+    const char* status = functions.add(lr::kernel::find_import(lr_import_names[i]).state);
     // Only function imports get thunks (XenonRecomp creates no symbol for variable imports).
     std::printf("| %s | function | %s |\n", lr_import_names[i], status);
   }
@@ -141,26 +145,13 @@ int print_coverage(const std::string& image) {
     char ordinal[8];
     std::snprintf(ordinal, sizeof ordinal, "0x%04X", static_cast<unsigned>(v.ordinal));
     const std::string name = v.name.empty() ? v.library + "@" + ordinal : v.name;
-    const ImportState state = v.name.empty() ? ImportState::Missing : lr::kernel::variable_state(v.name);
-    const char* status = "missing";
-    switch (state) {
-      case ImportState::Implemented:
-        status = "implemented";
-        ++implemented;
-        break;
-      case ImportState::Stub:
-        status = "stub";
-        ++stub;
-        break;
-      case ImportState::Missing:
-        ++missing;
-        break;
-    }
+    const char* status = vars.add(v.name.empty() ? ImportState::Missing : lr::kernel::variable_state(v.name));
     std::printf("| %s | variable | %s |\n", name.c_str(), status);
   }
-  // Spec section 5.3: functions and variables are counted separately in the total.
-  std::printf("\nImplemented: %zu, stub: %zu, missing: %zu / %zu functions + %zu variables\n", implemented, stub,
-              missing, lr_import_count, variables.size());
+  std::printf("\nFunctions: implemented %zu, stub %zu, missing %zu / %zu\n", functions.implemented, functions.stub,
+              functions.missing, lr_import_count);
+  std::printf("Variables: implemented %zu, stub %zu, missing %zu / %zu\n", vars.implemented, vars.stub, vars.missing,
+              variables.size());
   return 0;
 }
 

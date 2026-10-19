@@ -82,7 +82,9 @@ TEST_CASE("fake game --coverage lists three states", "[unit]") {
   CHECK(r.out.find("| FakeStub | function | stub |") != std::string::npos);
   CHECK(r.out.find("| FakeCallback | function | implemented |") != std::string::npos);
   CHECK(r.out.find("| FakeMissing | function | missing |") != std::string::npos);
-  CHECK(r.out.find("Implemented: 12, stub: 1, missing: 2 / 15 functions + 0 variables") != std::string::npos);
+  // Spec section 5.3: functions and variables are counted separately.
+  CHECK(r.out.find("Functions: implemented 12, stub 1, missing 2 / 15\n"
+                   "Variables: implemented 0, stub 0, missing 0 / 0\n") != std::string::npos);
 }
 
 TEST_CASE("fake game --coverage --image adds the XEX's variable imports", "[unit]") {
@@ -111,7 +113,8 @@ TEST_CASE("fake game --coverage --image adds the XEX's variable imports", "[unit
   CHECK(r.out.find("| XboxKrnlVersion4Digit | variable | missing |") != std::string::npos);
   CHECK(r.out.find("DbgPrint") == std::string::npos);  // a function: its row comes from the generated thunks
   CHECK(r.out.find("| KeTimeStampBundle | variable | implemented |") != std::string::npos);
-  CHECK(r.out.find("Implemented: 14, stub: 1, missing: 3 / 15 functions + 3 variables") != std::string::npos);
+  CHECK(r.out.find("Functions: implemented 12, stub 1, missing 2 / 15\n"
+                   "Variables: implemented 2, stub 0, missing 1 / 3\n") != std::string::npos);
 }
 
 // The XEX TLS header (key 0x00020104) is validated at load: an unusable one is a load error (exit 2), never a
