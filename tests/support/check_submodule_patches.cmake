@@ -37,6 +37,11 @@ function(make_fake root name)
   write_patch("${root}/patches/0001-good.patch" "hello" "hello patched")
 endfunction()
 
+# Every scratch dir starts empty: a copy left by an earlier run (for instance the c.txt a rename produced) would make
+# git apply fail for another reason than the one under test.
+if(CASE)
+  file(REMOVE_RECURSE "${WORK}")
+endif()
 if(CASE STREQUAL "bad")
   # A patch whose context does not match the submodule: configure must fail.
   set(CMAKE_BINARY_DIR "${WORK}/bin")
@@ -64,6 +69,7 @@ foreach(name XenonRecomp XenosRecomp)
   set(hash_var LR_${up}_PATCH_HASH)
 
   # --- the real submodule and its real patch dir ---
+  file(REMOVE_RECURSE "${WORK}/real-${low}" "${WORK}/fake-${low}" "${WORK}/fake-${low}-bin")
   set(CMAKE_BINARY_DIR "${WORK}/real-${low}")
   file(REMOVE_RECURSE "${CMAKE_BINARY_DIR}")
   set(real_src "${REPO}/thirdparty/${name}")
