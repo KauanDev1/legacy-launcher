@@ -19,6 +19,20 @@ fica em `work/state.toml`. Tudo roda na máquina do usuário e nada do jogo sai 
 O código gerado tem cerca de 160 MB, o `recompile` + `build` levam alguns minutos e usam bastante RAM por
 job (use `--jobs <n>` para limitar).
 
+O `analyse` também procura funções sem entrada no `.pdata` que só são alcançadas por ponteiro (vtables, tabelas
+de callbacks, o comparador de um `qsort`), que o XenonRecomp nunca recompilaria
+(`src/pipeline/function_discovery.cpp`). Candidatas: palavras de 32 bits (big-endian, alinhadas) fora das seções
+de código cujo valor aponta para código, alvos de `bl` e endereços de código montados com `lis` + `addi`. Uma
+candidata só vale se estiver num vão entre funções conhecidas (`.pdata`, funções derivadas dos `switch` e as
+escritas à mão no `recomp.toml`; os 8 bytes de dados do handler antes de uma função com exception handler contam
+como dela), se a palavra anterior não puder cair nela (`blr`, `bctr`, `b`, padding zero; `bl` só para alvos de
+`bl`) e se terminar num desvio incondicional sem desvio adiante pendente. É rejeitada se correr para dentro de
+outra função, do padding ou do fim do vão, se terminar num `bctr` alimentado por load indexado (`switch` não
+resolvido), se algum desvio de fora cair no seu interior ou se contiver um rótulo de `switch`. Na dúvida ela é
+descartada: uma fronteira errada gera código errado, uma função perdida só falha com relatório claro. As
+aceitas vão para `work/analysis/functions.toml` e o `work/logs/analyse.log` ganha a linha
+`pointer-only functions: N`.
+
 O `recompile` nunca falha por avisos do XenonRecomp. Ao terminar, ele conta as instruções que o XenonRecomp não soube traduzir
 (`Unrecognized instruction at ...`) e acrescenta ao fim de `work/logs/recompile.log`, e emite como última mensagem de progresso,
 a linha `unrecognized instructions: N (top: bdzf 754, stfsu 507, ...)` (até 10 mnemônicos, mais `, float16_4 packs: K` se houver).
