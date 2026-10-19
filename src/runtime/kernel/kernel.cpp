@@ -56,7 +56,7 @@ Result<void> Kernel::setup_memory() {
   heap4k_.set_commit_hook(hook);
   heap64k_.set_commit_hook(hook);
   stacks_.set_commit_hook(hook);
-  LR_TRY(gpu::init_mmio_window(mem_.base()));
+  LR_TRY(gpu::init_mmio_window(mem_));
   return {};
 }
 

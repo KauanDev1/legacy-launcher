@@ -104,13 +104,16 @@ em big-endian. Tudo lê 0, exceto os valores iniciais abaixo, que fazem a GPU pa
 
 | Registrador | Índice | Valor inicial | Motivo |
 |---|---|---|---|
-| `RBBM_STATUS` | `0x05D0` | `0x00000040` | bit 31 ("GUI active") e os bits de ocupado limpos; `CMDFIFO_AVAIL` (bits 0-6) = 64 entradas livres |
-| `CP_RB_WPTR` | `0x01C5` | `0` | ponteiro de escrita do ring buffer; a thread da GPU (Tarefa 10) o lê daqui |
+| `RBBM_STATUS` | `0x05D0` (palpite) | `0x00000040` | status ocioso presumido: bit 31 ("GUI active") e bits de ocupado limpos, `CMDFIFO_AVAIL` (bits 0-6) = 64; índice e valor NÃO confirmados |
+| `CP_RB_WPTR` | `0x01C5` | `0` | ponteiro de escrita do ring buffer; a thread da GPU o lê daqui |
 | `COHER_STATUS_HOST` | `0x0A31` | `0` | nenhuma sincronização de cache pendente (bit 31 limpo) |
+| `RB_EDRAM_TIMING` | `0x0F00` | `0x08100748` | valor fixo que o Xenia devolve na leitura (`GraphicsSystem::ReadRegister`) |
+| `RB_BC_CONTROL` | `0x0F01` | `0x0000200E` | idem |
+| `D1MODE_V_COUNTER` | `0x194C` | `0x000002D0` | idem |
+| interrupção (status) | `0x1951` | `1` | idem |
+| `D1MODE_VIEWPORT_SIZE` | `0x1961` | `0x050002D0` | idem; 1280x720 |
 
-O índice e o valor ocioso de `RBBM_STATUS` vêm do mapa de registradores AMD R5xx/Xenos e do Xenia (só referência,
-sem cópia de código); não há segunda fonte conferida, então o conjunto é mínimo de propósito e cresce quando o jogo
-real mostrar o que consulta.
+Os cinco últimos valores são constantes que o `GraphicsSystem::ReadRegister` do Xenia devolve (fatos de hardware; só referência, sem cópia de código). O `RBBM_STATUS` é um palpite não confirmado a partir do mapa R5xx: nem `RBBM_STATUS` nem `CP_RB_WPTR` estão no `register_table.inc` do Xenia, que devolve 0 em leituras não tratadas. Pergunta em aberto: `0x05D0` é índice de dword ou deslocamento em bytes (deslocamento / 4 = `0x174`)? A conferir quando o jogo real rodar (Tarefa 12).
 
 `PhysicalHeap::guest_from_physical(phys)` converte um endereço físico no endereço de vista da alocação dona da
 página (linear dentro da alocação; `nullopt` se não alocado). Cada página física pertence a uma única vista

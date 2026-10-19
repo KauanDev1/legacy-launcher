@@ -15,13 +15,18 @@ void store_be(uint8_t* base, uint32_t index, uint32_t value) {
 }
 }  // namespace
 
-Result<void> init_mmio_window(uint8_t* base) {
-  if (mprotect(base + kMmioWindowBase, kMmioWindowEnd - kMmioWindowBase, PROT_READ | PROT_WRITE) != 0)
-    return Error{ErrorCode::IoError, "cannot commit the GPU MMIO window", ""};
+Result<void> init_mmio_window(runtime::GuestMemory& mem) {
+  uint8_t* const base = mem.base();
+  LR_TRY(mem.protect(kMmioWindowBase, kMmioWindowEnd - kMmioWindowBase, PROT_READ | PROT_WRITE));
   std::memset(base + kMmioWindowBase, 0, kMmioWindowEnd - kMmioWindowBase);
   store_be(base, kRegRbbmStatus, kRbbmStatusIdle);
   store_be(base, CP_RB_WPTR, 0);
   store_be(base, COHER_STATUS_HOST, 0);  // no cache sync pending (bit 31 clear)
+  store_be(base, kRegRbEdramTiming, kRbEdramTimingValue);
+  store_be(base, kRegRbBcControl, kRbBcControlValue);
+  store_be(base, kRegD1ModeVCounter, kD1ModeVCounterValue);
+  store_be(base, kRegInterruptStatus, kInterruptStatusValue);
+  store_be(base, kRegD1ModeViewportSize, kD1ModeViewportSizeValue);
   return {};
 }
 

@@ -42,7 +42,6 @@ struct KernelConfig {
   uint32_t deadlock_seconds = 0;
 };
 
-
 class Kernel {
  public:
   Kernel(runtime::GuestMemory& mem, KernelConfig cfg);

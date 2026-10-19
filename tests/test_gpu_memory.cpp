@@ -112,7 +112,12 @@ TEST_CASE("the GPU MMIO window is committed with idle values", "[unit][gpu]") {
   lr::testing::KernelFixture f;
   const uint8_t* base = f.mem.base();
   CHECK(be32(base + gpu::mmio_register_address(gpu::kRegRbbmStatus)) == gpu::kRbbmStatusIdle);
-  CHECK((gpu::kRbbmStatusIdle & 0x80000000u) == 0);  // "GUI active" clear
+  CHECK((be32(base + gpu::mmio_register_address(gpu::kRegRbbmStatus)) & 0x80000000u) == 0);  // "GUI active" clear
+  CHECK(be32(base + gpu::mmio_register_address(gpu::kRegRbEdramTiming)) == 0x08100748);
+  CHECK(be32(base + gpu::mmio_register_address(gpu::kRegRbBcControl)) == 0x0000200E);
+  CHECK(be32(base + gpu::mmio_register_address(gpu::kRegD1ModeVCounter)) == 0x000002D0);
+  CHECK(be32(base + gpu::mmio_register_address(gpu::kRegInterruptStatus)) == 1);
+  CHECK(be32(base + gpu::mmio_register_address(gpu::kRegD1ModeViewportSize)) == 0x050002D0);
   CHECK(be32(base + gpu::mmio_register_address(gpu::CP_RB_WPTR)) == 0);
   CHECK(gpu::mmio_register_address(gpu::CP_RB_WPTR) == 0x7FC80000 + 0x1C5 * 4);
   // The whole window is writable and readable back, first and last dword.
