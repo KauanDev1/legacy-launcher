@@ -230,8 +230,9 @@ Formato: o quê, por quê, custo se estiver errada.
 - Custo se errado: mudanças pequenas e locais (um mapeamento, uma constante).
 
 ### M20. Outras decisões do registro de execução (várias tarefas)
-- **Tarefas que usam a ISO** (7, 28 e 29): só rodaram depois que o dono confirmou que a imagem é do disco dele
-  (confirmado em 2026-10-18); até lá eram pontos de verificação humanos (regra do projeto e spec §12). Custo se
+- **Tarefas que usam a ISO** (7, 28 e 29): só rodaram depois que o dono do projeto confirmou que a imagem foi
+  feita a partir de um disco próprio (em 2026-10-18); até lá eram pontos de verificação humanos (regra do projeto e
+  spec §12). Custo se
   errado: só um ciclo mais lento.
 - **Tarefa 6**: `tools/recomp_warnings.py` lista os sites float16_4 só pelo endereço, porque o aviso do XenonRecomp
   não traz os operandos; a Tarefa 7 os classificou com `tools/vpkd3d_sites.py`. Custo se errado: nenhum.
