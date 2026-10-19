@@ -1,18 +1,28 @@
 // SPDX-License-Identifier: MIT
 // End to end on the real game: pipeline::run (doctor..build) into a data root, then launch the recompiled game
-// headless. M1 acceptance: the guest runs until the first unimplemented kernel import (exit 3), and a second run
-// executes no stage at all.
+// headless. M2 acceptance (spec section 14): the guest runs its startup until the first video import that creates the
+// GPU (exit 3 on a Vd* import that is not one of the video query stubs) within 300 s, and a second run executes no
+// stage at all.
 #include <catch2/catch_test_macros.hpp>
 
+#include <dirent.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <unistd.h>
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
+#include <regex>
+#include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "pipeline/pipeline.h"
@@ -73,6 +83,60 @@ Result<int> launch_captured(const Options& opts, const std::vector<std::string>&
   return r;
 }
 
+// Kills (SIGKILL) every child process of this test once `limit` elapses, unless stopped first; launch() then
+// returns 128 + 9 and the exit-code check fails. Children are found through /proc (ppid field of /proc/<pid>/stat).
+class Watchdog {
+ public:
+  explicit Watchdog(std::chrono::seconds limit) : thread_([this, limit] { watch(limit); }) {}
+  ~Watchdog() {
+    {
+      std::lock_guard lock(mu_);
+      stop_ = true;
+    }
+    cv_.notify_all();
+    thread_.join();
+  }
+  bool fired() const { return fired_; }
+
+ private:
+  void watch(std::chrono::seconds limit) {
+    std::unique_lock lock(mu_);
+    if (cv_.wait_for(lock, limit, [this] { return stop_; })) return;
+    fired_ = true;
+    for (pid_t pid : children()) ::kill(pid, SIGKILL);
+  }
+  static std::vector<pid_t> children() {
+    std::vector<pid_t> out;
+    DIR* d = ::opendir("/proc");
+    if (!d) return out;
+    while (const dirent* e = ::readdir(d)) {
+      const pid_t pid = static_cast<pid_t>(std::atoi(e->d_name));
+      if (pid <= 0) continue;
+      std::ifstream f(std::string("/proc/") + e->d_name + "/stat");
+      std::string stat((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+      const auto close = stat.rfind(')');  // comm may contain spaces; fields after it: state ppid ...
+      if (close == std::string::npos) continue;
+      std::istringstream rest(stat.substr(close + 1));
+      std::string state;
+      pid_t ppid = 0;
+      if (rest >> state >> ppid && ppid == ::getpid()) out.push_back(pid);
+    }
+    ::closedir(d);
+    return out;
+  }
+
+  std::mutex mu_;
+  std::condition_variable cv_;
+  bool stop_ = false;
+  std::atomic<bool> fired_{false};
+  std::thread thread_;
+};
+
+// The video queries are stubs (spec section 5.2): reaching one of them is not the finish line.
+const std::set<std::string> kVideoQueryStubs = {"VdQueryVideoMode", "XGetVideoMode", "VdGetCurrentDisplayInformation",
+                                                "VdGetCurrentDisplayGamma", "VdQueryVideoFlags",
+                                                "VdIsHSIOTrainingSucceeded"};
+
 std::string slurp(const fs::path& p) {
   std::ifstream f(p, std::ios::binary);
   std::ostringstream os;
@@ -84,7 +148,7 @@ std::string slurp(const fs::path& p) {
 
 // Env: LEGACYRECOMP_ISO (required), LEGACYRECOMP_TEST_ROOT (default: fresh temp dir, removed on success).
 // Resources come from the build tree (<build>/share/legacyrecomp, found next to lr_tests).
-TEST_CASE("real ISO: install, launch until the first unimplemented import, cached rerun", "[integration]") {
+TEST_CASE("real ISO: install, run the startup until the first GPU-creating Vd import, cached rerun", "[integration]") {
   const char* iso = std::getenv("LEGACYRECOMP_ISO");
   if (!iso) SKIP("LEGACYRECOMP_ISO not set");
 
@@ -109,12 +173,27 @@ TEST_CASE("real ISO: install, launch until the first unimplemented import, cache
   CHECK(fs::exists(root / "bin" / "legacyrecomp-game"));
 
   const fs::path log = root / "work" / "logs" / "e2e-launch.log";
-  auto code = launch_captured(opts, {"--headless"}, log);
+  const auto started = std::chrono::steady_clock::now();
+  Result<int> code = Error{ErrorCode::IoError, "not launched", ""};
+  bool timed_out = false;
+  {
+    Watchdog watchdog(std::chrono::seconds(300));
+    code = launch_captured(opts, {"--headless"}, log);
+    timed_out = watchdog.fired();
+  }
+  const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - started);
   REQUIRE(code);
   const std::string out = slurp(log);
-  std::fprintf(stderr, "legacyrecomp-game exited with %d:\n%s\n", code.value(), out.c_str());
+  std::fprintf(stderr, "legacyrecomp-game exited with %d after %lld s:\n%s\n", code.value(),
+               static_cast<long long>(seconds.count()), out.c_str());
+  CHECK_FALSE(timed_out);
   CHECK(code.value() == 3);
-  CHECK(out.find("Unimplemented import:") != std::string::npos);
+  std::smatch m;
+  const std::regex unimplemented("Unimplemented import: (\\S+)");
+  REQUIRE(std::regex_search(out, m, unimplemented));
+  const std::string first_missing = m[1].str();
+  CHECK(std::regex_search(first_missing, std::regex("^Vd")));
+  CHECK(kVideoQueryStubs.count(first_missing) == 0);
 
   RecordingSink second;
   auto again = run(opts, second);
