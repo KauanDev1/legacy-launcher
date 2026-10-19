@@ -41,7 +41,8 @@ add_library(lr_vulkan_thirdparty STATIC
   thirdparty/volk/volk.c src/runtime/gpu/vk/vma_impl.cpp)
 target_include_directories(lr_vulkan_thirdparty SYSTEM PUBLIC
   thirdparty/Vulkan-Headers/include thirdparty/volk thirdparty/VulkanMemoryAllocator/include)
-target_compile_definitions(lr_vulkan_thirdparty PUBLIC VK_NO_PROTOTYPES)
+target_compile_definitions(lr_vulkan_thirdparty PUBLIC VK_NO_PROTOTYPES
+  VMA_STATIC_VULKAN_FUNCTIONS=0 VMA_DYNAMIC_VULKAN_FUNCTIONS=1 VMA_VULKAN_VERSION=1002000)
 target_link_libraries(lr_vulkan_thirdparty PUBLIC ${CMAKE_DL_LIBS})
 set_target_properties(lr_vulkan_thirdparty PROPERTIES POSITION_INDEPENDENT_CODE ON)
 

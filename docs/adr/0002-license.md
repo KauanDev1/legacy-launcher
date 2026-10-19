@@ -47,9 +47,9 @@ arquivos que `cmake --install` produz.
 |---|---|---|
 | XenonRecomp, XenonAnalyse, XenonUtils (hedge-dev) | MIT (`thirdparty/XenonRecomp/LICENSE.md`) | Ferramentas `XenonAnalyse`/`XenonRecomp` (executáveis separados, chamados via `posix_spawn`); `libXenonUtils.a` é ligada estaticamente em `legacyrecomp`, `legacyrecomp-gui` e `legacyrecomp-game` |
 | Dear ImGui | MIT (`thirdparty/imgui/LICENSE.txt`) | `legacyrecomp-gui` |
-| volk (zeux, tag `vulkan-sdk-1.4.309.0`) | MIT (`thirdparty/volk/LICENSE.md`) | Carrega `libvulkan.so.1` do sistema em tempo de execução; ligada estaticamente no backend Vulkan da GPU (`lr_vulkan`, M3) |
-| Vulkan Memory Allocator (GPUOpen, tag `v3.2.1`) | MIT (`thirdparty/VulkanMemoryAllocator/LICENSE.txt`) | Implementação compilada em `src/runtime/gpu/vk/vma_impl.cpp`, dentro de `lr_vulkan` |
-| Vulkan-Headers (Khronos, tag `vulkan-sdk-1.4.309.0`) | Apache-2.0 (`thirdparty/Vulkan-Headers/LICENSES/Apache-2.0.txt`) | Só cabeçalhos, em tempo de compilação; o loader e o driver Vulkan são do sistema e nunca são distribuídos |
+| volk (zeux, tag `vulkan-sdk-1.4.309.0`) | MIT (`thirdparty/volk/LICENSE.md`) | Carrega `libvulkan.so.1` do sistema em tempo de execução; ainda não ligada ao jogo (M3) |
+| Vulkan Memory Allocator (GPUOpen, tag `v3.2.1`) | MIT (`thirdparty/VulkanMemoryAllocator/LICENSE.txt`) | Implementação em `src/runtime/gpu/vk/vma_impl.cpp` (`lr_vulkan_thirdparty`); ainda não ligada ao jogo (M3) |
+| Vulkan-Headers (Khronos, tag `vulkan-sdk-1.4.309.0`) | Apache-2.0 (`thirdparty/Vulkan-Headers/LICENSES/Apache-2.0.txt`) | Só cabeçalhos, em tempo de compilação; ainda não ligada ao jogo (M3); o loader e o driver Vulkan são do sistema e nunca são distribuídos |
 | Catch2 | BSL-1.0 (`thirdparty/Catch2/LICENSE.txt`) | Só nos testes (`lr_tests`); não é distribuído |
 | toml++ | MIT (`thirdparty/XenonRecomp/thirdparty/tomlplusplus/LICENSE`) | `legacyrecomp`, `legacyrecomp-gui`, `XenonRecomp` |
 | {fmt} | MIT (`thirdparty/XenonRecomp/thirdparty/fmt/LICENSE`) | `legacyrecomp`, `legacyrecomp-gui`, ferramentas do XenonRecomp |

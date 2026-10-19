@@ -56,9 +56,9 @@ LegacyRecomp                       MIT                                       lau
 XenonRecomp/XenonAnalyse/XenonUtils MIT                                      tools; XenonUtils in the launchers
 Xenia (code in XenonUtils)         BSD-3-Clause                              launchers, tools (in XenonUtils), note 5
 Dear ImGui                         MIT                                       legacyrecomp-gui
-volk (v1.4.309)                    MIT                                       runtime GPU backend (lr_vulkan)
-VulkanMemoryAllocator (v3.2.1)     MIT                                       runtime GPU backend (lr_vulkan)
-Vulkan-Headers (1.4.309)           Apache-2.0                                runtime GPU backend (headers only)
+volk (v1.4.309)                    MIT                                       not linked yet (M3)
+VulkanMemoryAllocator (v3.2.1)     MIT                                       not linked yet (M3)
+Vulkan-Headers (1.4.309)           Apache-2.0                                not linked yet (M3)
 toml++                             MIT                                       launchers, XenonRecomp
 {fmt}                              MIT                                       launchers, tools
 xxHash (library)                   BSD-2-Clause                              XenonRecomp

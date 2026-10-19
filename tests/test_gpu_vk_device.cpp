@@ -94,6 +94,15 @@ TEST_CASE("headless device has the required features", "[unit][vulkan]") {
   REQUIRE(vmaCreateBuffer(d.allocator(), &bci, &aci, &buf, &alloc, nullptr) == VK_SUCCESS);
   vmaDestroyBuffer(d.allocator(), buf, alloc);
 
+  // The bufferDeviceAddress feature is enabled, not only supported: a device-address buffer yields an address.
+  bci.usage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  aci.flags = 0;
+  REQUIRE(vmaCreateBuffer(d.allocator(), &bci, &aci, &buf, &alloc, nullptr) == VK_SUCCESS);
+  VkBufferDeviceAddressInfo bai = make<VkBufferDeviceAddressInfo>(VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO);
+  bai.buffer = buf;
+  CHECK(vkGetBufferDeviceAddress(d.device(), &bai) != 0);
+  vmaDestroyBuffer(d.allocator(), buf, alloc);
+
   // A moved-from Device must not double-free.
   Device moved = std::move(d);
   CHECK(moved.device() != VK_NULL_HANDLE);

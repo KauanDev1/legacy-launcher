@@ -133,7 +133,7 @@ Result<Device> Device::create(const DeviceOptions& options) {
     unsigned count = 0;
     auto* win = static_cast<SDL_Window*>(options.sdl_window);
     if (!SDL_Vulkan_GetInstanceExtensions(win, &count, nullptr))
-      return no_driver(std::string("SDL cannot use Vulkan: ") + SDL_GetError());
+      return no_driver(std::string("SDL window not created with SDL_WINDOW_VULKAN, or SDL has no Vulkan support: ") + SDL_GetError());
     sdl_exts.resize(count);
     SDL_Vulkan_GetInstanceExtensions(win, &count, sdl_exts.data());
     for (const char* e : sdl_exts) exts.push_back(e);
@@ -202,7 +202,7 @@ Result<Device> Device::create(const DeviceOptions& options) {
     vkGetPhysicalDeviceQueueFamilyProperties(pd, &nq, qf.data());
     bool found = false;
     for (std::uint32_t i = 0; i < nq && !found; ++i) {
-      if (!(qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) || !(qf[i].queueFlags & VK_QUEUE_TRANSFER_BIT)) continue;
+      if (!(qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)) continue;
       if (dev.surface_) {
         VkBool32 present = VK_FALSE;
         vkGetPhysicalDeviceSurfaceSupportKHR(pd, i, dev.surface_, &present);
