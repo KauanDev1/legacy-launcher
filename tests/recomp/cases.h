@@ -124,6 +124,7 @@ inline const std::vector<RecompCase>& recomp_cases() {
       {"vpkuhum128", 0x82004600, {0x14642B00, kBlr}},  // xop 768
       {"vpkuhus128", 0x82004700, {0x14642B40, kBlr}},  // xop 832
       {"vnor128", 0x82004800, {0x14642A90, kBlr}},     // xop 656
+      {"vnor128 same reg", 0x82004C00, {0x14642290, kBlr}},  // vnor128 v3,v4,v4 (vnot): vB=v4 (4<<11)
       {"vslo128", 0x82004900, {0x14642B90, kBlr}},     // xop 912
       // Opcode 6: vrlw128 = VX128(6, 80) = 0x18000050; vcfpuxws128 v3,v5,UIMM = VX128_3(6, 624) = 0x18000270.
       {"vrlw128", 0x82004A00, {0x18642850, kBlr}},

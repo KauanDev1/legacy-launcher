@@ -702,6 +702,14 @@ TEST_CASE("vnor128 is the complement of or", "[unit][recomp]") {
   CHECK(lanes32(vrun("vnor128", a, b).v3) == W4{0x000F0F0F, 0xFFFFFFFF, 0, 0xEDCBA987});
 }
 
+TEST_CASE("vnor128 with vA == vB is the complement (vnot), not zero", "[unit][recomp]") {
+  // vrun puts the first vector in v4, which is both sources here; the second one (v5) must be ignored.
+  const auto a = u32x4({0xF0F0F0F0, 0, 0xFFFFFFFF, 0x12345678});
+  const PPCContext out = vrun("vnor128 same reg", a, u32x4({0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF}));
+  CHECK(lanes32(out.v3) == W4{0x0F0F0F0F, 0xFFFFFFFF, 0, 0xEDCBA987});
+  CHECK(lanes32(out.v4) == lanes32(a));
+}
+
 TEST_CASE("vcmpequh sets lanes to all ones where equal", "[unit][recomp]") {
   const auto a = u16x8({1, 2, 3, 4, 5, 6, 7, 8});
   const auto b = u16x8({1, 0, 3, 0, 5, 0, 7, 0});

@@ -89,7 +89,19 @@ set(_lr_xr_old "")
 if(EXISTS "${_lr_xr_stamp}")
   file(READ "${_lr_xr_stamp}" _lr_xr_old)
 endif()
-if(NOT _lr_xr_old STREQUAL LR_XENONRECOMP_PATCH_HASH)
+# The file(COPY) above skips the patched files, so one deleted from the copy would never come back: re-patch then.
+set(_lr_xr_missing "")
+if(_lr_xr_old STREQUAL LR_XENONRECOMP_PATCH_HASH)
+  foreach(_f IN LISTS _lr_xr_touched)
+    if(EXISTS "${_lr_xr_src}/${_f}" AND NOT EXISTS "${LR_XENONRECOMP_DIR}/${_f}")
+      list(APPEND _lr_xr_missing "${_f}")
+    endif()
+  endforeach()
+endif()
+if(_lr_xr_missing)
+  message(STATUS "XenonRecomp: patched file(s) missing from the copy, re-patching: ${_lr_xr_missing}")
+endif()
+if(NOT _lr_xr_old STREQUAL LR_XENONRECOMP_PATCH_HASH OR _lr_xr_missing)
   file(REMOVE "${_lr_xr_stamp}")
   foreach(_f IN LISTS _lr_xr_touched)
     if(EXISTS "${_lr_xr_src}/${_f}")
@@ -103,22 +115,37 @@ if(NOT _lr_xr_old STREQUAL LR_XENONRECOMP_PATCH_HASH)
     endif()
   endforeach()
   # The copy lives inside the build tree, which may sit inside our own work tree: the ceiling keeps git from
-  # discovering that repository, so `git apply` works on plain files relative to the copy.
+  # discovering that repository, so `git apply` works on plain files relative to the copy. Inside a repository
+  # `git apply` run from a subdirectory would skip the paths outside it and still exit 0, so every patch must also
+  # report each file it touches as applied (`-v`: "Applied patch <path> cleanly."), or configure stops.
   get_filename_component(_lr_xr_parent "${LR_XENONRECOMP_DIR}" DIRECTORY)
   foreach(_p IN LISTS _lr_xr_patches)
+    get_filename_component(_n "${_p}" NAME)
     execute_process(
       COMMAND ${CMAKE_COMMAND} -E env "GIT_CEILING_DIRECTORIES=${_lr_xr_parent}"
-              "${GIT_EXECUTABLE}" apply --whitespace=nowarn "${_p}"
+              "${GIT_EXECUTABLE}" apply -v --whitespace=nowarn "${_p}"
       WORKING_DIRECTORY "${LR_XENONRECOMP_DIR}"
       RESULT_VARIABLE _rc OUTPUT_VARIABLE _out ERROR_VARIABLE _err)
     if(NOT _rc EQUAL 0)
-      get_filename_component(_n "${_p}" NAME)
       message(FATAL_ERROR
         "Could not apply ${_n} to thirdparty/XenonRecomp:\n${_out}${_err}\n"
         "The submodule must be at the commit the patches were made against (git submodule update). "
         "When editing the recompiler on its legacyrecomp branch, configure with -DLR_XENONRECOMP_APPLY_PATCHES=OFF "
         "(docs/development.md).")
     endif()
+    file(STRINGS "${_p}" _diffs REGEX "^diff --git a/")
+    foreach(_d IN LISTS _diffs)
+      string(REGEX REPLACE "^diff --git a/(.+) b/.+$" "\\1" _f "${_d}")
+      string(FIND "${_out}${_err}" "Applied patch ${_f} cleanly." _pos)
+      if(_pos EQUAL -1)
+        file(REMOVE "${_lr_xr_stamp}")
+        message(FATAL_ERROR
+          "${_n}: git apply did not report ${_f} as applied in ${LR_XENONRECOMP_DIR}; refusing an unpatched "
+          "XenonRecomp. git said:\n${_out}${_err}")
+      endif()
+    endforeach()
+    string(STRIP "${_err}" _err)
+    message(STATUS "XenonRecomp: ${_n}: ${_err}")
   endforeach()
   file(WRITE "${_lr_xr_stamp}" "${LR_XENONRECOMP_PATCH_HASH}")
   list(LENGTH _lr_xr_patches _lr_xr_count)
