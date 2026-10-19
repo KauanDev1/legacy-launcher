@@ -20,6 +20,9 @@ namespace lr::gpu {
 struct MemoryAccess {
   uint8_t* base;
   // Maps a physical address taken from a packet to a guest address; nullopt when it maps to no guest memory.
+  // The processor masks every packet address to the 512 MiB physical space (phys & 0x1FFFFFFF, so 0xA0xxxxxx /
+  // 0xC0xxxxxx / 0xE0xxxxxx view-tagged addresses work) before calling it. A 4-byte fence/poll access whose
+  // translated address is not 4-byte aligned is malformed.
   std::function<std::optional<uint32_t>(uint32_t phys)> to_guest;
   // Bytes of guest memory reachable from base (the runtime maps the whole 4 GiB space, GuestMemory::size()).
   // Every access is checked against it: [guest, guest + n) must lie in [0, size). Interface addition (Task 8).
@@ -65,10 +68,14 @@ enum Opcode : uint32_t {
   SET_BIN_MASK_HI = 0x61,
   SET_BIN_SELECT_LO = 0x62,
   SET_BIN_SELECT_HI = 0x63,
-  // Not a hardware opcode: our HLE VdSwap emits it (payload: frontbuffer physical address, width, height). Calls
-  // Backend::swap and advances the swap counter EVENT_WRITE_SHD reports.
+  // Not a hardware opcode: our HLE VdSwap emits it. Payload: kSwapMagic, frontbuffer physical address, width,
+  // height; any further dwords are ignored (VdSwap fills the game's reserved area). Without the magic the packet
+  // is malformed. Calls Backend::swap and advances the swap counter EVENT_WRITE_SHD reports.
   LR_SWAP = 0x64,
 };
+
+inline constexpr uint32_t kSwapMagic = 0x4C525357;  // 'LRSW'
+inline constexpr uint32_t kPhysicalMask = 0x1FFFFFFF;  // 512 MiB physical address space
 
 // Name of a known opcode ("DRAW_INDX"), nullptr otherwise.
 const char* opcode_name(uint32_t opcode);
@@ -88,12 +95,13 @@ class CommandProcessor {
   CommandProcessor(MemoryAccess mem, RegisterFile& regs, Backend& backend,
                    std::function<void(uint32_t source)> raise_interrupt);
 
-  // Executes the `dwords` packet dwords at guest address `guest_addr` (4-byte aligned). Returns the dwords
-  // consumed (all of them) or the first fatal error: unknown type-3 opcode ("unknown PM4 opcode 0x.."), a packet
-  // running past the end of the buffer or too short for its opcode, an address outside guest memory, indirect
-  // buffers nested deeper than pm4::kMaxIndirectDepth (all InvalidFormat), or Cancelled when request_stop()
-  // ended a WAIT_REG_MEM. A packet split across the end of the buffer is malformed: the caller hands over whole
-  // packets (a ring-buffer wrap is the caller's business).
+  // Executes the packet dwords in [guest_addr, guest_addr + 4 * dwords) (4-byte aligned, the top-level ring
+  // buffer). Returns the dwords consumed: all of them, or fewer when the last packet is incomplete (its header or
+  // payload runs past `dwords`) - that packet is not executed, so a ring reader resumes at guest_addr + 4 *
+  // consumed once the rest (e.g. after the wrap) is available. Fatal errors: unknown type-3 opcode ("unknown PM4
+  // opcode 0x.."), a packet too short for its opcode, a packet split across the end of an INDIRECT_BUFFER, an
+  // address outside guest memory, indirect buffers nested deeper than pm4::kMaxIndirectDepth (all InvalidFormat),
+  // or Cancelled when request_stop() ended a WAIT_REG_MEM.
   Result<uint32_t> execute(uint32_t guest_addr, uint32_t dwords);
 
   // Type-3 opcode -> packets seen (including a final unknown one), for --trace-gpu and fatal reports.
@@ -106,7 +114,8 @@ class CommandProcessor {
   uint32_t swap_counter() const { return swap_counter_; }
 
  private:
-  Result<void> execute_buffer(uint32_t guest_addr, uint32_t dwords, uint32_t depth);
+  // Returns the dwords consumed; inside an INDIRECT_BUFFER (depth > 0) an incomplete trailing packet is an error.
+  Result<uint32_t> execute_buffer(uint32_t guest_addr, uint32_t dwords, uint32_t depth);
   Result<void> execute_type3(uint32_t opcode, uint32_t payload_addr, uint32_t count, uint32_t depth);
 
   bool in_bounds(uint32_t guest, uint64_t bytes) const;
@@ -115,7 +124,9 @@ class CommandProcessor {
   Result<uint32_t> load_mem(uint32_t phys_and_endian, const char* what) const;
   Result<void> store_mem(uint32_t phys_and_endian, uint32_t value, const char* what);
   Result<bool> compare(uint32_t wait_info, uint32_t poll, uint32_t ref, uint32_t mask);
-  void write_register(uint32_t index, uint32_t value);
+  // Every register write goes through here: SCRATCH_REG0..7 writes are also written back to memory when their
+  // SCRATCH_UMSK bit is set (a bad SCRATCH_ADDR is a malformed-packet error).
+  Result<void> write_register(uint32_t index, uint32_t value);
 
   MemoryAccess mem_;
   RegisterFile& regs_;

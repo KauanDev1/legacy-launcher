@@ -11,13 +11,17 @@ namespace lr::gpu {
 
 enum class ShaderStage { Vertex, Pixel };
 
+// One draw as the PM4 DRAW_INDX / DRAW_INDX_2 packet describes it. The index_* buffer fields are 0 unless
+// `indexed`.
 struct DrawInfo {
-  uint32_t prim_type;         // VGT_DRAW_INITIATOR.prim_type (bits 0-5)
-  uint32_t index_count;       // VGT_DRAW_INITIATOR.num_indices (bits 16-31)
-  uint32_t index_base_phys;   // physical address of the index buffer, aligned to index_size; 0 when !indexed
-  uint32_t index_size;        // bytes per index (2 or 4); 0 when !indexed
-  bool indexed;               // index buffer fetched by DMA (source_select 0); false for auto-index draws
+  uint32_t prim_type;           // VGT_DRAW_INITIATOR.prim_type (bits 0-5)
+  uint32_t index_count;         // VGT_DRAW_INITIATOR.num_indices (bits 16-31): vertices/indices the draw uses
+  uint32_t index_base_phys;     // VGT_DMA_BASE: physical address of the index buffer, aligned down to index_size
+  uint32_t index_size;          // bytes per index: 4 if VGT_DRAW_INITIATOR.index_size (bit 11) is set, else 2
+  bool indexed;                 // index buffer fetched by DMA (source_select 0); false for auto-index draws
   uint32_t vgt_draw_initiator;  // the raw initiator dword
+  uint32_t index_endian = 0;    // VGT_DMA_SIZE.swap_mode (bits 30-31): pm4::kEndian* byte order of the indices
+  uint32_t index_words = 0;     // VGT_DMA_SIZE.num_words (bits 0-23): index buffer length in indices (DMA size)
 };
 
 // All calls come from the GPU thread, in packet order.

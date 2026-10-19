@@ -71,8 +71,9 @@ std::string op_label(uint32_t opcode) {
 
 // VGT_DRAW_INITIATOR fields.
 constexpr uint32_t kSourceDma = 0, kSourceImmediate = 1, kSourceAutoIndex = 2;
-// RB_MODECONTROL.edram_mode (bits 0-2) value that turns a draw into an EDRAM copy.
-constexpr uint32_t kEdramModeCopy = 6;
+// RB_MODECONTROL.edram_mode (bits 0-2): colour+depth and depth-only draw, copy turns the draw into a resolve,
+// anything else (0 = ignore) draws nothing.
+constexpr uint32_t kEdramModeColorDepth = 4, kEdramModeDepthOnly = 5, kEdramModeCopy = 6;
 // SET_CONSTANT / LOAD_ALU_CONSTANT type field -> register base.
 constexpr uint32_t kConstantBases[] = {kShaderConstantFloatBase, kShaderConstantFetchBase, kShaderConstantBoolBase,
                                        kShaderConstantLoopBase, 0x2000 /* context registers */};
@@ -98,11 +99,16 @@ uint32_t CommandProcessor::read_be(uint32_t guest) const {
 }
 
 Result<uint32_t> CommandProcessor::translate(uint32_t phys, uint64_t bytes, const char* what) const {
-  std::optional<uint32_t> guest = mem_.to_guest ? mem_.to_guest(phys) : std::nullopt;
+  const uint32_t masked = phys & pm4::kPhysicalMask;
+  std::optional<uint32_t> guest = mem_.to_guest ? mem_.to_guest(masked) : std::nullopt;
   if (!guest) return malformed(std::string(what) + ": physical address " + hex(phys) + " maps to no guest memory");
   if (!in_bounds(*guest, bytes)) {
     return malformed(std::string(what) + ": " + std::to_string(bytes) + " bytes at physical " + hex(phys) +
                      " run past the end of guest memory");
+  }
+  if (bytes == 4 && (*guest & 3) != 0) {
+    return malformed(std::string(what) + ": physical " + hex(phys) + " translates to unaligned guest " +
+                     hex(*guest));
   }
   return *guest;
 }
@@ -125,7 +131,19 @@ Result<void> CommandProcessor::store_mem(uint32_t phys_and_endian, uint32_t valu
   return {};
 }
 
-void CommandProcessor::write_register(uint32_t index, uint32_t value) { regs_.write(index, value); }
+Result<void> CommandProcessor::write_register(uint32_t index, uint32_t value) {
+  regs_.write(index, value);
+  // Scratch write-back: with bit n of SCRATCH_UMSK set, SCRATCH_REGn is mirrored to SCRATCH_ADDR + 4n (big-endian),
+  // which is how the guest reads GPU progress without touching MMIO.
+  if (index >= SCRATCH_REG0 && index <= SCRATCH_REG7) {
+    const uint32_t n = index - SCRATCH_REG0;
+    if (((regs_.read(SCRATCH_UMSK) >> n) & 1) != 0) {
+      const uint32_t address = (regs_.read(SCRATCH_ADDR) & ~3u) + 4 * n;
+      return store_mem(address | pm4::kEndian8in32, value, "scratch register write-back (SCRATCH_ADDR)");
+    }
+  }
+  return {};
+}
 
 Result<bool> CommandProcessor::compare(uint32_t wait_info, uint32_t poll, uint32_t ref, uint32_t mask) {
   uint32_t value;
@@ -158,14 +176,22 @@ Result<uint32_t> CommandProcessor::execute(uint32_t guest_addr, uint32_t dwords)
     return malformed("PM4 buffer at " + hex(guest_addr) + " (" + std::to_string(dwords) +
                      " dwords) lies outside guest memory");
   }
-  LR_TRY(execute_buffer(guest_addr, dwords, 0));
-  return dwords;
+  return execute_buffer(guest_addr, dwords, 0);
 }
 
-Result<void> CommandProcessor::execute_buffer(uint32_t guest_addr, uint32_t dwords, uint32_t depth) {
+Result<uint32_t> CommandProcessor::execute_buffer(uint32_t guest_addr, uint32_t dwords, uint32_t depth) {
   // The caller checked [guest_addr, guest_addr + 4 * dwords) against guest memory.
   uint32_t pos = 0;
+  // A packet whose payload runs past the buffer: the ring buffer leaves it for the next call (the rest arrives
+  // after the wrap); inside an indirect buffer it is malformed.
+  auto incomplete = [&](uint32_t packet_pos, uint32_t needed, const std::string& label) -> Result<uint32_t> {
+    if (depth == 0) return packet_pos;
+    return malformed("PM4 " + label + " packet at " + hex(guest_addr + packet_pos * 4) + " has " +
+                     std::to_string(needed) + " dwords but the indirect buffer has " +
+                     std::to_string(dwords - packet_pos - 1) + " left");
+  };
   while (pos < dwords) {
+    const uint32_t packet_pos = pos;
     const uint32_t packet_addr = guest_addr + pos * 4;
     const uint32_t header = read_be(packet_addr);
     ++pos;
@@ -175,20 +201,19 @@ Result<void> CommandProcessor::execute_buffer(uint32_t guest_addr, uint32_t dwor
       case pm4::kType0: {
         if (header == 0) break;  // an all-zero dword is a one-dword no-op (padding)
         const uint32_t count = ((header >> 16) & 0x3FFF) + 1;
-        if (count > left) {
-          return malformed("PM4 type-0 packet at " + hex(packet_addr) + " has " + std::to_string(count) +
-                           " dwords but the buffer has " + std::to_string(left) + " left");
-        }
+        if (count > left) return incomplete(packet_pos, count, "type-0");
         const uint32_t base = header & 0x7FFF;
         const bool one_reg = (header & 0x8000) != 0;
-        for (uint32_t i = 0; i < count; ++i) write_register(one_reg ? base : base + i, read_be(payload + 4 * i));
+        for (uint32_t i = 0; i < count; ++i) {
+          LR_TRY(write_register(one_reg ? base : base + i, read_be(payload + 4 * i)));
+        }
         pos += count;
         break;
       }
       case pm4::kType1: {
-        if (left < 2) return malformed("PM4 type-1 packet at " + hex(packet_addr) + " runs past the buffer");
-        write_register(header & 0x7FF, read_be(payload));
-        write_register((header >> 11) & 0x7FF, read_be(payload + 4));
+        if (left < 2) return incomplete(packet_pos, 2, "type-1");
+        LR_TRY(write_register(header & 0x7FF, read_be(payload)));
+        LR_TRY(write_register((header >> 11) & 0x7FF, read_be(payload + 4)));
         pos += 2;
         break;
       }
@@ -197,16 +222,13 @@ Result<void> CommandProcessor::execute_buffer(uint32_t guest_addr, uint32_t dwor
       default: {
         const uint32_t count = ((header >> 16) & 0x3FFF) + 1;
         const uint32_t opcode = (header >> 8) & 0x7F;
+        if (count > left) return incomplete(packet_pos, count, op_label(opcode));
         ++counts_[opcode];
-        if (count > left) {
-          return malformed("PM4 " + op_label(opcode) + " packet at " + hex(packet_addr) + " has " +
-                           std::to_string(count) + " dwords but the buffer has " + std::to_string(left) + " left");
-        }
         // Predicated packets run only for the selected bins.
         if ((header & 1) == 0 || (bin_select_ & bin_mask_) != 0) {
           Result<void> r = execute_type3(opcode, payload, count, depth);
           if (!r) {
-            if (r.error().code != ErrorCode::InvalidFormat) return r;
+            if (r.error().code != ErrorCode::InvalidFormat) return r.error();
             return malformed(r.error().message + " (packet at " + hex(packet_addr) + ")");
           }
         }
@@ -215,7 +237,7 @@ Result<void> CommandProcessor::execute_buffer(uint32_t guest_addr, uint32_t dwor
       }
     }
   }
-  return {};
+  return dwords;
 }
 
 Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, uint32_t count, uint32_t depth) {
@@ -226,9 +248,10 @@ Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, 
     return malformed("PM4 " + op_label(opcode) + " packet has " + std::to_string(count) + " dwords, needs " +
                      std::to_string(n));
   };
-  auto set_event = [&](uint32_t initiator) { write_register(VGT_EVENT_INITIATOR, initiator & 0x3F); };
-  auto write_consecutive = [&](uint32_t base, uint32_t first) {
-    for (uint32_t i = first; i < count; ++i) write_register(base + (i - first), p(i));
+  auto set_event = [&](uint32_t initiator) { return write_register(VGT_EVENT_INITIATOR, initiator & 0x3F); };
+  auto write_consecutive = [&](uint32_t base, uint32_t first) -> Result<void> {
+    for (uint32_t i = first; i < count; ++i) LR_TRY(write_register(base + (i - first), p(i)));
+    return {};
   };
   auto constant_base = [&](uint32_t offset_type) -> Result<uint32_t> {
     const uint32_t type = (offset_type >> 16) & 0xFF;
@@ -245,25 +268,29 @@ Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, 
   // DRAW_INDX / DRAW_INDX_2: the initiator is payload dword `at`, the DMA index buffer (if any) follows it.
   auto draw = [&](uint32_t at) -> Result<void> {
     const uint32_t initiator = p(at);
-    write_register(VGT_DRAW_INITIATOR, initiator);
+    LR_TRY(write_register(VGT_DRAW_INITIATOR, initiator));
     DrawInfo info{initiator & 0x3F, initiator >> 16, 0, 0, false, initiator};
     const uint32_t source = (initiator >> 6) & 3;
     if (source == kSourceDma) {
       LR_TRY(need(at + 3));
+      const uint32_t dma_base = p(at + 1), dma_size = p(at + 2);
       info.indexed = true;
       info.index_size = ((initiator >> 11) & 1) != 0 ? 4 : 2;
-      info.index_base_phys = p(at + 1) & ~(info.index_size - 1);
-      write_register(VGT_DMA_BASE, p(at + 1));
-      write_register(VGT_DMA_SIZE, p(at + 2));
+      info.index_base_phys = dma_base & ~(info.index_size - 1);
+      info.index_endian = dma_size >> 30;
+      info.index_words = dma_size & 0xFFFFFF;
+      LR_TRY(write_register(VGT_DMA_BASE, dma_base));
+      LR_TRY(write_register(VGT_DMA_SIZE, dma_size));
     } else if (source != kSourceAutoIndex) {
       return malformed("PM4 " + op_label(opcode) + " uses unsupported index source " + std::to_string(source) +
                        (source == kSourceImmediate ? " (immediate)" : ""));
     }
-    if ((regs_.read(RB_MODECONTROL) & 7) == kEdramModeCopy) {
+    const uint32_t edram_mode = regs_.read(RB_MODECONTROL) & 7;
+    if (edram_mode == kEdramModeCopy) {
       backend_.resolve(regs_);
-    } else {
+    } else if (edram_mode == kEdramModeColorDepth || edram_mode == kEdramModeDepthOnly) {
       backend_.draw(regs_, info);
-    }
+    }  // other modes (0 = ignore): nothing reaches the render targets
     return {};
   };
 
@@ -290,7 +317,8 @@ Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, 
       if (length == 0) return {};
       if ((phys & 3) != 0) return malformed("INDIRECT_BUFFER address " + hex(phys) + " is not 4-byte aligned");
       LR_TRY_ASSIGN(guest, translate(phys, uint64_t{length} * 4, "INDIRECT_BUFFER"));
-      return execute_buffer(guest, length, depth + 1);
+      LR_TRY(execute_buffer(guest, length, depth + 1));
+      return {};
     }
 
     case pm4::WAIT_REG_MEM: {
@@ -318,8 +346,7 @@ Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, 
       const uint32_t and_value = (info & 0x80000000u) != 0 ? regs_.read(p(1) & 0x1FFF) : p(1);
       const uint32_t or_value = (info & 0x40000000u) != 0 ? regs_.read(p(2) & 0x1FFF) : p(2);
       const uint32_t target = info & 0x1FFF;
-      write_register(target, (regs_.read(target) & and_value) | or_value);
-      return {};
+      return write_register(target, (regs_.read(target) & and_value) | or_value);
     }
 
     case pm4::COND_WRITE: {
@@ -328,21 +355,19 @@ Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, 
       LR_TRY_ASSIGN(ok, compare(wait_info, p(1), p(2), p(3)));
       if (!ok) return {};
       if ((wait_info & 0x100) != 0) return store_mem(p(4), p(5), "COND_WRITE address");
-      write_register(p(4), p(5));
-      return {};
+      return write_register(p(4), p(5));
     }
 
     case pm4::EVENT_WRITE:
     case pm4::EVENT_WRITE_ZPD:
       // ZPD (occlusion sample counts) is not emulated beyond the event itself.
       LR_TRY(need(1));
-      set_event(p(0));
-      return {};
+      return set_event(p(0));
 
     case pm4::EVENT_WRITE_SHD: {
       LR_TRY(need(3));
       const uint32_t initiator = p(0);
-      set_event(initiator);
+      LR_TRY(set_event(initiator));
       // Bit 31: store the swap counter (frames presented so far) instead of the packet's value.
       const uint32_t data = (initiator & 0x80000000u) != 0 ? swap_counter_ : p(2);
       return store_mem(p(1), data, "EVENT_WRITE_SHD address");
@@ -350,7 +375,7 @@ Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, 
 
     case pm4::EVENT_WRITE_EXT: {
       LR_TRY(need(2));
-      set_event(p(0));
+      LR_TRY(set_event(p(0)));
       const uint32_t address = p(1);
       LR_TRY_ASSIGN(guest, translate(address & ~3u, 12, "EVENT_WRITE_EXT address"));
       // Screen extents (min x, max x, min y, max y, min z, max z) as 16-bit values.
@@ -388,15 +413,13 @@ Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, 
     case pm4::SET_CONSTANT: {
       LR_TRY(need(1));
       LR_TRY_ASSIGN(base, constant_base(p(0)));
-      write_consecutive(base, 1);
-      return {};
+      return write_consecutive(base, 1);
     }
 
     case pm4::SET_CONSTANT2:
     case pm4::SET_SHADER_CONSTANTS:
       LR_TRY(need(1));
-      write_consecutive(p(0) & 0xFFFF, 1);
-      return {};
+      return write_consecutive(p(0) & 0xFFFF, 1);
 
     case pm4::LOAD_ALU_CONSTANT: {
       LR_TRY(need(3));
@@ -405,7 +428,7 @@ Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, 
       const uint32_t size = p(2) & 0xFFF;  // dwords
       if (size == 0) return {};
       LR_TRY_ASSIGN(guest, translate(phys, uint64_t{size} * 4, "LOAD_ALU_CONSTANT"));
-      for (uint32_t i = 0; i < size; ++i) write_register(base + i, read_be(guest + 4 * i));
+      for (uint32_t i = 0; i < size; ++i) LR_TRY(write_register(base + i, read_be(guest + 4 * i)));
       return {};
     }
 
@@ -439,15 +462,11 @@ Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, 
     case pm4::VIZ_QUERY: {
       LR_TRY(need(1));
       const uint32_t id = p(0) & 0x3F;
-      if ((p(0) & 0x100) == 0) {
-        write_register(VGT_EVENT_INITIATOR, kEventVizQueryStart);
-      } else {
-        write_register(VGT_EVENT_INITIATOR, kEventVizQueryEnd);
-        // No occlusion data: every query reports "visible".
-        const uint32_t reg = id < 32 ? PA_SC_VIZ_QUERY_STATUS_0 : PA_SC_VIZ_QUERY_STATUS_1;
-        write_register(reg, regs_.read(reg) | (1u << (id % 32)));
-      }
-      return {};
+      if ((p(0) & 0x100) == 0) return write_register(VGT_EVENT_INITIATOR, kEventVizQueryStart);
+      LR_TRY(write_register(VGT_EVENT_INITIATOR, kEventVizQueryEnd));
+      // No occlusion data: every query reports "visible".
+      const uint32_t reg = id < 32 ? PA_SC_VIZ_QUERY_STATUS_0 : PA_SC_VIZ_QUERY_STATUS_1;
+      return write_register(reg, regs_.read(reg) | (1u << (id % 32)));
     }
 
     case pm4::SET_BIN_MASK:
@@ -476,8 +495,9 @@ Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, 
       return {};
 
     case pm4::LR_SWAP:
-      LR_TRY(need(3));
-      backend_.swap(p(0), p(1), p(2));
+      LR_TRY(need(4));
+      if (p(0) != pm4::kSwapMagic) return malformed("LR_SWAP packet without the 'LRSW' signature: " + hex(p(0)));
+      backend_.swap(p(1), p(2), p(3));
       ++swap_counter_;
       return {};
 

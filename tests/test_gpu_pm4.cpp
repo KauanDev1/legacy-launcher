@@ -33,10 +33,13 @@ struct Fixture {
   RegisterFile regs;
   NullBackend backend;
   std::vector<uint32_t> interrupts;
+  uint32_t skew = 0;  // added to every translation (a broken mapping, for the alignment check)
+  std::vector<uint32_t> translated;  // every physical address the processor asked to_guest about
   CommandProcessor cp{MemoryAccess{mem.data(),
-                                   [](uint32_t phys) -> std::optional<uint32_t> {
+                                   [this](uint32_t phys) -> std::optional<uint32_t> {
+                                     translated.push_back(phys);
                                      if (phys >= kPhysSize) return std::nullopt;
-                                     return phys + kPhysToGuest;
+                                     return phys + kPhysToGuest + skew;
                                    },
                                    kMemSize},
                       regs, backend, [this](uint32_t source) { interrupts.push_back(source); }};
@@ -105,6 +108,83 @@ TEST_CASE("indirect buffer is executed", "[unit][gpu]") {
   Pm4Builder empty;
   empty.type3(pm4::INDIRECT_BUFFER, {kIb, 0});
   CHECK(f.run(empty).ok());
+
+  // A view-tagged address (0xA0000000 | phys) is masked to the 512 MiB physical space before translation.
+  f.regs.write(SCRATCH_REG0, 0);
+  f.translated.clear();
+  Pm4Builder tagged;
+  tagged.type3(pm4::INDIRECT_BUFFER, {0xA0000000u | kIb, ib.size()});
+  REQUIRE(f.run(tagged).ok());
+  CHECK(f.regs.read(SCRATCH_REG0) == 0xCAFE);
+  CHECK(f.translated == std::vector<uint32_t>{kIb});
+}
+
+TEST_CASE("execute of an empty buffer consumes nothing", "[unit][gpu]") {
+  Fixture f;
+  auto r = f.cp.execute(kRing, 0);
+  REQUIRE(r.ok());
+  CHECK(r.value() == 0);
+}
+
+TEST_CASE("an incomplete packet at the end of the ring is left for the next call", "[unit][gpu]") {
+  Fixture f;
+  Pm4Builder b;
+  b.type0(SCRATCH_REG0, {7});                                  // 2 dwords, complete
+  b.raw(Pm4Builder::type3_header(pm4::MEM_WRITE, 3)).raw(0x2000 | pm4::kEndian8in32);  // header + 1 of 3
+  auto r = f.run(b);
+  REQUIRE(r.ok());
+  CHECK(r.value() == 2);
+  CHECK(f.regs.read(SCRATCH_REG0) == 7);
+  CHECK(f.cp.opcode_counts().count(pm4::MEM_WRITE) == 0);  // not executed, not counted
+  CHECK(f.be32_at(f.phys(0x2000)) == 0);
+
+  // A type-0 packet split the same way.
+  Pm4Builder t0;
+  t0.raw((2u << 16) | SCRATCH_REG1).raw(1);  // 3 values announced, 1 present
+  auto r0 = f.run(t0);
+  REQUIRE(r0.ok());
+  CHECK(r0.value() == 0);
+  CHECK(f.regs.read(SCRATCH_REG1) == 0);
+
+  // Resuming with the whole packet executes it.
+  Pm4Builder whole;
+  whole.type3(pm4::MEM_WRITE, {0x2000 | pm4::kEndian8in32, 0x11, 0x22});
+  auto r2 = f.run(whole);
+  REQUIRE(r2.ok());
+  CHECK(r2.value() == 4);
+  CHECK(f.be32_at(f.phys(0x2004)) == 0x22);
+}
+
+TEST_CASE("scratch registers are written back to memory", "[unit][gpu]") {
+  Fixture f;
+  constexpr uint32_t kScratch = 0x9000;  // physical
+  Pm4Builder b;
+  b.type0(SCRATCH_ADDR, {kScratch});
+  b.type0(SCRATCH_UMSK, {1u << 2});
+  b.type0(SCRATCH_REG2, {0x12345678});  // mask bit set: lands at SCRATCH_ADDR + 4 * 2, big-endian
+  b.type0(SCRATCH_REG3, {0x0BADF00D});  // mask bit clear: register only
+  REQUIRE(f.run(b).ok());
+  CHECK(f.regs.read(SCRATCH_REG2) == 0x12345678);
+  CHECK(f.regs.read(SCRATCH_REG3) == 0x0BADF00D);
+  const uint8_t* p = f.phys(kScratch + 8);
+  CHECK(p[0] == 0x12);
+  CHECK(p[1] == 0x34);
+  CHECK(p[2] == 0x56);
+  CHECK(p[3] == 0x78);
+  CHECK(f.be32_at(f.phys(kScratch + 12)) == 0);
+
+  // Any write path counts: REG_RMW on SCRATCH_REG2.
+  Pm4Builder rmw;
+  rmw.type3(pm4::REG_RMW, {SCRATCH_REG2, 0xFFFF0000u, 0x1});
+  REQUIRE(f.run(rmw).ok());
+  CHECK(f.be32_at(f.phys(kScratch + 8)) == 0x12340001);
+
+  // A write-back address outside guest memory is a malformed packet.
+  Pm4Builder bad;
+  bad.type0(SCRATCH_ADDR, {kPhysSize}).type0(SCRATCH_REG2, {1});
+  auto r = f.run(bad);
+  REQUIRE_FALSE(r.ok());
+  CHECK(r.error().code == lr::ErrorCode::InvalidFormat);
 }
 
 TEST_CASE("nested indirect depth limit", "[unit][gpu]") {
@@ -163,8 +243,8 @@ TEST_CASE("EVENT_WRITE_SHD writes the swap counter", "[unit][gpu]") {
   Fixture f;
   constexpr uint32_t kAddr = 0x3000;  // physical
   Pm4Builder b;
-  b.type3(pm4::LR_SWAP, {0x1F000000, 1280, 720});
-  b.type3(pm4::LR_SWAP, {0x1F100000, 1280, 720});
+  b.type3(pm4::LR_SWAP, {pm4::kSwapMagic, 0x1F000000, 1280, 720});
+  b.type3(pm4::LR_SWAP, {pm4::kSwapMagic, 0x1F100000, 1280, 720, 0, 0});  // trailing reserved dwords are fine
   // Bit 31 of the initiator: store the swap counter, not the packet's value.
   b.type3(pm4::EVENT_WRITE_SHD, {0x80000000u | 0x07, kAddr | pm4::kEndian8in32, 0xDEAD});
   // Bit 31 clear: store the value.
@@ -179,6 +259,14 @@ TEST_CASE("EVENT_WRITE_SHD writes the swap counter", "[unit][gpu]") {
   CHECK(f.be32_at(f.phys(kAddr)) == 2);
   CHECK(f.be32_at(f.phys(kAddr + 4)) == 0xBEEF);
   CHECK(f.regs.read(VGT_EVENT_INITIATOR) == 0x07);
+
+  // 0x64 without the signature is not our swap packet: fatal.
+  Pm4Builder unsigned_swap;
+  unsigned_swap.type3(pm4::LR_SWAP, {0x1F000000, 1280, 720, 0});
+  auto r = f.run(unsigned_swap);
+  REQUIRE_FALSE(r.ok());
+  CHECK(r.error().code == lr::ErrorCode::InvalidFormat);
+  CHECK(f.backend.swap_calls == 2);
 }
 
 TEST_CASE("IM_LOAD reports the shader to the backend", "[unit][gpu]") {
@@ -214,9 +302,13 @@ TEST_CASE("DRAW_INDX reports a draw", "[unit][gpu]") {
   Fixture f;
   // prim_type 4 (triangle list), source_select 0 (DMA), index_size 1 (32-bit), 6 indices.
   const uint32_t initiator = 4u | (0u << 6) | (1u << 11) | (6u << 16);
+  f.regs.write(RB_MODECONTROL, 4);  // edram_mode colour+depth
   Pm4Builder b;
-  b.type3(pm4::DRAW_INDX, {0 /*viz*/, initiator, 0x5002 /*base, unaligned*/, 6 /*num_words*/});
+  // VGT_DMA_SIZE: swap_mode 2 (8in32) in bits 30-31, num_words 6.
+  b.type3(pm4::DRAW_INDX, {0 /*viz*/, initiator, 0x5002 /*base, unaligned*/, (2u << 30) | 6});
   REQUIRE(f.run(b).ok());
+  CHECK(f.backend.last_draw->index_endian == pm4::kEndian8in32);
+  CHECK(f.backend.last_draw->index_words == 6);
   CHECK(f.backend.draw_calls == 1);
   REQUIRE(f.backend.last_draw.has_value());
   CHECK(f.backend.last_draw->prim_type == 4);
@@ -243,6 +335,24 @@ TEST_CASE("DRAW_INDX reports a draw", "[unit][gpu]") {
   REQUIRE(f.run(b2).ok());
   CHECK(f.backend.draw_calls == 2);
   CHECK(f.backend.resolve_calls == 1);
+
+  // Depth-only (5) draws.
+  f.regs.write(RB_MODECONTROL, 5);
+  REQUIRE(f.run(b2).ok());
+  CHECK(f.backend.draw_calls == 3);
+}
+
+TEST_CASE("draws in edram ignore mode are skipped", "[unit][gpu]") {
+  Fixture f;
+  f.regs.write(RB_MODECONTROL, 0);  // edram_mode ignore
+  Pm4Builder b;
+  b.type3(pm4::DRAW_INDX_2, {4u | (2u << 6) | (3u << 16)});
+  auto r = f.run(b);
+  REQUIRE(r.ok());
+  CHECK(r.value() == b.size());
+  CHECK(f.backend.draw_calls == 0);
+  CHECK(f.backend.resolve_calls == 0);
+  CHECK(f.regs.read(VGT_DRAW_INITIATOR) == (4u | (2u << 6) | (3u << 16)));
 }
 
 TEST_CASE("WAIT_REG_MEM on memory waits until satisfied", "[unit][gpu]") {
@@ -301,21 +411,40 @@ TEST_CASE("malformed packets are fatal, not out-of-bounds", "[unit][gpu]") {
     CHECK(r.error().code == lr::ErrorCode::InvalidFormat);
   };
 
-  SECTION("type-3 count runs past the end of the buffer") {
-    Pm4Builder b;
-    b.raw(Pm4Builder::type3_header(pm4::NOP, 10)).raw(0);
-    expect_invalid(f.run(b));
+  // Inside an indirect buffer a packet split across the end is malformed (at the top level it is left for the
+  // next call; see "an incomplete packet at the end of the ring is left for the next call").
+  constexpr uint32_t kIb = 0x8000;  // physical
+  auto run_in_ib = [&](const Pm4Builder& ib) {
+    ib.store(f.phys(kIb));
+    Pm4Builder ring;
+    ring.type3(pm4::INDIRECT_BUFFER, {kIb, ib.size()});
+    return f.run(ring);
+  };
+
+  SECTION("type-3 count runs past the end of an indirect buffer") {
+    Pm4Builder ib;
+    ib.raw(Pm4Builder::type3_header(pm4::NOP, 10)).raw(0);
+    expect_invalid(run_in_ib(ib));
   }
-  SECTION("type-0 count runs past the end of the buffer") {
-    Pm4Builder b;
-    b.raw((0x20u << 16) | SCRATCH_REG0).raw(1);
-    expect_invalid(f.run(b));
+  SECTION("type-0 count runs past the end of an indirect buffer") {
+    Pm4Builder ib;
+    ib.raw((0x20u << 16) | SCRATCH_REG0).raw(1);
+    expect_invalid(run_in_ib(ib));
   }
   SECTION("count past the end of guest memory") {
-    // The packet sits in the last dword of guest memory and claims 16384 payload dwords (count field 0x3FFF).
+    // The header sits in the last dword of guest memory and claims 16384 payload dwords: the top level stops
+    // before it without reading past guest memory...
     Pm4Builder b;
     b.raw(Pm4Builder::type3_header(pm4::NOP, 0x4000));
     b.store(f.guest(kMemSize - 4));
+    auto top = f.cp.execute(kMemSize - 4, 1);
+    REQUIRE(top.ok());
+    CHECK(top.value() == 0);
+    // ...and as a one-dword indirect buffer it is malformed.
+    Pm4Builder ring;
+    ring.type3(pm4::INDIRECT_BUFFER, {kPhysSize - 4, 1});
+    expect_invalid(f.run(ring));
+    // A buffer that itself claims to run past guest memory is rejected up front.
     expect_invalid(f.cp.execute(kMemSize - 4, 0x4001));
   }
   SECTION("buffer outside guest memory") {
@@ -331,14 +460,14 @@ TEST_CASE("malformed packets are fatal, not out-of-bounds", "[unit][gpu]") {
     past_end.type3(pm4::INDIRECT_BUFFER, {kPhysSize - 8, 0x1000});
     expect_invalid(f.run(past_end));
   }
-  SECTION("zero-length and short packets") {
-    // A type-3 header with count 0 encodes 16384 payload dwords: past the end.
-    Pm4Builder zero;
-    zero.raw((3u << 30) | (0x3FFFu << 16) | (pm4::MEM_WRITE << 8));
-    expect_invalid(f.run(zero));
+  SECTION("type-3 header with count field 0 and packets shorter than their opcode's payload") {
+    // A count field of 0x3FFF encodes 16384 payload dwords: past the end of the indirect buffer.
+    Pm4Builder huge;
+    huge.raw((3u << 30) | (0x3FFFu << 16) | (pm4::MEM_WRITE << 8));
+    expect_invalid(run_in_ib(huge));
     // Packets shorter than their opcode's fixed payload.
     for (uint32_t op : {pm4::WAIT_REG_MEM, pm4::COND_WRITE, pm4::INDIRECT_BUFFER, pm4::DRAW_INDX,
-                        pm4::EVENT_WRITE_SHD, pm4::IM_LOAD, pm4::LOAD_ALU_CONSTANT, pm4::REG_RMW}) {
+                        pm4::EVENT_WRITE_SHD, pm4::IM_LOAD, pm4::LOAD_ALU_CONSTANT, pm4::REG_RMW, pm4::LR_SWAP}) {
       Pm4Builder b;
       b.type3(op, {0});
       INFO("opcode " << op);
@@ -356,6 +485,12 @@ TEST_CASE("malformed packets are fatal, not out-of-bounds", "[unit][gpu]") {
     Pm4Builder alu;
     alu.type3(pm4::LOAD_ALU_CONSTANT, {kPhysSize - 4, 0, 8});
     expect_invalid(f.run(alu));
+  }
+  SECTION("fence address translating to an unaligned guest address") {
+    f.skew = 2;
+    Pm4Builder write;
+    write.type3(pm4::MEM_WRITE, {0x2000 | pm4::kEndian8in32, 1});
+    expect_invalid(f.run(write));
   }
   CHECK(f.backend.draw_calls == 0);
 }
