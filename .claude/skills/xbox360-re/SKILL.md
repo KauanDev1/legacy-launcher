@@ -57,7 +57,8 @@ leave the keys out and say so in `addresses.md`.
 | no output, huge RAM, OOM-killed | gap analysis ran into data (e.g. the 8 handler bytes before EH functions) | add `invalid_instructions` entries (`{ data = <word>, size = N }`) |
 | `Switch case at X is trying to jump outside function: Y` | function boundary too short (leaf function, no `.pdata`) or bogus table | the analyse stage emits `work/analysis/functions.toml` automatically; otherwise add `functions = [{ address, size }]` in `recomp.toml`, or fix/drop the table |
 | `Found a switch jump table at X with no switch table entry present` | `bctr` after a `nop` without a table | add a `[[switch]]` (base = any address from the bound check to the bctr, `r` = index register, `labels`) or extend `src/pipeline/switch_scan.cpp` |
-| `Unrecognized instruction at X: <name>` | XenonRecomp lacks that instruction | not a config problem; runtime/XenonRecomp work |
+| `Unrecognized instruction at X: <name>` | XenonRecomp lacks that instruction | not a config problem: add it as a patch (`thirdparty/patches/xenonrecomp`, test in `tests/recomp`, see `docs/development.md`); `tools/recomp_warnings.py` counts them |
+| `Unexpected float16_4 pack instruction at X` | `vpkd3d128` form the recompiler rejects | `python3 -I tools/vpkd3d_sites.py <scratch>/image.bin --log work/logs/recompile.log` prints each site's (type, pack, shift) only |
 
 Jump tables: XenonAnalyse misses this compiler's patterns; `src/pipeline/switch_scan.cpp` evaluates
 the code between the `cmplwi`/`bgt` guard and the `bctr`. `work/logs/analyse.log` lists unresolved,
@@ -67,6 +68,6 @@ and record the result in `addresses.md`.
 ## Iterating fast
 
 The dev build of XenonRecomp is a Debug build (minutes). For quick iterations build a Release copy
-outside the repo (`cmake -S thirdparty/XenonRecomp -B <scratch>/xr-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++`,
+outside the repo from the patched copy the dev build prepared (`cmake -S build/dev/_deps/XenonRecomp-patched -B <scratch>/xr-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++`,
 target `XenonRecomp`; a full run takes seconds) and point a scratch copy of `work/recomp.toml` at a
 scratch output dir. Confirm the final config with the real pipeline: `ctest --preset dev -L integration`.

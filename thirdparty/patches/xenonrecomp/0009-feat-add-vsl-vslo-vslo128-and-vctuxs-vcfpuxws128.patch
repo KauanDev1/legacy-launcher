@@ -1,0 +1,70 @@
+From 959ff3b10b417c017b440949735bc4c5baa9fcc8 Mon Sep 17 00:00:00 2001
+From: Kauan Turcato Storto <159664484+KauanDev1@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 19:56:12 -0400
+Subject: [PATCH 09/10] feat: add vsl, vslo/vslo128 and vctuxs/vcfpuxws128
+
+vsl and vslo shift the whole register left by bits (0-7) and octets
+(0-15) taken from guest byte 15. The register is stored byte-reversed,
+so the host 128-bit value equals the guest one and the shift is a plain
+host left shift, built in vTemp so vD may alias a source.
+
+vctuxs/vcfpuxws128 scale by 2^UIMM and convert to unsigned words,
+truncating and saturating (NaN and negatives to 0, >= 2^32 to
+0xFFFFFFFF), as the signed vctsxs does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ XenonRecomp/recompiler.cpp | 33 +++++++++++++++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+
+diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
+index 7cdbacc..17501a7 100644
+--- a/XenonRecomp/recompiler.cpp
++++ b/XenonRecomp/recompiler.cpp
+@@ -1976,6 +1976,21 @@ bool Recompiler::Recompile(
+             println("simde_mm_load_ps({}.f32)));", v(insn.operands[1]));
+         break;
+ 
++    case PPC_INST_VCTUXS:
++    case PPC_INST_VCFPUXWS128:
++        // Float * 2^UIMM to unsigned word, truncating and saturating: NaN and negatives give 0, values from 2^32
++        // up give 0xFFFFFFFF. Lane-wise, so vD may alias vB.
++        printSetFlushMode(true);
++        for (size_t i = 0; i < 4; i++)
++        {
++            if (insn.operands[2] != 0)
++                println("\t{}.f32 = {}.f32[{}] * {}.0f;", temp(), v(insn.operands[1]), i, 1u << insn.operands[2]);
++            else
++                println("\t{}.f32 = {}.f32[{}];", temp(), v(insn.operands[1]), i);
++            println("\t{0}.u32[{1}] = ({2}.f32 != {2}.f32 || {2}.f32 <= 0.0f) ? 0u : ({2}.f32 >= 4294967296.0f ? 0xFFFFFFFFu : uint32_t({2}.f32));", v(insn.operands[0]), i, temp());
++        }
++        break;
++
+     case PPC_INST_VCFSX:
+     case PPC_INST_VCSXWFP128:
+     {
+@@ -2436,6 +2451,24 @@ bool Recompiler::Recompile(
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_vsr(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+         break;
+ 
++    // Whole-register left shifts. The register is stored byte-reversed, so the host's little-endian 128-bit value
++    // equals the guest's big-endian one and a guest left shift is a host left shift. The count comes from guest
++    // byte 15 (host byte 0). Built in vTemp because vD may alias vA or vB.
++    case PPC_INST_VSL:
++        println("\t{}.u32 = {}.u8[0] & 0x7;", temp(), v(insn.operands[2]));
++        println("\t{0}.u64[1] = ({1}.u64[1] << {2}.u32) | ({2}.u32 != 0 ? {1}.u64[0] >> (64 - {2}.u32) : 0);", vTemp(), v(insn.operands[1]), temp());
++        println("\t{}.u64[0] = {}.u64[0] << {}.u32;", vTemp(), v(insn.operands[1]), temp());
++        println("\t{} = {};", v(insn.operands[0]), vTemp());
++        break;
++
++    case PPC_INST_VSLO:
++    case PPC_INST_VSLO128:
++        println("\t{}.u32 = ({}.u8[0] >> 3) & 0xF;", temp(), v(insn.operands[2]));
++        for (size_t i = 0; i < 16; i++)
++            println("\t{0}.u8[{1}] = {1} >= {2}.u32 ? {3}.u8[{1} - {2}.u32] : 0;", vTemp(), i, temp(), v(insn.operands[1]));
++        println("\t{} = {};", v(insn.operands[0]), vTemp());
++        break;
++
+     case PPC_INST_VSRAW:
+     case PPC_INST_VSRAW128:
+         // TODO: vectorize, ensure endianness is correct

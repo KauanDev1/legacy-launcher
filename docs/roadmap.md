@@ -15,10 +15,10 @@ Fonte: spec do M1 (`docs/superpowers/specs/2026-10-14-legacyrecomp-m1-design.md`
 
 - **459 importações do kernel** (`xboxkrnl` e `xam`) sem implementação; a lista está em
   `docs/kernel-coverage.md`. É o trabalho do M2.
-- **Instruções que o XenonRecomp (`ddd128b`) ainda não implementa**: `bdzf`, `stfsu`, `lfsu`, `vsel128`
-  (mais `lhzu`, `sthu`, `eqv` etc.); 3 279 ocorrências "Unrecognized instruction" que deixam funções
-  incompletas no C++ gerado. Detalhes e contagens em `docs/reverse-engineering/addresses.md`. Precisa de
-  patch ou correção upstream antes de o jogo passar do início.
+- ~~Instruções que o XenonRecomp (`ddd128b`) não implementa~~ (resolvido no M2, Tarefa 7): as 3 279 ocorrências
+  "Unrecognized instruction" e os 20 avisos float16_4 do M1 caíram para 0 com os patches de
+  `thirdparty/patches/xenonrecomp/` (ADR 0004, M7; contagens em `docs/reverse-engineering/addresses.md`). Os
+  patches não estão no upstream: atualizar o XenonRecomp exige reaplicá-los (`docs/development.md`).
 - **23 jump tables a confirmar no Ghidra** (de 221 `switch` detectados): o `analyse` as acha por varredura própria, mas a confirmação
   manual ainda não foi feita.
 - **Endereços dos helpers (prólogo/epílogo etc.) não confirmados no Ghidra**: aceitos por evidência

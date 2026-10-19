@@ -79,3 +79,38 @@ Formato: o quê, por quê, custo se estiver errada.
   modelo escreveria sobre outros objetos do kernel; e o estado por thread do despachante é indexado pelo endereço do
   KTHREAD, que o pool reutiliza para a próxima thread.
 - Custo se errado: um título legítimo acima dos limites seria recusado na carga (limites bem acima do uso real).
+
+### M7. Mudanças no XenonRecomp como patches no repositório, não fork (Tarefa 7)
+- O quê: o `main` do upstream (hedge-dev/XenonRecomp) continua em `ddd128b` e não tem as instruções que o jogo usa;
+  atualizar o pin não resolve. O plano previa publicar as nossas mudanças num fork no GitHub (passo humano); como o
+  dono não escolheu um fork, elas ficam no próprio repositório, em `thirdparty/patches/xenonrecomp/NNNN-*.patch`
+  (`git format-patch ddd128b..legacyrecomp`, com autoria, mensagens e créditos). O gitlink do submódulo volta para
+  `ddd128b`, que qualquer clone consegue buscar. No configure, `cmake/LrXenonRecompPatches.cmake` espelha o submódulo
+  em `build/<preset>/_deps/XenonRecomp-patched`, normaliza para LF os arquivos que os patches tocam, aplica os
+  patches com `git apply` e compila essa cópia; o checkout do submódulo nunca muda. A reaplicação acontece quando um
+  patch ou um original tocado muda (carimbo com hash). Tudo o que lia arquivos do XenonRecomp (`ppc_context.h`,
+  simde, libmspack, o harness `tests/recomp`) usa `LR_XENONRECOMP_DIR`. O hash dos patches entra em
+  `LR_XENONRECOMP_COMMIT` (`+patches:<hash>`), a impressão digital das etapas `analyse` e `recompile`. O fluxo para
+  editar o recompilador está em `docs/development.md` (branch local `legacyrecomp`, `-DLR_XENONRECOMP_APPLY_PATCHES=OFF`,
+  regenerar os patches).
+- Conteúdo (10 patches, todos em `XenonRecomp/recompiler.cpp`, cada um coberto por `tests/recomp`): `bdzf`, `bso`,
+  `bns`, `bdnzt` e a correção do `bdnzf`; loads/stores com update (`lfsu`, `lfsux`, `stfsu`, `stfsux`, `lhzu`, `sthu`,
+  `lbzux`, `lhzux`, `lhau`, `lwzux`, `ldux`, `lfdu`, `lfdux`, `stbux`, `sthux`, `stdux`, `stfdu`), `lhbrx`, `lvehx`;
+  `eqv`, `subfze`, `addc`, `addme`, `mulhd`; VMX/VMX128 `vsel128`, `vmaxuh`, `vminuh`, `vadduhs`, `vsubuws`,
+  `vavguw`, `vslh`, `vrlw`/`vrlw128`, `vnor`/`vnor128`, `vcmpequh`, `vcmpgtuw`, `vpkswss`, `vpkuwum`, `vpkuwus`,
+  `vpkuhum`, `vpkuhus` (e as formas 128), `vsl`, `vslo`/`vslo128`, `vctuxs`/`vcfpuxws128`; e o `vpkd3d128` FLOAT16_4.
+- Crédito: várias dessas instruções seguem o PR #60 do upstream, de Mystixor (MIT); os commits dizem quais. Onde o
+  PR erra, divergimos: `mulhd` usa produto de 128 bits (o PR multiplica em 64), `lfdu`/`lfdux` escrevem no FPR (o PR
+  escrevia no GPR) e `vnor` com vA == vB dá o complemento (o PR zerava).
+- `bdnzf`: o upstream supunha sempre o bit `eq` ("todas as instruções do jogo fazem isso", válido para o jogo do
+  UnleashedRecomp), o que geraria código errado em silêncio para qualquer outro bit; agora o BI é decodificado
+  inteiro (campo BI/4, bit BI%4).
+- FLOAT16_4: os 20 sites do jogo são todos `pack=3 shift=0` (classificados com `tools/vpkd3d_sites.py` sobre o dump
+  da imagem). Implementamos a tabela inteira de permutação do Xenia (`InstrEmit_vpkd3d128`: pack 1, 2 e 3, shifts 0 a
+  3) e corrigimos vD == vB com shift diferente de 0, que sobrescrevia a fonte antes de lê-la toda. A conversão de
+  meia precisão em si não mudou.
+- Por quê: um repositório publicado não pode apontar para um commit de submódulo que ninguém consegue buscar, e os
+  patches deixam explícito o que é nosso em cima do upstream.
+- Custo se errado: atualizar o upstream exige reaplicar os patches (`git am` na branch local e regenerar); o
+  configure passa a precisar do `git` (já exigido pelo container e pelo build do AppImage). Se o upstream aceitar
+  instruções equivalentes, os patches correspondentes saem.

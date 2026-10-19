@@ -3,3 +3,5 @@
 *.sh text eol=lf
 tools/dev/Dockerfile text eol=lf
 *.py text eol=lf
+# LegacyRecomp patches to XenonRecomp: exact bytes (LF, as `git format-patch` wrote them), never converted.
+thirdparty/patches/** -text

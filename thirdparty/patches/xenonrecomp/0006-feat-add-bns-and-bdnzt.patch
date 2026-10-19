@@ -1,0 +1,38 @@
+From 6aa868456796a46dfdd60d09ec8e7131f8367d61 Mon Sep 17 00:00:00 2001
+From: Kauan Turcato Storto <159664484+KauanDev1@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 19:54:17 -0400
+Subject: [PATCH 06/10] feat: add bns and bdnzt
+
+bns is the conditional-branch helper on !so; bdnzt decrements CTR and
+branches while it is non-zero and the BI bit is set, decoding BI like
+bdnzf/bdzf.
+
+bdnzt follows the approach of hedge-dev/XenonRecomp PR #60 by Mystixor
+(MIT).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ XenonRecomp/recompiler.cpp | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
+index 1482dc3..e5ed787 100644
+--- a/XenonRecomp/recompiler.cpp
++++ b/XenonRecomp/recompiler.cpp
+@@ -701,6 +701,16 @@ bool Recompiler::Recompile(
+         printConditionalBranch(false, "so");
+         break;
+ 
++    case PPC_INST_BNS:
++        printConditionalBranch(true, "so");
++        break;
++
++    case PPC_INST_BDNZT:
++        // Credit: based on the approach of hedge-dev/XenonRecomp PR #60 by Mystixor
++        println("\t--{}.u64;", ctr());
++        println("\tif ({}.u32 != 0 && {}.{}) goto loc_{:X};", ctr(), cr(insn.operands[0] / 4), crBit(insn.operands[0]), insn.operands[1]);
++        break;
++
+     case PPC_INST_BEQ:
+         printConditionalBranch(false, "eq");
+         break;

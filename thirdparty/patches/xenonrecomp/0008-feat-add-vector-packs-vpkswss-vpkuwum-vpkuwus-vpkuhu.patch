@@ -1,0 +1,82 @@
+From c8d11ed0c152abc2b49c70880d219a556e3f1f2b Mon Sep 17 00:00:00 2001
+From: Kauan Turcato Storto <159664484+KauanDev1@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 19:55:38 -0400
+Subject: [PATCH 08/10] feat: add vector packs vpkswss, vpkuwum, vpkuwus,
+ vpkuhum, vpkuhus (and their 128 forms)
+
+vpkswss saturates with packs_epi32 like the existing vpkshus. The
+unsigned packs truncate (modulo) or clamp (saturate) each source lane
+into vTemp, vB in the low host lanes and vA in the high ones (the
+register is stored reversed), then copy to vD so vD may alias a source.
+
+vpkswss follows hedge-dev/XenonRecomp PR #60 by Mystixor (MIT).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ XenonRecomp/recompiler.cpp | 53 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 53 insertions(+)
+
+diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
+index bbe9e44..7cdbacc 100644
+--- a/XenonRecomp/recompiler.cpp
++++ b/XenonRecomp/recompiler.cpp
+@@ -2280,6 +2280,59 @@ bool Recompiler::Recompile(
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_packus_epi16(simde_mm_load_si128((simde__m128i*){}.s16), simde_mm_load_si128((simde__m128i*){}.s16)));", v(insn.operands[0]), v(insn.operands[2]), v(insn.operands[1]));
+         break;
+ 
++    case PPC_INST_VPKSWSS:
++    case PPC_INST_VPKSWSS128:
++        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_packs_epi32(simde_mm_load_si128((simde__m128i*){}.s32), simde_mm_load_si128((simde__m128i*){}.s32)));", v(insn.operands[0]), v(insn.operands[2]), v(insn.operands[1]));
++        break;
++
++    // Unsigned packs: vA fills the guest's high half of vD, i.e. the upper host lanes (the register is stored
++    // reversed). Built in vTemp because vD may alias vA or vB.
++    case PPC_INST_VPKUWUM:
++    case PPC_INST_VPKUWUM128:
++    case PPC_INST_VPKUWUS:
++    case PPC_INST_VPKUWUS128:
++    {
++        const bool saturate = id == PPC_INST_VPKUWUS || id == PPC_INST_VPKUWUS128;
++        for (size_t i = 0; i < 4; i++)
++        {
++            if (saturate)
++            {
++                println("\t{0}.u16[{1}] = {2}.u32[{3}] > 0xFFFF ? 0xFFFF : uint16_t({2}.u32[{3}]);", vTemp(), i, v(insn.operands[2]), i);
++                println("\t{0}.u16[{1}] = {2}.u32[{3}] > 0xFFFF ? 0xFFFF : uint16_t({2}.u32[{3}]);", vTemp(), i + 4, v(insn.operands[1]), i);
++            }
++            else
++            {
++                println("\t{}.u16[{}] = uint16_t({}.u32[{}]);", vTemp(), i, v(insn.operands[2]), i);
++                println("\t{}.u16[{}] = uint16_t({}.u32[{}]);", vTemp(), i + 4, v(insn.operands[1]), i);
++            }
++        }
++        println("\t{} = {};", v(insn.operands[0]), vTemp());
++        break;
++    }
++
++    case PPC_INST_VPKUHUM:
++    case PPC_INST_VPKUHUM128:
++    case PPC_INST_VPKUHUS:
++    case PPC_INST_VPKUHUS128:
++    {
++        const bool saturate = id == PPC_INST_VPKUHUS || id == PPC_INST_VPKUHUS128;
++        for (size_t i = 0; i < 8; i++)
++        {
++            if (saturate)
++            {
++                println("\t{0}.u8[{1}] = {2}.u16[{3}] > 0xFF ? 0xFF : uint8_t({2}.u16[{3}]);", vTemp(), i, v(insn.operands[2]), i);
++                println("\t{0}.u8[{1}] = {2}.u16[{3}] > 0xFF ? 0xFF : uint8_t({2}.u16[{3}]);", vTemp(), i + 8, v(insn.operands[1]), i);
++            }
++            else
++            {
++                println("\t{}.u8[{}] = uint8_t({}.u16[{}]);", vTemp(), i, v(insn.operands[2]), i);
++                println("\t{}.u8[{}] = uint8_t({}.u16[{}]);", vTemp(), i + 8, v(insn.operands[1]), i);
++            }
++        }
++        println("\t{} = {};", v(insn.operands[0]), vTemp());
++        break;
++    }
++
+     case PPC_INST_VREFP:
+     case PPC_INST_VREFP128:
+         // TODO: see if we can use rcp safely

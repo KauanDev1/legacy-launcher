@@ -17,7 +17,9 @@ include(CTest)
 
 # XenonRecomp's bundled fmt would otherwise add its headers/library to `cmake --install`.
 set(FMT_INSTALL OFF CACHE BOOL "Install fmt (bundled by XenonRecomp)" FORCE)
-add_subdirectory(thirdparty/XenonRecomp)
+# XenonRecomp = upstream submodule + thirdparty/patches/xenonrecomp (cmake/LrXenonRecompPatches.cmake).
+include(cmake/LrXenonRecompPatches.cmake)
+add_subdirectory(${LR_XENONRECOMP_DIR} ${CMAKE_BINARY_DIR}/thirdparty/XenonRecomp)
 add_subdirectory(thirdparty/Catch2)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/Catch2/extras")
 

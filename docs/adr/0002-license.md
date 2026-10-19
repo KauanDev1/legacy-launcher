@@ -75,7 +75,10 @@ licenças e, por isso, carregam as obrigações combinadas de todos eles:
 - **GPL-2.0-or-later (desmontador do binutils)**: as ferramentas `XenonAnalyse` e `XenonRecomp` são, como
   obras combinadas, GPL-2.0-or-later. Cada release binária leva o texto da GPL-2.0 e o código-fonte
   correspondente dessas ferramentas. A pasta `thirdparty/XenonRecomp/thirdparty/disasm/` não traz um
-  arquivo `COPYING`, então o texto da GPL-2.0 é fornecido por nós.
+  arquivo `COPYING`, então o texto da GPL-2.0 é fornecido por nós. O `XenonRecomp` distribuído é compilado
+  com os nossos patches (`thirdparty/patches/xenonrecomp/`, MIT, aplicados no configure; ADR 0004, M7); eles
+  são arquivos rastreados do repositório e entram no arquivo de código-fonte, que assim continua sendo o
+  código correspondente.
 - **BSD-3-Clause (código do Xenia no XenonUtils)**: cada release binária reproduz o copyright do Xenia e o
   texto da licença (`packaging/appimage/licenses/xenia-LICENSE`) junto da documentação.
 - **Avisos dos demais componentes** (MIT, BSD-2-Clause, zlib, OFL, Unlicense, ISC): os textos de licença

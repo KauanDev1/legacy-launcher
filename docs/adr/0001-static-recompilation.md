@@ -21,7 +21,8 @@ Usamos recompilação estática com o **XenonRecomp** de hedge-dev (MIT), o mesm
 O XenonRecomp entra como submódulo em `thirdparty/XenonRecomp`, fixado por commit
 (`ddd128bcca99fe8bfbb99bea583c972351fa6ace`, branch `main` na data desta ADR). Os submódulos de
 `thirdparty/` (XenonRecomp com tomlplusplus, fmt e xxHash embutidos; Catch2 v3.16.1; imgui) só mudam por
-PR dedicado.
+PR dedicado. Desde o M2 o XenonRecomp continua fixado em `ddd128b`, mas o build aplica por cima as mudanças do
+LegacyRecomp guardadas em `thirdparty/patches/xenonrecomp/` (instruções que faltavam e correções; ADR 0004, M7).
 
 O pipeline roda na máquina do usuário (`doctor`, `extract`, `verify`, `patch`, `analyse`, `recompile`,
 `build`; ver `docs/pipeline.md`). Nenhum código ou dado do jogo é distribuído: o C++ gerado e o executável
@@ -34,7 +35,8 @@ O pipeline roda na máquina do usuário (`doctor`, `extract`, `verify`, `patch`,
 - O runtime precisa implementar cada importação do kernel que o jogo usa (459 no total); importação sem
   implementação aborta com código 3 (`UnimplementedImport`). Esse é o trabalho do M2.
 - Limitações do XenonRecomp aparecem como instruções não reconhecidas no código gerado (ver
-  `docs/roadmap.md`) e precisam de correção upstream ou patch nosso.
+  `docs/roadmap.md`) e precisam de correção upstream ou patch nosso (hoje: os patches de
+  `thirdparty/patches/xenonrecomp/`).
 - Endereços específicos da versão (helpers de prólogo/epílogo, jump tables) vêm de engenharia reversa
   (`docs/reverse-engineering/`) e ficam em `config/minecraft-tu1/recomp.toml`.
 - Trocar de abordagem depois (emulação) descartaria `pipeline/` e `runtime/kernel`, mas manteria

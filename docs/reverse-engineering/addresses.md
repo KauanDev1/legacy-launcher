@@ -143,7 +143,31 @@ de `switch` fora da função vira `return;`): `PPC_IMAGE_BASE 0x82000000`,
 `PPC_IMAGE_SIZE 0x32D0000`, `PPC_CODE_BASE 0x82200000`, `PPC_CODE_SIZE 0x96428C`; 219 arquivos
 (215 `ppc_recomp.*.cpp`, ~162 MB), 55 343 símbolos (459 importações `__imp__*`), 221 `switch`.
 
-Avisos que restam (não fatais, afetam a fase de runtime): 3 279 "Unrecognized instruction" — instruções
-que o XenonRecomp `ddd128b` ainda não implementa (as mais frequentes: `bdzf` 754, `stfsu` 507, `lfsu` 350,
-`vsel128` 253, `lhzu` 219, `sthu` 211, `eqv` 94, `subfze` 65, `bso` 65, `lfsux` 63) — e 20
-"Unexpected float16_4 pack instruction". As funções afetadas ficam incompletas no C++ gerado.
+### Instruções que o XenonRecomp não reconhecia (M2, Tarefas 2 a 7)
+
+Contagens de `python3 -I tools/recomp_warnings.py work/logs/recompile.log` (só contagens; endereços apenas
+dos sites float16_4). Cada aviso deixava a função afetada incompleta no C++ gerado.
+
+| Momento | "Unrecognized instruction" | Mnemônicos | "Unexpected float16_4 pack" |
+|---|---|---|---|
+| M1, XenonRecomp `ddd128b` sem patches | 3 279 | `bdzf` 754, `stfsu` 507, `lfsu` 350, `vsel128` 253, `lhzu` 219, `sthu` 211, `eqv` 94, `subfze` 65, `bso` 65, `lfsux` 63, ... | 20 |
+| Depois das Tarefas 2 a 5 (patches 0001 a 0003) | 683 | 37 (tabela abaixo) | 20 |
+| Depois da Tarefa 7 (patches 0001 a 0010) | **0** | — | **0** |
+
+Os 683 do início da Tarefa 7, por mnemônico: `vmaxuh` 60, `addc` 48, `addme` 48, `vpkswss128` 48, `vslo128` 48,
+`lhzux` 47, `vadduhs` 42, `vcfpuxws128` 40, `vminuh` 40, `vpkuwum128` 35, `sthux` 23, `stfdu` 21, `vsl` 18,
+`vpkuwus128` 17, `vcmpequh` 16, `mulhd` 14, `lbzux` 10, `lfdu` 9, `lwzux` 9, `stbux` 9, `vpkuhum128` 8,
+`vpkuhus128` 8, `bns` 6, `lfdux` 6, `lhbrx` 6, `stdux` 6, `vctuxs` 6, `vnor128` 5, `vsubuws` 5, `lhau` 4,
+`lvehx` 4, `vcmpgtuw` 4, `vslh` 4, `ldux` 3, `vrlw128` 3, `bdnzt` 2, `vavguw` 1. Todos foram implementados
+(nenhum ficou de fora da cauda longa); ver ADR 0004, M7.
+
+Sites `vpkd3d128` FLOAT16_4 (classificados por `python3 -I tools/vpkd3d_sites.py <dump> --log
+work/logs/recompile.log`, que imprime só os campos decodificados): todos os 20 são `pack=3 shift=0`, em
+0x82467584, 0x824675F8, 0x82467624, 0x82467650, 0x8246770C, 0x82467710, 0x82467714, 0x82467728, 0x82467734,
+0x824677B0, 0x82467CEC, 0x82467FB4, 0x82467FE0, 0x82467FF0, 0x82468004, 0x8246801C, 0x8246802C, 0x82468058,
+0x8246806C e 0x82468110 (todos entre 0x82467584 e 0x82468110). Pela tabela do Xenia, `pack=3` com shift 0 grava `XY` e
+`ZW` nas palavras z e w de vD, como `pack=2`; o patch 0010 implementa a tabela inteira. Confirmado por: execução
+da ferramenta sobre a imagem carregada (Tarefa 7); revisão no Ghidra não feita.
+
+Com os patches, a recompilação termina sem nenhuma linha de aviso além do contador (`unrecognized
+instructions: 0`).

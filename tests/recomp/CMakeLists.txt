@@ -15,7 +15,7 @@ set(LR_RECOMP_GENERATED
 add_custom_command(OUTPUT ${LR_RECOMP_GENERATED}
   COMMAND lr_gen_recomp_fixture ${LR_RECOMP_GEN}
   COMMAND ${CMAKE_COMMAND} -DXENON=$<TARGET_FILE:XenonRecomp>
-          -DCONTEXT_H=${CMAKE_SOURCE_DIR}/thirdparty/XenonRecomp/XenonUtils/ppc_context.h -DDIR=${LR_RECOMP_GEN}
+          -DCONTEXT_H=${LR_XENONRECOMP_DIR}/XenonUtils/ppc_context.h -DDIR=${LR_RECOMP_GEN}
           -P ${CMAKE_CURRENT_SOURCE_DIR}/run_xenonrecomp.cmake
   DEPENDS lr_gen_recomp_fixture XenonRecomp ${CMAKE_CURRENT_SOURCE_DIR}/run_xenonrecomp.cmake
           ${CMAKE_CURRENT_SOURCE_DIR}/cases.h
@@ -23,7 +23,7 @@ add_custom_command(OUTPUT ${LR_RECOMP_GENERATED}
 
 add_executable(lr_recomp_tests test_recomp_instructions.cpp ${LR_RECOMP_GENERATED})
 target_include_directories(lr_recomp_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${LR_RECOMP_OUT}
-  ${CMAKE_SOURCE_DIR}/thirdparty/XenonRecomp/thirdparty/simde)
+  ${LR_XENONRECOMP_DIR}/thirdparty/simde)
 target_link_libraries(lr_recomp_tests PRIVATE lr_runtime_core lr_common Catch2::Catch2WithMain)
 # Generated code gets the game template's flags (src/runtime/template/CMakeLists.txt), never -Werror/sanitizers.
 set_source_files_properties(${LR_RECOMP_OUT}/ppc_recomp.0.cpp ${LR_RECOMP_OUT}/ppc_func_mapping.cpp PROPERTIES

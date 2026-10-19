@@ -49,3 +49,35 @@ Para os testes de integração, defina `LEGACYRECOMP_ISO` no host; o script mont
 ```
 LEGACYRECOMP_ISO=<caminho no host>/jogo.iso tools/dev/container.sh test -L integration
 ```
+
+## Alterar o XenonRecomp (patches do LegacyRecomp)
+
+O submódulo `thirdparty/XenonRecomp` fica fixado no `main` do upstream (hedge-dev, `ddd128b`). As nossas
+mudanças no recompilador (instruções novas, correções) ficam como arquivos `git format-patch` em
+`thirdparty/patches/xenonrecomp/NNNN-*.patch` (ADR 0004, M7). No configure, `cmake/LrXenonRecompPatches.cmake`
+copia o submódulo para `build/<preset>/_deps/XenonRecomp-patched`, aplica os patches nessa cópia (com
+`git apply`) e compila a cópia; o checkout do submódulo nunca é alterado. Os patches são reaplicados quando
+um deles muda ou quando muda o original de um arquivo que eles tocam. O hash dos patches entra na impressão
+digital das etapas `analyse` e `recompile` (`LR_XENONRECOMP_COMMIT`), então um patch novo invalida o cache
+da instalação.
+
+Para editar o recompilador:
+
+```
+cd thirdparty/XenonRecomp
+git switch legacyrecomp            # branch local = ddd128b + os patches (crie com `git am` se não existir)
+#   ... edite, e configure o build com os patches desligados (já estão no checkout):
+cmake --preset dev -DLR_XENONRECOMP_APPLY_PATCHES=OFF      # no container: dentro de `container.sh shell`
+#   ... teste-falha-implementa-passa com tests/recomp (`ctest --preset dev -L recomp`), um commit por família
+rm -f ../patches/xenonrecomp/*.patch
+git format-patch --no-signature -o ../patches/xenonrecomp ddd128b..legacyrecomp
+git switch --detach ddd128b        # volta ao commit fixado
+cd ../..
+cmake --preset dev -DLR_XENONRECOMP_APPLY_PATCHES=ON
+git add thirdparty/patches/xenonrecomp    # o gitlink do submódulo continua em ddd128b
+```
+
+Para recriar a branch local num clone novo: `git -C thirdparty/XenonRecomp switch -c legacyrecomp ddd128b` e
+`git -C thirdparty/XenonRecomp am ../patches/xenonrecomp/*.patch`. Os patches mantêm autoria e créditos (o
+PR #60 do upstream, de Mystixor, MIT). Um build com o submódulo fora de `ddd128b` e os patches ligados falha
+no configure com uma mensagem que explica as duas saídas.

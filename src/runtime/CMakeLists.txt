@@ -24,6 +24,6 @@ set_target_properties(lr_runtime_core_staged PROPERTIES
   ARCHIVE_OUTPUT_DIRECTORY "${LR_RESOURCES_DIR}/runtime/lib")
 
 # lzx.cpp includes libmspack headers (lzxd.c itself is already inside libXenonUtils.a).
-set(LR_MSPACK_INCLUDE "${CMAKE_SOURCE_DIR}/thirdparty/XenonRecomp/thirdparty/libmspack/libmspack/mspack")
+set(LR_MSPACK_INCLUDE "${LR_XENONRECOMP_DIR}/thirdparty/libmspack/libmspack/mspack")
 target_include_directories(lr_runtime_core PRIVATE ${LR_MSPACK_INCLUDE})
 target_include_directories(lr_runtime_core_staged PRIVATE ${LR_MSPACK_INCLUDE})

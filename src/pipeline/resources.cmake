@@ -37,7 +37,7 @@ foreach(_font Inter-Regular.ttf Inter-SemiBold.ttf Inter-Bold.ttf JetBrainsMono-
   list(APPEND _lr_staged "${_dst}")
 endforeach()
 
-set(_ctx_src "${_lr_src_root}/thirdparty/XenonRecomp/XenonUtils/ppc_context.h")
+set(_ctx_src "${LR_XENONRECOMP_DIR}/XenonUtils/ppc_context.h")
 set(_ctx_dst "${LR_RESOURCES_DIR}/tools/ppc_context.h")
 add_custom_command(OUTPUT "${_ctx_dst}"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_ctx_src}" "${_ctx_dst}"
@@ -70,7 +70,7 @@ endforeach()
 
 # simde: all headers plus its license, one copy_if_different per directory (CMake 3.25 lacks
 # copy_directory_if_different); re-run only when one of its files changes, and unchanged files keep their mtime.
-set(_lr_simde_src "${_lr_src_root}/thirdparty/XenonRecomp/thirdparty/simde")
+set(_lr_simde_src "${LR_XENONRECOMP_DIR}/thirdparty/simde")
 file(GLOB_RECURSE _lr_simde_files CONFIGURE_DEPENDS RELATIVE "${_lr_simde_src}" "${_lr_simde_src}/*.h")
 list(APPEND _lr_simde_files COPYING)
 set(_lr_simde_dirs "")
@@ -120,4 +120,10 @@ if(NOT _lr_git_rc EQUAL 0 OR LR_XENONRECOMP_COMMIT STREQUAL "")
   set(LR_XENONRECOMP_COMMIT "unknown")
   message(WARNING "Could not read the XenonRecomp submodule commit (git -C thirdparty/XenonRecomp rev-parse HEAD). "
                   "The analyse/recompile stage caches will not notice a XenonRecomp update; use --force for those stages.")
+endif()
+# The LegacyRecomp patches (cmake/LrXenonRecompPatches.cmake) change the recompiler too: a new or edited patch
+# must invalidate the caches even when the submodule commit stays the same.
+if(NOT LR_XENONRECOMP_PATCH_HASH STREQUAL "none")
+  string(SUBSTRING "${LR_XENONRECOMP_PATCH_HASH}" 0 16 _lr_patch_hash)
+  string(APPEND LR_XENONRECOMP_COMMIT "+patches:${_lr_patch_hash}")
 endif()

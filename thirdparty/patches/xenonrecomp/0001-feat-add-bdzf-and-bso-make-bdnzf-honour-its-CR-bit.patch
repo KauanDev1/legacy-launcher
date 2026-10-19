@@ -1,0 +1,54 @@
+From 7787280e7fb7d686bbc7ff235d771cc195a4c1c8 Mon Sep 17 00:00:00 2001
+From: Kauan Turcato Storto <159664484+KauanDev1@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 20:43:33 -0400
+Subject: [PATCH 01/10] feat: add bdzf and bso, make bdnzf honour its CR bit
+
+bdnzf previously assumed the eq bit; it now decodes the full BI operand
+(CR field BI/4, bit lt/gt/eq/so by BI%4). bdzf follows the same approach
+as hedge-dev/XenonRecomp PR #60 by Mystixor (MIT); bso reuses the
+conditional-branch helper.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ XenonRecomp/recompiler.cpp | 20 ++++++++++++++++++--
+ 1 file changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
+index fa91527..f54a80e 100644
+--- a/XenonRecomp/recompiler.cpp
++++ b/XenonRecomp/recompiler.cpp
+@@ -404,6 +404,12 @@ bool Recompiler::Recompile(
+             }
+         };
+ 
++    auto crBit = [](size_t bi) -> const char*
++        {
++            static constexpr const char* bits[] = { "lt", "gt", "eq", "so" };
++            return bits[bi % 4];
++        };
++
+     auto printConditionalBranch = [&](bool not_, const std::string_view& cond)
+         {
+             if (insn.operands[1] < fn.base || insn.operands[1] >= fn.base + fn.size)
+@@ -663,9 +669,19 @@ bool Recompiler::Recompile(
+         break;
+ 
+     case PPC_INST_BDNZF:
+-        // NOTE: assuming eq here as a shortcut because all the instructions in the game do that
++        // operands[0] is the full BI: CR field BI / 4, bit {lt, gt, eq, so}[BI % 4]
++        println("\t--{}.u64;", ctr());
++        println("\tif ({}.u32 != 0 && !{}.{}) goto loc_{:X};", ctr(), cr(insn.operands[0] / 4), crBit(insn.operands[0]), insn.operands[1]);
++        break;
++
++    case PPC_INST_BDZF:
++        // Credit: based on the approach of hedge-dev/XenonRecomp PR #60 by Mystixor
+         println("\t--{}.u64;", ctr());
+-        println("\tif ({}.u32 != 0 && !{}.eq) goto loc_{:X};", ctr(), cr(insn.operands[0] / 4), insn.operands[1]);
++        println("\tif ({}.u32 == 0 && !{}.{}) goto loc_{:X};", ctr(), cr(insn.operands[0] / 4), crBit(insn.operands[0]), insn.operands[1]);
++        break;
++
++    case PPC_INST_BSO:
++        printConditionalBranch(false, "so");
+         break;
+ 
+     case PPC_INST_BEQ:
