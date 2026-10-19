@@ -88,7 +88,7 @@ TEST_CASE("scan_switch_tables: virtual calls are ignored, unsupported guards are
   // Virtual call: no bound check, no indexed load -> neither table nor unresolved.
   img.code(kBase, {kBlr, lwz(11, 3, 0), lwz(0, 11, 4), mtctr(0), kBctr});
   // Bound check followed by an instruction the evaluator does not model.
-  img.code(kBase + 0x40, {cmplwi(6, 11, 4), bgt(6, 0x40), mulli(0, 11, 4), lis(12, 0x8200), addi(12, 12, 0x800),
+  img.code(kBase + 0x40, {cmplwi(6, 11, 4), bgt(6, 0x200), mulli(0, 11, 4), lis(12, 0x8200), addi(12, 12, 0x800),
                           lwzx(0, 12, 0), mtctr(0), kBctr});
   // Table entry outside the code range -> unresolved, not a bogus table.
   img.code(kBase + 0x80, {cmplwi(6, 11, 0), bgt(6, 0x40), lis(12, 0x8200), slwi(0, 11, 2), addi(12, 12, 0xA00),
@@ -533,7 +533,8 @@ TEST_CASE("scan_switch_tables: inverted guard (ble over an unconditional b to th
     img.word(kBase + 0x200, b_to(kBase + 0x200, kBase + 0x10));
     auto scan = scan_switch_tables(img.bytes, kBase, kCode);
     CHECK(scan.tables.empty());
-    CHECK(scan.unresolved == std::vector<uint32_t>{kBase + 0x34});
+    CHECK(scan.unresolved.empty());
+    CHECK(scan.joined == std::vector<uint32_t>{kBase + 0x34});
   }
   SECTION("the skipped branch is not a bound check") {
     FakeImage img;
@@ -667,4 +668,168 @@ TEST_CASE("fit_switch_functions splits leaf functions at padding on both sides",
   CHECK(fit.dropped_functions.empty());
   CHECK(fit.functions == std::vector<FunctionRange>{{kBase + 0x50, 0x74, false}, {kBase + 0xC8, 0x128, false}});
   CHECK(fit.tables.size() == 2);
+}
+
+namespace {
+
+uint32_t cmpwi(uint32_t crf, uint32_t r, int32_t imm) {
+  return (11u << 26) | (crf << 23) | (r << 16) | (static_cast<uint32_t>(imm) & 0xFFFF);
+}
+// bc bo, bi, target (relative, no link).
+uint32_t bc_to(uint32_t bo, uint32_t bi, uint32_t from, uint32_t to) {
+  return (16u << 26) | (bo << 21) | (bi << 16) | ((to - from) & 0xFFFC);
+}
+
+// Resolves the fixture's second switch (0x48) after a mutation, with the tables found on the
+// unmutated code: only the dataflow's own reasoning decides.
+std::vector<SwitchTable> resolve_after(void (*mutate)(DominatedFixture&)) {
+  DominatedFixture f;
+  const auto scan = scan_switch_tables(f.img.bytes, kBase, kCode);
+  mutate(f);
+  const std::vector<uint32_t> site = {kBase + 0x48};
+  return resolve_dominated_switches(f.img.bytes, kBase, kCode, f.pdata, scan.tables, site);
+}
+
+}  // namespace
+
+TEST_CASE("resolve_dominated_switches: only an unsigned compare of the index on the right CR bit bounds it", "[unit]") {
+  CHECK(resolve_after([](DominatedFixture&) {}).size() == 1);  // control
+  SECTION("signed compare (cmpwi)") {
+    CHECK(resolve_after([](DominatedFixture& f) { f.img.word(kBase, cmpwi(6, 9, 2)); }).empty());
+  }
+  SECTION("blt instead of bgt") {
+    CHECK(resolve_after([](DominatedFixture& f) { f.img.word(kBase + 4, bc_to(12, 6 * 4 + 0, kBase + 4, kBase + 0x80)); }).empty());
+  }
+  SECTION("bge instead of bgt") {
+    CHECK(resolve_after([](DominatedFixture& f) { f.img.word(kBase + 4, bc_to(4, 6 * 4 + 0, kBase + 4, kBase + 0x80)); }).empty());
+  }
+  SECTION("ble instead of bgt (in-range edge is the taken one, not the fall-through)") {
+    CHECK(resolve_after([](DominatedFixture& f) { f.img.word(kBase + 4, bc_to(4, 6 * 4 + 1, kBase + 4, kBase + 0x80)); }).empty());
+  }
+  SECTION("compare in cr7, bgt on cr6") {
+    CHECK(resolve_after([](DominatedFixture& f) { f.img.word(kBase, cmplwi(7, 9, 2)); }).empty());
+  }
+  SECTION("compare of another register in the right CR field") {
+    CHECK(resolve_after([](DominatedFixture& f) { f.img.word(kBase, cmplwi(6, 10, 2)); }).empty());
+  }
+  SECTION("ambiguous index: the target does not depend on any input register") {
+    CHECK(resolve_after([](DominatedFixture& f) { f.img.word(kBase + 0x30, li(10, 0)); }).empty());
+  }
+}
+
+TEST_CASE("resolve_dominated_switches: labels of dropped tables are entries", "[unit]") {
+  DominatedFixture f;
+  const auto scan = scan_switch_tables(f.img.bytes, kBase, kCode);
+  const std::vector<uint32_t> site = {kBase + 0x48};
+  CHECK(resolve_dominated_switches(f.img.bytes, kBase, kCode, f.pdata, scan.tables, site).size() == 1);
+  const std::vector<uint32_t> dropped = {kBase + 0x2C};
+  CHECK(resolve_dominated_switches(f.img.bytes, kBase, kCode, f.pdata, scan.tables, site, dropped).empty());
+}
+
+TEST_CASE("scan_switch_tables: another path joining after the compare disables the guard", "[unit]") {
+  SECTION("inverted guard: compare in cr7, ble on cr6") {
+    FakeImage img;
+    inverted_guard_switch(img);
+    img.word(kBase + 0x04, cmplwi(7, 11, kHalfCases - 1));
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(scan.tables.empty());
+  }
+  SECTION("inverted guard: branch between the compare and the ble") {
+    FakeImage img;
+    inverted_guard_switch(img);
+    img.word(kBase + 0x04, kNop);
+    img.code(kBase, {cmplwi(6, 11, kHalfCases - 1), kNop});  // cmplwi at 0x00, nop at 0x04 (joined)
+    img.word(kBase + 0x200, b_to(kBase + 0x200, kBase + 0x04));
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(scan.tables.empty());
+    CHECK(scan.joined == std::vector<uint32_t>{kBase + 0x34});
+  }
+  // bgt form: lis r12 (0x00); addi (0x04); cmplwi (0x08); bgt (0x0C); add (0x10); lhzx; add; mtctr; bctr (0x20)
+  auto build = [](FakeImage& img) {
+    img.code(kBase, {lis(12, 0x8200), addi(12, 12, 0x300), cmplwi(6, 11, kHalfCases - 1), bgt(6, 0x100),
+                     add(10, 11, 11), lhzx(0, 12, 10), add(0, 0, 12), mtctr(0), kBctr});
+    for (uint32_t v = 0; v < kHalfCases; ++v) half(img, kHalfTable + 2 * v, half_offset(v));
+  };
+  SECTION("bgt form: control") {
+    FakeImage img;
+    build(img);
+    CHECK(scan_switch_tables(img.bytes, kBase, kCode).tables.size() == 1);
+  }
+  SECTION("bgt form: branch onto the bgt") {
+    FakeImage img;
+    build(img);
+    img.word(kBase + 0x200, b_to(kBase + 0x200, kBase + 0x0C));
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(scan.tables.empty());
+    CHECK(scan.joined == std::vector<uint32_t>{kBase + 0x20});
+  }
+  SECTION("bgt form: branch between the bgt and the bctr") {
+    FakeImage img;
+    build(img);
+    img.word(kBase + 0x200, b_to(kBase + 0x200, kBase + 0x14));
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(scan.tables.empty());
+    CHECK(scan.joined == std::vector<uint32_t>{kBase + 0x20});
+  }
+}
+
+TEST_CASE("fit_switch_functions keeps the start when code after the padding branches back before it", "[unit]") {
+  LeafFixture f;  // bl -> 0x050; table base 0x060, labels 0x070..0x0B0
+  f.img.word(kBase + 0x54, kBlr);
+  f.img.word(kBase + 0x58, 0);                                 // "padding" below the table...
+  f.img.word(kBase + 0x90, b_to(kBase + 0x90, kBase + 0x50));  // ...but 0x090 loops back to 0x050
+  auto fit = fit_switch_functions(f.img.bytes, kBase, kCode, f.pdata, f.tables());
+  CHECK(fit.functions == std::vector<FunctionRange>{{kBase + 0x50, 0x1A0, false}});
+  CHECK(fit.dropped.empty());
+}
+
+namespace {
+
+// Loop whose latch re-checks the index and branches back into the table block, past the guard:
+//   0x00 cmplwi cr6, r11, 2; bgt cr6, 0x80
+//   0x08 lis r12; add r10, r11, r11; addi r12, r12, 0x3A0; lhzx r0, r12, r10; lis r9; add r0, r0, r9
+//   0x20 mtctr r0; bctr (0x24)                         -> labels 0x28, 0x30, 0x38
+//   0x28 lwz r11, 0(r3); b 0x40;  0x30 blr;  0x38 blr
+//   0x40 cmplwi cr6, r11, 2; ble cr6, 0x08 (back edge into the table block); blr
+struct LoopFixture {
+  FakeImage img;
+  std::vector<FunctionRange> pdata = {{kBase, 0x100, false}};
+  LoopFixture() {
+    img.code(kBase, {cmplwi(6, 11, 2), bgt(6, 0x7C), lis(12, 0x8200), add(10, 11, 11), addi(12, 12, 0x3A0),
+                     lhzx(0, 12, 10), lis(9, 0x8200), add(0, 0, 9), mtctr(0), kBctr, lwz(11, 3, 0),
+                     b_to(kBase + 0x2C, kBase + 0x40), kBlr, kNop, kBlr});
+    img.code(kBase + 0x40, {cmplwi(6, 11, 2), ble_to(6, kBase + 0x44, kBase + 0x08), kBlr});
+    img.word(kBase + 0x80, kBlr);
+    half(img, kBase + 0x3A0, 0x28);
+    half(img, kBase + 0x3A2, 0x30);
+    half(img, kBase + 0x3A4, 0x38);
+  }
+  std::vector<SwitchTable> resolve() const {
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(scan.tables.empty());
+    return resolve_dominated_switches(img.bytes, kBase, kCode, pdata, scan.tables, scan.joined);
+  }
+};
+
+}  // namespace
+
+TEST_CASE("resolve_dominated_switches proves a guard joined by a re-checked loop back edge", "[unit]") {
+  SECTION("latch re-checks the same bound") {
+    LoopFixture f;
+    auto t = f.resolve();
+    REQUIRE(t.size() == 1);
+    CHECK(t[0].base == kBase + 0x24);
+    CHECK(t[0].r == 11);
+    CHECK(t[0].labels == std::vector<uint32_t>{kBase + 0x28, kBase + 0x30, kBase + 0x38});
+  }
+  SECTION("latch checks a larger bound") {
+    LoopFixture f;
+    f.img.word(kBase + 0x40, cmplwi(6, 11, 5));
+    CHECK(f.resolve().empty());
+  }
+  SECTION("latch does not check") {
+    LoopFixture f;
+    f.img.word(kBase + 0x44, b_to(kBase + 0x44, kBase + 0x08));
+    CHECK(f.resolve().empty());
+  }
 }

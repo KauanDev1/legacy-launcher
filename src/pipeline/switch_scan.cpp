@@ -311,7 +311,7 @@ Targets branch_targets(const Memory& mem, std::span<const std::pair<uint32_t, ui
   return out;
 }
 
-enum class GuardStatus { None, Incomplete, Found };
+enum class GuardStatus { None, Incomplete, Joined, Found };
 
 // Looks backwards from the bctr at `addr` for "cmplwi crN, rI, max ... bgt crN" with only
 // straight-line code in between, or the inverted form "cmplwi crN, rI, max ... ble crN, +8;
@@ -340,7 +340,10 @@ std::optional<Guard> find_guard(const Memory& mem, uint32_t addr, GuardStatus& s
       // The table block starts at b_addr + 4: the ble must be its only way in, and nothing else may
       // land between it and the bctr.
       for (auto it = targets.lower_bound(b_addr + 4); it != targets.end() && it->first <= addr; ++it)
-        if (it->first != b_addr + 4 || it->second != b_addr - 4) return std::nullopt;
+        if (it->first != b_addr + 4 || it->second != b_addr - 4) {
+          status = GuardStatus::Joined;
+          return std::nullopt;
+        }
       g.skip_addr = b_addr;
       g.default_label = *relative_target(i, b_addr);
       i = *p;
@@ -366,6 +369,13 @@ std::optional<Guard> find_guard(const Memory& mem, uint32_t addr, GuardStatus& s
         g.index = ra(*c);
         g.max = uimm(*c);
         const uint32_t cmp_addr = baddr - 4u * static_cast<uint32_t>(j);
+        // Another path joining after the compare (before the guard branch, or for bgt between it and
+        // the bctr) would bring an unchecked index: no guard. (The inverted form checked its block above.)
+        const uint32_t join_end = g.skip_addr ? baddr : addr;
+        if (auto it = targets.upper_bound(cmp_addr); it != targets.end() && it->first <= join_end) {
+          status = GuardStatus::Joined;
+          return std::nullopt;
+        }
         g.aliases = find_aliases(mem, cmp_addr, g.index);
         g.window_start = hoist_start(mem, cmp_addr, g.index, g.aliases, targets, range_start);
         status = GuardStatus::Found;
@@ -454,6 +464,8 @@ SwitchScan scan_switch_tables(std::span<const uint8_t> image, uint32_t image_bas
       if (!guard) {
         if (auto t = masked_table(mem, addr, start, size)) {
           out.tables.push_back(std::move(*t));
+        } else if (status == GuardStatus::Joined && has_indexed_load(mem, addr)) {
+          out.joined.push_back(addr);
         } else if (status == GuardStatus::Incomplete && has_indexed_load(mem, addr)) {
           out.unresolved.push_back(addr);
         } else if (has_indexed_load(mem, addr) && has_lis(mem, addr)) {
@@ -557,12 +569,14 @@ SwitchFit fit_switch_functions(std::span<const uint8_t> image, uint32_t image_ba
     uint32_t end = gap_hi;
     if (auto bl_above = bl_targets.upper_bound(hi); bl_above != bl_targets.end() && *bl_above < end) end = *bl_above;
     // Padding separates functions: a zero word whose last non-zero predecessor is an unconditional
-    // branch, with no forward branch from the code before it reaching past it. The last such word
-    // below the table moves the start up, the first one after the last case ends the function;
-    // what lies beyond is another (pointer-only) function, not code of this one.
+    // branch, with no forward branch from the code before it reaching past it. The first one after
+    // the last case ends the function; the last one below the table moves the start up, unless code
+    // after it branches back to before it (then it is not a boundary). What lies beyond is another
+    // (pointer-only) function, not code of this one.
     {
       uint32_t reach = 0;  // furthest forward non-link branch target seen so far
       std::optional<uint32_t> last;  // last non-zero word
+      std::vector<uint32_t> below;  // boundary candidates below the table
       for (uint32_t a = gap_lo; a < end; a += 4) {
         auto w = mem.read(a, 4);
         if (!w) break;
@@ -573,9 +587,22 @@ SwitchFit fit_switch_functions(std::span<const uint8_t> image, uint32_t image_ba
         }
         if (!last || !is_unconditional(*last) || reach > a) continue;
         if (a < t.base) {
-          start = std::max(start, a + 4);
+          if (a >= start) below.push_back(a);
         } else if (a > std::max(hi, t.base)) {
           end = a;
+          break;
+        }
+      }
+      for (auto p = below.rbegin(); p != below.rend(); ++p) {
+        bool back = false;  // a branch from [p + 4, end) to [start, p]
+        for (uint32_t a = *p + 4; a < end && !back; a += 4) {
+          auto w = mem.read(a, 4);
+          if (!w) break;
+          auto tg = relative_target(*w, a);
+          back = tg && !(*w & 1) && *tg >= start && *tg <= *p;
+        }
+        if (!back) {
+          start = *p + 4;
           break;
         }
       }
@@ -781,7 +808,8 @@ std::vector<SwitchTable> resolve_dominated_switches(std::span<const uint8_t> ima
                                                     std::span<const std::pair<uint32_t, uint32_t>> code,
                                                     std::span<const FunctionRange> pdata,
                                                     std::span<const SwitchTable> known,
-                                                    std::span<const uint32_t> sites) {
+                                                    std::span<const uint32_t> sites,
+                                                    std::span<const uint32_t> extra_entries) {
   const Memory mem(image, image_base);
   std::vector<SwitchTable> out;
   if (sites.empty()) return out;
@@ -813,8 +841,11 @@ std::vector<SwitchTable> resolve_dominated_switches(std::span<const uint8_t> ima
     if (site >= f->start + f->size) continue;
     const uint32_t start = f->start, end = f->start + f->size;
 
-    // Interior entries: branches from outside, any call, labels of tables outside the function.
+    // Interior entries: branches from outside, any call, labels of tables outside the function or of
+    // dropped tables.
     std::set<uint32_t> entries;
+    for (uint32_t e : extra_entries)
+      if (e > start && e < end) entries.insert(e);
     for (auto it = branches.upper_bound(start); it != branches.end() && it->first < end; ++it) {
       const auto [src, link] = it->second;
       if (link || src < start || src >= end) entries.insert(it->first);

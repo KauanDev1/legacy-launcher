@@ -27,6 +27,9 @@ struct SwitchScan {
   // bound the compiler dropped (e.g. switch on an enum) or a call through a function-pointer array.
   // Needs a human look; XenonRecomp emits them as indirect calls.
   std::vector<uint32_t> unbounded;
+  // bctr sites with a bound check that another path joins after the compare (typically a loop back
+  // edge into the table block): the guard alone proves nothing; resolve_dominated_switches decides.
+  std::vector<uint32_t> joined;
 };
 
 // Finds `bctr` jump tables by evaluating the straight-line code between the bound check
@@ -80,22 +83,27 @@ SwitchFit fit_switch_functions(std::span<const uint8_t> image, uint32_t image_ba
                                std::span<const FunctionRange> pdata, std::vector<SwitchTable> tables,
                                std::span<const FunctionRange> manual = {});
 
-// Unguarded jump sites (`SwitchScan::unbounded`) whose index is bounded by a check in an earlier
+// Unguarded or joined jump sites (`SwitchScan::unbounded`, `SwitchScan::joined`) whose index is bounded by a check in an earlier
 // block of the same .pdata function (e.g. a second switch on the index of a guarded one). The index is
 // the only register the site's straight-line block reads that makes its CTR computable. A forward
 // dataflow over the function's control-flow graph (fall-through, relative branches, `known` tables'
 // labels) tracks an unsigned upper bound of that register, set on the fall-through of `bgt`/`bgtlr`
 // and the taken edge of `ble` after `cmplwi crN, rI, max`. The bound is lost on any write to the
-// register, any call, any unknown instruction, at the function entry and at every branch from
-// outside the function. The analysis gives up for the whole function on an absolute branch, a
-// conditional bcctr or a reachable unresolved indexed jump. After the labels are computed, the
+// register, any call, any unknown instruction, at the function entry, at every branch from
+// outside the function and at every label of a table outside it or in `extra_entries` (labels of
+// dropped tables: their jump may still land there). The analysis gives up for the whole function on
+// an absolute branch, a conditional bcctr or a reachable unresolved indexed jump. An unresolved
+// bctr counts as an indexed jump when its straight-line block (back to the previous branch, block-local
+// only) has an indexed load or a `lis`; without either it is taken as a tail call through a pointer
+// (virtual call), whose targets are other functions, and ends the path. After the labels are computed, the
 // dataflow is re-run with the new table's own edges and must still give the same bound (a case
 // that changes the index and loops back is caught). Labels must be 4-aligned inside the function.
 std::vector<SwitchTable> resolve_dominated_switches(std::span<const uint8_t> image, uint32_t image_base,
                                                     std::span<const std::pair<uint32_t, uint32_t>> code,
                                                     std::span<const FunctionRange> pdata,
                                                     std::span<const SwitchTable> known,
-                                                    std::span<const uint32_t> sites);
+                                                    std::span<const uint32_t> sites,
+                                                    std::span<const uint32_t> extra_entries = {});
 
 // Number of `tables` whose jump reads a relative entry (`lhzx`/`lbzx` in the straight-line code
 // before the table's bctr), for the analyse summary.

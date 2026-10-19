@@ -90,8 +90,12 @@ tempo de execução. Por isso a etapa `analyse` roda também `src/pipeline/switc
   ordem das instruções e dos `nop`; instruções que não tocam a cadeia (FPU, VMX/VMX128, stores) são
   ignoradas; cópias do índice com `mr` antes da guarda são seguidas.
 - Guarda invertida: `cmplwi crN, rI, max` + `ble crN, +8` + `b padrão`, com o bloco da tabela logo após o
-  `b`. Só vale se o `ble` for a única entrada desse bloco e nenhum outro desvio cair entre ele e o `bctr`;
-  senão o sítio fica "não resolvido". O rótulo padrão é o alvo do `b`.
+  `b`. O rótulo padrão é o alvo do `b`.
+- Junções: se algum desvio cai depois do `cmplwi` (até o `bgt`/`ble`; na forma `bgt`, até o `bctr`; na forma
+  invertida, no bloco da tabela vindo de outro lugar que não o `ble`), a guarda sozinha não prova nada —
+  outro caminho pode trazer um índice não conferido. O sítio vai para a análise de fluxo de dados do item
+  seguinte, que decide; se ela não provar o limite, fica "não resolvido". Típico: laço cujo fim confere o
+  índice de novo e salta de volta para o bloco da tabela, depois da guarda.
 - Sem guarda, aceita um índice limitado por máscara (`clrlwi`/`rlwinm ..., 31`/`andi.`) com `2^k` entradas.
 - A avaliação começa antes do `cmplwi`, no início do bloco linear, parando numa instrução que escreva o
   índice ou uma de suas cópias `mr` (ou numa instrução desconhecida), sem nunca passar para antes de um
@@ -105,16 +109,20 @@ tempo de execução. Por isso a etapa `analyse` roda também `src/pipeline/switc
   s)`. Mesmos critérios: limite por `cmplwi`/máscara, todo rótulo alinhado a 4 dentro da seção de código,
   no máximo 4096 casos. Sem limite, o sítio continua na lista "sem guarda" abaixo, a menos que o próximo
   item o resolva.
-- Limite num bloco anterior (`resolve_dominated_switches`, M3): um sítio sem guarda dentro de uma função do
+- Limite num bloco anterior (`resolve_dominated_switches`, M3): um sítio sem guarda (ou com guarda juntada) dentro de uma função do
   `.pdata` cujo bloco linear só sabe calcular o alvo com um registrador (o índice) é resolvido se uma
   análise de fluxo de dados no grafo da função provar um limite superior sem sinal para esse registrador.
   O limite nasce na saída "dentro da faixa" de `cmplwi crN, rI, max` (o caminho que não salta de `bgt`/
   `bgtlr`, ou o salto de `ble`) e se perde em qualquer escrita no registrador, chamada, instrução
-  desconhecida, na entrada da função e em todo desvio vindo de fora dela; arestas: queda, desvios
-  relativos e rótulos das tabelas já conhecidas. A função inteira é recusada se tiver desvio absoluto,
+  desconhecida, na entrada da função, em todo desvio vindo de fora dela e nos rótulos de tabelas de fora
+  dela ou descartadas; arestas: queda, desvios relativos e rótulos das tabelas já conhecidas. Só refinam o
+  limite `cmplwi` (sem sinal) do próprio registrador, no mesmo campo CR do desvio, e o bit `gt` com a
+  polaridade certa; `cmpwi`, `blt`/`bge`, outro campo CR ou outro registrador não refinam. Um `bctr` não
+  resolvido sem carga indexada nem `lis` no seu bloco linear é tomado como chamada de cauda por ponteiro. A função inteira é recusada se tiver desvio absoluto,
   `bcctr` condicional ou outro salto indexado não resolvido alcançável. Depois de calcular os rótulos, a
   análise roda de novo com as arestas da nova tabela, e o limite tem de se manter (um caso que muda o
-  índice e volta ao `switch` é recusado). Rótulos alinhados a 4 e dentro da função. Típico: um segundo
+  índice e volta ao `switch` é recusado). Rótulos alinhados a 4 e dentro da função. O índice precisa ser o
+  único registrador que torna o alvo calculável (ambíguo = recusado). Típico: um segundo
   `switch` sobre o mesmo índice de um primeiro, num bloco que é rótulo do primeiro. Os sítios do
   experimento conferidos com a ISO estão em "Sítios do experimento do M3" abaixo.
 - Resultado na imagem TU1: **223 tabelas mantidas** (7 348 rótulos, até 440 casos), todas com rótulos em
@@ -127,7 +135,7 @@ primeira palavra não nula após a função anterior do `.pdata`), fim = primeir
 rótulo, senão a próxima função do `.pdata` (descontando os 8 bytes de handler e o preenchimento). O
 preenchimento também separa funções (M3): uma palavra nula logo após um desvio incondicional, sem desvio
 anterior que salte além dela, sobe o início (a última abaixo da tabela) ou encerra a faixa (a primeira após o
-último rótulo). Sem isso a faixa engolia as funções minúsculas chamadas por ponteiro que vêm depois (ver
+último rótulo); a de baixo é ignorada se algum desvio depois dela voltar para antes dela. Sem isso a faixa engolia as funções minúsculas chamadas por ponteiro que vêm depois (ver
 `0x82A12650` abaixo). Na TU1 (M2):
 **38 funções folha**, gravadas em `work/analysis/functions.toml` e mescladas em `[main] functions` pela
 etapa `recompile` (entradas escritas à mão em `recomp.toml` têm prioridade); 31 das 38 começam num alvo de
@@ -139,13 +147,15 @@ descartadas — se sobrepõe outra faixa derivada ou uma entrada `functions` esc
 de que engoliu outra função ou um final compartilhado). Na TU1: **0 faixas rejeitadas**. Tabelas cujos
 rótulos saem da própria função do `.pdata` também são descartadas (não "consertadas").
 
-Contagem final na TU1 (M3, Tarefa 4): 224 tabelas encontradas (223 pela varredura linear, 1 pelo limite num
-bloco anterior), **223 mantidas**, 1 descartada (`0x8243C83C`), **41 funções folha** (eram 38: o preenchimento
+Contagem final na TU1 (M3, Tarefa 4): 224 tabelas encontradas (217 pela varredura linear, 7 provadas pela
+análise de fluxo de dados: `0x8294E434` e seis guardas juntadas por laços em `0x825DEBF4`, `0x825E6D64`,
+`0x825E8EEC`, `0x829D94A4`, `0x829EA93C` e `0x829EDD14`, cada uma com o mesmo número de casos da guarda),
+**223 mantidas**, 1 descartada (`0x8243C83C`), **41 funções folha** (eram 38: o preenchimento
 separou três faixas que juntavam duas funções cada, em `0x82A18A68`, `0x82B14CB8` e `0x82B14FD0`), 0 faixas
 rejeitadas, **3 254 funções só por ponteiro** (eram 3 253). Saída do `analyse.log`:
 
 ```
-jump tables: 0 from XenonAnalyse, 223 from the LegacyRecomp scanner, 223 kept (159 relative, 1 bounded by an earlier check), 1 dropped, 41 leaf-function boundaries (0 rejected), 1 guarded bctr sites unresolved, 19 unguarded indexed bctr sites
+jump tables: 0 from XenonAnalyse + 217 from the LegacyRecomp scanner + 7 proven by the dataflow = 224 found: 223 kept (159 relative), 1 dropped, 41 leaf-function boundaries (0 rejected), 1 guarded bctr sites unresolved, 19 unguarded indexed bctr sites
 pointer-only functions: 3254
 ```
 

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <map>
 #include <span>
 #include <sstream>
 #include <system_error>
@@ -30,7 +31,7 @@ namespace {
 
 // Bumped whenever scan_switch_tables, fit_switch_functions or discover_pointer_functions changes
 // behaviour (part of the fingerprint).
-constexpr const char* kScannerVersion = "switch-scan-13";
+constexpr const char* kScannerVersion = "switch-scan-14";
 
 Result<std::vector<uint8_t>> read_file(const fs::path& p) {
   std::ifstream f(p, std::ios::binary | std::ios::ate);
@@ -178,18 +179,31 @@ class AnalyseStage : public Stage {
     std::vector<uint32_t> labels;  // every case label found, kept or not: never a function start or inside one
     for (const auto& t : tables) labels.insert(labels.end(), t.labels.begin(), t.labels.end());
     std::sort(labels.begin(), labels.end());
+    std::multimap<uint32_t, std::vector<uint32_t>> labels_by_base;  // to find the labels of dropped tables
+    for (const auto& t : tables) labels_by_base.emplace(t.base, t.labels);
     auto fit = fit_switch_functions(std::span<const uint8_t>(image.data.get(), image.size),
                                     static_cast<uint32_t>(image.base), code, pdata, std::move(tables), manual);
 
     // Unguarded sites whose index is bounded by a check in an earlier block of the same function.
+    // Labels of dropped tables stay possible entries (their jump still exists).
+    std::vector<uint32_t> dropped_labels;
+    for (uint32_t b : fit.dropped)
+      for (auto [it, e] = labels_by_base.equal_range(b); it != e; ++it)
+        dropped_labels.insert(dropped_labels.end(), it->second.begin(), it->second.end());
+    std::vector<uint32_t> sites = scan.unbounded;
+    sites.insert(sites.end(), scan.joined.begin(), scan.joined.end());
     auto dominated = resolve_dominated_switches(std::span<const uint8_t>(image.data.get(), image.size),
                                                 static_cast<uint32_t>(image.base), code, pdata, fit.tables,
-                                                scan.unbounded);
+                                                sites, dropped_labels);
     for (const auto& t : dominated) {
       std::erase(scan.unbounded, t.base);
+      std::erase(scan.joined, t.base);
       labels.insert(labels.end(), t.labels.begin(), t.labels.end());
       fit.tables.push_back(t);
     }
+    // Joined guards the dataflow could not prove stay unresolved.
+    scan.unresolved.insert(scan.unresolved.end(), scan.joined.begin(), scan.joined.end());
+    std::sort(scan.unresolved.begin(), scan.unresolved.end());
     std::sort(labels.begin(), labels.end());
     std::sort(fit.tables.begin(), fit.tables.end(),
               [](const SwitchTable& a, const SwitchTable& b) { return a.base < b.base; });
@@ -218,10 +232,11 @@ class AnalyseStage : public Stage {
     std::string fns = format_functions(all_functions);
     LR_TRY(atomic_write(ctx.paths.analysis / "functions.toml", std::as_bytes(std::span<const char>(fns.data(), fns.size()))));
 
-    std::string summary = "jump tables: " + std::to_string(from_xenon) + " from XenonAnalyse, " +
-                          std::to_string(from_scanner) + " from the LegacyRecomp scanner, " +
-                          std::to_string(fit.tables.size()) + " kept (" + std::to_string(relative) + " relative, " +
-                          std::to_string(dominated.size()) + " bounded by an earlier check), " +
+    std::string summary = "jump tables: " + std::to_string(from_xenon) + " from XenonAnalyse + " +
+                          std::to_string(from_scanner) + " from the LegacyRecomp scanner + " +
+                          std::to_string(dominated.size()) + " proven by the dataflow = " +
+                          std::to_string(fit.tables.size() + fit.dropped.size()) + " found: " +
+                          std::to_string(fit.tables.size()) + " kept (" + std::to_string(relative) + " relative), " +
                           std::to_string(fit.dropped.size()) +
                           " dropped, " + std::to_string(fit.functions.size()) + " leaf-function boundaries (" +
                           std::to_string(fit.dropped_functions.size()) + " rejected), " +
