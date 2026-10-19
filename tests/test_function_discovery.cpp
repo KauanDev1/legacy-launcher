@@ -21,7 +21,9 @@ uint32_t cmpwi(uint32_t r, int32_t imm) { return (11u << 26) | (r << 16) | (stat
 uint32_t beq(int32_t disp) { return (16u << 26) | (12u << 21) | (2u << 16) | (static_cast<uint32_t>(disp) & 0xFFFC); }
 uint32_t b(int32_t disp) { return (18u << 26) | (static_cast<uint32_t>(disp) & 0x03FFFFFC); }
 uint32_t bl(int32_t disp) { return b(disp) | 1; }
-constexpr uint32_t kBlr = 0x4E800020;
+uint32_t lwzx(uint32_t d, uint32_t a, uint32_t r) { return (31u << 26) | (d << 21) | (a << 16) | (r << 11) | (23u << 1); }
+uint32_t mtctr(uint32_t s) { return (31u << 26) | (s << 21) | (9u << 16) | (467u << 1); }
+constexpr uint32_t kBlr = 0x4E800020, kBctr = 0x4E800420;
 
 struct FakeImage {
   std::vector<uint8_t> bytes = std::vector<uint8_t>(0x1000, 0);
@@ -61,14 +63,40 @@ TEST_CASE("data table of code pointers yields functions", "[unit]") {
                                           {kBase + 0x50, 8, false}});
 }
 
-TEST_CASE("uncovered bl target yields a function", "[unit]") {
+TEST_CASE("bl target bounds a pointer candidate and is not emitted", "[unit]") {
   FakeImage img;
-  img.code(kBase, {li(3, 0), bl(0x60 - 0x4), li(3, 0), kBlr});
+  // F0 calls 0x60 and 0x78: XenonRecomp creates those functions itself, so they are only boundaries here.
+  img.code(kBase, {li(3, 0), bl(0x60 - 0x4), bl(0x78 - 0x8), kBlr});
+  img.code(kBase + 0x50, {li(3, 1), b(0x60 - 0x54)});  // pointer candidate: tail call to the bl target
   img.code(kBase + 0x60, {li(3, 7), kBlr});
+  img.code(kBase + 0x70, {li(3, 1), li(4, 1)});  // pointer candidate falling through into the bl target 0x78
+  img.code(kBase + 0x78, {li(3, 7), kBlr});
+  img.code(kBase + 0x800, {kBase + 0x50, kBase + 0x70});
   const std::vector<FunctionRange> known = {{kBase, 0x10, false}};
 
   auto fns = discover_pointer_functions(img.bytes, kBase, kCode, known);
-  CHECK(fns == std::vector<FunctionRange>{{kBase + 0x60, 8, false}});
+  CHECK(fns == std::vector<FunctionRange>{{kBase + 0x50, 8, false}});
+}
+
+TEST_CASE("candidate containing an unresolved switch bctr is rejected", "[unit]") {
+  FakeImage img;
+  img.code(kBase, {li(3, 0), kBlr});  // .pdata F0
+  // The bctr is skipped over by the beq, so it is not the end; its case labels would be cut off.
+  img.code(kBase + 0x20, {cmpwi(3, 0), beq(0x10), lwzx(0, 12, 11), mtctr(0), kBctr, li(3, 0), kBlr});
+  img.code(kBase + 0x800, {kBase + 0x20});
+  const std::vector<FunctionRange> known = {{kBase, 8, false}};
+
+  CHECK(discover_pointer_functions(img.bytes, kBase, kCode, known).empty());
+}
+
+TEST_CASE("bl into its own interior rejects a pointer candidate", "[unit]") {
+  FakeImage img;
+  img.code(kBase, {li(3, 0), kBlr});  // .pdata F0
+  img.code(kBase + 0x20, {cmpwi(3, 0), beq(0xC), bl(0x4), li(3, 0), kBlr});  // bl 0x2C: XenonRecomp splits there
+  img.code(kBase + 0x800, {kBase + 0x20});
+  const std::vector<FunctionRange> known = {{kBase, 8, false}};
+
+  CHECK(discover_pointer_functions(img.bytes, kBase, kCode, known).empty());
 }
 
 TEST_CASE("candidate overlapping a pdata function is rejected", "[unit]") {

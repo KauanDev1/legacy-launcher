@@ -128,16 +128,16 @@ std::vector<FunctionRange> discover_pointer_functions(std::span<const uint8_t> i
     return it == spans.end() ? uint64_t{0xFFFFFFFF} + 1 : it->lo;
   };
 
-  // Every relative branch in code: target -> source (for the interior check), and the bl targets.
-  std::multimap<uint32_t, uint32_t> branches;
+  // Every relative branch in code: target -> (source, is_call) (for the interior check), and the bl targets.
+  std::multimap<uint32_t, std::pair<uint32_t, bool>> branches;
   std::set<uint32_t> bl_targets;
-  std::set<uint32_t> raw;  // candidate addresses from every source
+  std::set<uint32_t> raw;  // candidate addresses: data words and lis/addi constants
   for (auto [s, n] : code) {
     for (uint32_t a = (s + 3) & ~3u; uint64_t{a} + 4 <= uint64_t{s} + n; a += 4) {
       auto w = mem.word(a);
       if (!w) break;
       if (auto t = relative_target(*w, a)) {
-        branches.emplace(*t, a);
+        branches.emplace(*t, std::make_pair(a, (*w & 1) != 0));
         if (is_bl(*w)) bl_targets.insert(*t);
       }
       // lis rX, hi ; ... ; addi rY, rX, lo
@@ -155,7 +155,6 @@ std::vector<FunctionRange> discover_pointer_functions(std::span<const uint8_t> i
       }
     }
   }
-  raw.insert(bl_targets.begin(), bl_targets.end());
   // Code pointers stored in data (everything outside the code ranges).
   for (uint64_t off = 0; off + 4 <= image.size(); off += 4) {
     const uint32_t a = base + static_cast<uint32_t>(off);
@@ -168,21 +167,24 @@ std::vector<FunctionRange> discover_pointer_functions(std::span<const uint8_t> i
   std::set<uint32_t> cands;
   for (uint32_t c : raw) {
     if ((c & 3) || !in_code(code, c) || inside_known(c) || known_starts.contains(c)) continue;
+    if (bl_targets.contains(c)) continue;  // XenonRecomp already makes a function there
     auto w = mem.word(c);
     if (!w || *w == 0) continue;
     const uint32_t rs = code_range_of(code, c).first;
     if (c != rs) {
       auto prev = mem.word(c - 4);
       if (!prev) continue;
-      const bool ok = *prev == 0 || is_unconditional(*prev) || (is_bl(*prev) && bl_targets.contains(c));
-      if (!ok) continue;
+      if (*prev != 0 && !is_unconditional(*prev)) continue;
     }
     cands.insert(c);
   }
 
   // Walk each candidate to its end.
+  // Uncovered bl targets are functions XenonRecomp creates itself (never emitted here): boundaries only.
   std::set<uint32_t> starts = known_starts;
   starts.insert(cands.begin(), cands.end());
+  for (uint32_t t : bl_targets)
+    if (in_code(code, t) && !inside_known(t)) starts.insert(t);
   std::map<uint32_t, uint32_t> ranges;  // start -> end
   std::set<uint32_t> rejected;
   for (uint32_t c : cands) {
@@ -205,8 +207,8 @@ std::vector<FunctionRange> discover_pointer_functions(std::span<const uint8_t> i
           break;  // branch into code that belongs to no known function
         }
       }
+      if (i == kBctr && switch_like(mem, a, c)) break;  // unresolved switch: its case labels would be cut off
       if (is_unconditional(i) && reach <= a) {
-        if (i == kBctr && switch_like(mem, a, c)) break;
         end = a + 4;
         break;
       }
@@ -222,7 +224,7 @@ std::vector<FunctionRange> discover_pointer_functions(std::span<const uint8_t> i
     if (rejected.contains(s)) continue;
     bool ok = true;
     for (auto it = branches.upper_bound(s); ok && it != branches.end() && it->first < e; ++it)
-      ok = it->second >= s && it->second < e;  // only the function itself may branch into its interior
+      ok = !it->second.second && it->second.first >= s && it->second.first < e;  // only its own non-link branches
     if (ok) out.push_back({s, e - s, false});
   }
   return out;

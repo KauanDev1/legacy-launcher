@@ -22,13 +22,14 @@ job (use `--jobs <n>` para limitar).
 O `analyse` também procura funções sem entrada no `.pdata` que só são alcançadas por ponteiro (vtables, tabelas
 de callbacks, o comparador de um `qsort`), que o XenonRecomp nunca recompilaria
 (`src/pipeline/function_discovery.cpp`). Candidatas: palavras de 32 bits (big-endian, alinhadas) fora das seções
-de código cujo valor aponta para código, alvos de `bl` e endereços de código montados com `lis` + `addi`. Uma
+de código cujo valor aponta para código e endereços de código montados com `lis` + `addi`. Alvos de `bl` nunca
+são emitidos (o XenonRecomp já cria uma função em cada um, ver ADR 0005), só servem de fronteira. Uma
 candidata só vale se estiver num vão entre funções conhecidas (`.pdata`, funções derivadas dos `switch` e as
 escritas à mão no `recomp.toml`; os 8 bytes de dados do handler antes de uma função com exception handler contam
-como dela), se a palavra anterior não puder cair nela (`blr`, `bctr`, `b`, padding zero; `bl` só para alvos de
-`bl`) e se terminar num desvio incondicional sem desvio adiante pendente. É rejeitada se correr para dentro de
-outra função, do padding ou do fim do vão, se terminar num `bctr` alimentado por load indexado (`switch` não
-resolvido), se algum desvio de fora cair no seu interior ou se contiver um rótulo de `switch`. Na dúvida ela é
+como dela), se a palavra anterior não puder cair nela (`blr`, `bctr`, `b`, padding zero) e se terminar num
+desvio incondicional sem desvio adiante pendente. É rejeitada se correr para dentro de outra função (ou de um
+alvo de `bl`), do padding ou do fim do vão, se tiver um `bctr` alimentado por load indexado (`switch` não
+resolvido), se uma chamada ou um desvio de fora cair no seu interior ou se contiver um rótulo de `switch`. Na dúvida ela é
 descartada: uma fronteira errada gera código errado, uma função perdida só falha com relatório claro. As
 aceitas vão para `work/analysis/functions.toml` e o `work/logs/analyse.log` ganha a linha
 `pointer-only functions: N`.

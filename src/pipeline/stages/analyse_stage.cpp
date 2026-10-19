@@ -28,8 +28,9 @@
 namespace lr::pipeline {
 namespace {
 
-// Bumped whenever scan_switch_tables changes behaviour (part of the fingerprint).
-constexpr const char* kScannerVersion = "switch-scan-11";
+// Bumped whenever scan_switch_tables, fit_switch_functions or discover_pointer_functions changes
+// behaviour (part of the fingerprint).
+constexpr const char* kScannerVersion = "switch-scan-12";
 
 Result<std::vector<uint8_t>> read_file(const fs::path& p) {
   std::ifstream f(p, std::ios::binary | std::ios::ate);
