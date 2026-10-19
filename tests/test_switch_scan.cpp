@@ -491,3 +491,180 @@ TEST_CASE("scan_switch_tables: relative table hoisting stops at a branch target"
     CHECK(scan.unresolved == std::vector<uint32_t>{kBase + 0x20});
   }
 }
+
+namespace {
+
+uint32_t b_to(uint32_t from, uint32_t to) { return (18u << 26) | ((to - from) & 0x03FFFFFC); }
+uint32_t bl_to(uint32_t from, uint32_t to) { return b_to(from, to) | 1u; }
+// ble crN, target (bc 4, 4*crN+gt): branch if "greater than" is clear.
+uint32_t ble_to(uint32_t crf, uint32_t from, uint32_t to) {
+  return (16u << 26) | (4u << 21) | ((crf * 4 + 1) << 16) | ((to - from) & 0xFFFC);
+}
+uint32_t li(uint32_t d, int32_t imm) { return addi(d, 0, imm); }
+
+// Inverted guard: `cmplwi cr6, r11, 34; ble cr6, +8; b default`, then the halfword table block.
+void inverted_guard_switch(FakeImage& img) {
+  img.code(kBase, {lwz(11, 14, 28), cmplwi(6, 11, kHalfCases - 1), ble_to(6, kBase + 0x08, kBase + 0x10),
+                   b_to(kBase + 0x0C, kBase + 0x100), lis(12, 0x8200), rlwinm(0, 11, 1, 0, 30),
+                   addi(12, 12, 0x300), lhzx(0, 12, 0), lis(12, 0x8200), addi(12, 12, 0), kNop, add(12, 12, 0),
+                   mtctr(12), kBctr});
+  for (uint32_t v = 0; v < kHalfCases; ++v) half(img, kHalfTable + 2 * v, half_offset(v));
+}
+
+}  // namespace
+
+TEST_CASE("scan_switch_tables: inverted guard (ble over an unconditional b to the default)", "[unit]") {
+  SECTION("resolves") {
+    FakeImage img;
+    inverted_guard_switch(img);
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    REQUIRE(scan.tables.size() == 1);
+    const auto& t = scan.tables[0];
+    CHECK(t.base == kBase + 0x34);
+    CHECK(t.r == 11);
+    CHECK(t.default_label == kBase + 0x100);
+    REQUIRE(t.labels.size() == kHalfCases);
+    for (uint32_t v = 0; v < kHalfCases; ++v) CHECK(t.labels[v] == kBase + half_offset(v));
+    CHECK(scan.unbounded.empty());
+  }
+  SECTION("another path into the table block") {
+    FakeImage img;
+    inverted_guard_switch(img);
+    img.word(kBase + 0x200, b_to(kBase + 0x200, kBase + 0x10));
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(scan.tables.empty());
+    CHECK(scan.unresolved == std::vector<uint32_t>{kBase + 0x34});
+  }
+  SECTION("the skipped branch is not a bound check") {
+    FakeImage img;
+    inverted_guard_switch(img);
+    img.word(kBase + 0x08, (16u << 26) | (4u << 21) | ((6u * 4 + 0) << 16) | 8u);  // bge cr6 (lt clear)
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(scan.tables.empty());
+  }
+}
+
+namespace {
+
+// Function [0x000, 0x100) (in .pdata): a guarded byte switch on r9 whose case 1/2 label is the block
+// of a second, unguarded halfword switch on the same r9.
+//   0x00 cmplwi cr6, r9, 2; bgt cr6, 0x80; lis r12; addi r12, r12, 0x380; lbzx r0, r12, r9
+//   0x14 lis r12; add r12, r12, r0; mtctr r12; bctr (0x20)       -> labels 0x24, 0x2C, 0x2C
+//   0x24 li r3, 1; nop
+//   0x2C lis r11; add r10, r9, r9; lis r12; addi r12, r12, 0x3A0; lhzx r0, r12, r10; add r0, r0, r11
+//   0x44 mtctr r0; bctr (0x48)                                      -> labels 0x4C, 0x54, 0x50
+//   0x4C blr; blr; blr ... 0x80 blr
+struct DominatedFixture {
+  FakeImage img;
+  std::vector<FunctionRange> pdata = {{kBase, 0x100, false}};
+  DominatedFixture() {
+    img.code(kBase, {cmplwi(6, 9, 2), bgt(6, 0x7C), lis(12, 0x8200), addi(12, 12, 0x380), lbzx(0, 12, 9),
+                     lis(12, 0x8200), add(12, 12, 0), mtctr(12), kBctr, li(3, 1), kNop,
+                     lis(11, 0x8200), add(10, 9, 9), lis(12, 0x8200), addi(12, 12, 0x3A0), lhzx(0, 12, 10),
+                     add(0, 0, 11), mtctr(0), kBctr, kBlr, kBlr, kBlr});
+    img.word(kBase + 0x80, kBlr);
+    img.bytes[0x380] = 0x24;
+    img.bytes[0x381] = 0x2C;
+    img.bytes[0x382] = 0x2C;
+    half(img, kBase + 0x3A0, 0x4C);
+    half(img, kBase + 0x3A2, 0x54);
+    half(img, kBase + 0x3A4, 0x50);
+  }
+  std::vector<SwitchTable> resolve() const {
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    return resolve_dominated_switches(img.bytes, kBase, kCode, pdata, scan.tables, scan.unbounded);
+  }
+};
+
+}  // namespace
+
+TEST_CASE("resolve_dominated_switches bounds an index checked in an earlier block", "[unit]") {
+  DominatedFixture f;
+  auto scan = scan_switch_tables(f.img.bytes, kBase, kCode);
+  REQUIRE(scan.tables.size() == 1);
+  REQUIRE(scan.unbounded == std::vector<uint32_t>{kBase + 0x48});
+  auto t = f.resolve();
+  REQUIRE(t.size() == 1);
+  CHECK(t[0].base == kBase + 0x48);
+  CHECK(t[0].r == 9);
+  CHECK(t[0].default_label == 0);
+  CHECK(t[0].labels == std::vector<uint32_t>{kBase + 0x4C, kBase + 0x54, kBase + 0x50});
+}
+
+TEST_CASE("resolve_dominated_switches refuses when the bound does not hold on every path", "[unit]") {
+  SECTION("the index is rewritten on one path") {
+    DominatedFixture f;
+    f.img.word(kBase + 0x24, li(9, 7));
+    CHECK(f.resolve().empty());
+  }
+  SECTION("a call on one path") {
+    DominatedFixture f;
+    f.img.word(kBase + 0x28, bl_to(kBase + 0x28, kBase + 0x200));
+    CHECK(f.resolve().empty());
+  }
+  SECTION("a branch from another function into the block") {
+    DominatedFixture f;
+    f.img.word(kBase + 0x200, b_to(kBase + 0x200, kBase + 0x2C));
+    CHECK(f.resolve().empty());
+  }
+  SECTION("a case of the new table changes the index and loops back") {
+    DominatedFixture f;
+    f.img.code(kBase + 0x50, {addi(9, 9, 1), b_to(kBase + 0x54, kBase + 0x2C)});
+    half(f.img, kBase + 0x3A2, 0x50);
+    half(f.img, kBase + 0x3A4, 0x4C);
+    CHECK(f.resolve().empty());
+  }
+  SECTION("an unresolved switch elsewhere in the function") {
+    DominatedFixture f;
+    // Case 0 jumps to 0x60: an unguarded indexed jump with unknown targets (could land anywhere in
+    // the function, e.g. on the block at 0x2C with r9 changed).
+    f.img.word(kBase + 0x24, b_to(kBase + 0x24, kBase + 0x60));
+    f.img.code(kBase + 0x60, {lis(12, 0x8200), lwzx(0, 12, 5), mtctr(0), kBctr});
+    CHECK(f.resolve().empty());
+  }
+  SECTION("outside any .pdata function") {
+    DominatedFixture f;
+    f.pdata.clear();
+    CHECK(f.resolve().empty());
+  }
+}
+
+TEST_CASE("fit_switch_functions ends a leaf range at padding after its last case", "[unit]") {
+  SECTION("blr + zero word after the last label") {
+    LeafFixture f;
+    f.img.word(kBase + 0xC0, kBlr);
+    f.img.word(kBase + 0xC4, 0);  // padding: a separate (pointer-only) function starts at 0x0C8
+    auto fit = fit_switch_functions(f.img.bytes, kBase, kCode, f.pdata, f.tables());
+    CHECK(fit.functions == std::vector<FunctionRange>{{kBase + 0x50, 0x74, false}});
+    CHECK(fit.tables.size() == 1);
+  }
+  SECTION("padding before a later in-function branch target is not an end") {
+    LeafFixture f;
+    f.img.word(kBase + 0xC0, kBlr);
+    f.img.word(kBase + 0xC4, 0);
+    f.img.word(kBase + 0x90, (16u << 26) | (12u << 21) | (2u << 16) | (0x40u & 0xFFFC));  // beq 0x0D0
+    auto fit = fit_switch_functions(f.img.bytes, kBase, kCode, f.pdata, f.tables());
+    CHECK(fit.functions == std::vector<FunctionRange>{{kBase + 0x50, 0x1A0, false}});
+  }
+  SECTION("a zero word not preceded by an unconditional branch is not an end") {
+    LeafFixture f;
+    f.img.word(kBase + 0xC4, 0);
+    auto fit = fit_switch_functions(f.img.bytes, kBase, kCode, f.pdata, f.tables());
+    CHECK(fit.functions == std::vector<FunctionRange>{{kBase + 0x50, 0x1A0, false}});
+  }
+}
+
+TEST_CASE("fit_switch_functions splits leaf functions at padding on both sides", "[unit]") {
+  // Leaf A at 0x050 (switch, labels up to 0x0B0, blr at 0x0C0), padding at 0x0C4, leaf B at 0x0C8
+  // (reached only through a pointer: no bl) with its own switch, labels up to 0x100.
+  LeafFixture f;
+  f.img.word(kBase + 0xC0, kBlr);
+  f.img.word(kBase + 0xC4, 0);
+  auto t = f.tables();
+  t.push_back({kBase + 0xD0, 3, 0, {kBase + 0xE0, kBase + 0x100}});
+  auto fit = fit_switch_functions(f.img.bytes, kBase, kCode, f.pdata, t);
+  CHECK(fit.dropped.empty());
+  CHECK(fit.dropped_functions.empty());
+  CHECK(fit.functions == std::vector<FunctionRange>{{kBase + 0x50, 0x74, false}, {kBase + 0xC8, 0x128, false}});
+  CHECK(fit.tables.size() == 2);
+}

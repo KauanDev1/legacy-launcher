@@ -30,7 +30,7 @@ namespace {
 
 // Bumped whenever scan_switch_tables, fit_switch_functions or discover_pointer_functions changes
 // behaviour (part of the fingerprint).
-constexpr const char* kScannerVersion = "switch-scan-12";
+constexpr const char* kScannerVersion = "switch-scan-13";
 
 Result<std::vector<uint8_t>> read_file(const fs::path& p) {
   std::ifstream f(p, std::ios::binary | std::ios::ate);
@@ -181,6 +181,21 @@ class AnalyseStage : public Stage {
     auto fit = fit_switch_functions(std::span<const uint8_t>(image.data.get(), image.size),
                                     static_cast<uint32_t>(image.base), code, pdata, std::move(tables), manual);
 
+    // Unguarded sites whose index is bounded by a check in an earlier block of the same function.
+    auto dominated = resolve_dominated_switches(std::span<const uint8_t>(image.data.get(), image.size),
+                                                static_cast<uint32_t>(image.base), code, pdata, fit.tables,
+                                                scan.unbounded);
+    for (const auto& t : dominated) {
+      std::erase(scan.unbounded, t.base);
+      labels.insert(labels.end(), t.labels.begin(), t.labels.end());
+      fit.tables.push_back(t);
+    }
+    std::sort(labels.begin(), labels.end());
+    std::sort(fit.tables.begin(), fit.tables.end(),
+              [](const SwitchTable& a, const SwitchTable& b) { return a.base < b.base; });
+    const size_t relative = count_relative_tables(std::span<const uint8_t>(image.data.get(), image.size),
+                                                  static_cast<uint32_t>(image.base), fit.tables);
+
     // Functions without .pdata reached only through pointers (vtables, callbacks, comparators):
     // XenonRecomp would never recompile them.
     std::vector<FunctionRange> known = pdata;
@@ -205,7 +220,9 @@ class AnalyseStage : public Stage {
 
     std::string summary = "jump tables: " + std::to_string(from_xenon) + " from XenonAnalyse, " +
                           std::to_string(from_scanner) + " from the LegacyRecomp scanner, " +
-                          std::to_string(fit.tables.size()) + " kept, " + std::to_string(fit.dropped.size()) +
+                          std::to_string(fit.tables.size()) + " kept (" + std::to_string(relative) + " relative, " +
+                          std::to_string(dominated.size()) + " bounded by an earlier check), " +
+                          std::to_string(fit.dropped.size()) +
                           " dropped, " + std::to_string(fit.functions.size()) + " leaf-function boundaries (" +
                           std::to_string(fit.dropped_functions.size()) + " rejected), " +
                           std::to_string(scan.unresolved.size()) + " guarded bctr sites unresolved, " +

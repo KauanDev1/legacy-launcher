@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -67,7 +68,10 @@ struct SwitchFit {
 // table outside .pdata coverage this derives the leaf function's extent: start = the closest
 // `bl` target (or the first non-padding word after the previous .pdata function), end = the
 // first `bl` target after the last label, else the next .pdata function (minus its handler
-// words and padding). Tables inside a .pdata function must keep all labels inside it.
+// words and padding). Padding also separates functions: a zero word after an unconditional branch,
+// with no forward branch from the code before it reaching past it, moves the start up (the last one
+// below the table) or ends the range (the first one after the last label). Tables inside a .pdata
+// function must keep all labels inside it.
 // A derived range is rejected (and its tables dropped) if it overlaps another derived range or one
 // of `manual` (hand-written `functions` in recomp.toml), or if any call (`bl`/`bcl`) targets its
 // interior, or any branch from outside it lands in its interior.
@@ -75,6 +79,27 @@ SwitchFit fit_switch_functions(std::span<const uint8_t> image, uint32_t image_ba
                                std::span<const std::pair<uint32_t, uint32_t>> code,
                                std::span<const FunctionRange> pdata, std::vector<SwitchTable> tables,
                                std::span<const FunctionRange> manual = {});
+
+// Unguarded jump sites (`SwitchScan::unbounded`) whose index is bounded by a check in an earlier
+// block of the same .pdata function (e.g. a second switch on the index of a guarded one). The index is
+// the only register the site's straight-line block reads that makes its CTR computable. A forward
+// dataflow over the function's control-flow graph (fall-through, relative branches, `known` tables'
+// labels) tracks an unsigned upper bound of that register, set on the fall-through of `bgt`/`bgtlr`
+// and the taken edge of `ble` after `cmplwi crN, rI, max`. The bound is lost on any write to the
+// register, any call, any unknown instruction, at the function entry and at every branch from
+// outside the function. The analysis gives up for the whole function on an absolute branch, a
+// conditional bcctr or a reachable unresolved indexed jump. After the labels are computed, the
+// dataflow is re-run with the new table's own edges and must still give the same bound (a case
+// that changes the index and loops back is caught). Labels must be 4-aligned inside the function.
+std::vector<SwitchTable> resolve_dominated_switches(std::span<const uint8_t> image, uint32_t image_base,
+                                                    std::span<const std::pair<uint32_t, uint32_t>> code,
+                                                    std::span<const FunctionRange> pdata,
+                                                    std::span<const SwitchTable> known,
+                                                    std::span<const uint32_t> sites);
+
+// Number of `tables` whose jump reads a relative entry (`lhzx`/`lbzx` in the straight-line code
+// before the table's bctr), for the analyse summary.
+size_t count_relative_tables(std::span<const uint8_t> image, uint32_t image_base, std::span<const SwitchTable> tables);
 
 // Serialises tables in XenonAnalyse's format ([[switch]] base/r/default/labels).
 std::string format_switch_tables(std::span<const SwitchTable> tables);

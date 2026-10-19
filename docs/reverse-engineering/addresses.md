@@ -89,6 +89,9 @@ tempo de execução. Por isso a etapa `analyse` roda também `src/pipeline/switc
   código linear entre ela e o `bctr` para cada índice `0..max` (lê a tabela da imagem). Independe da
   ordem das instruções e dos `nop`; instruções que não tocam a cadeia (FPU, VMX/VMX128, stores) são
   ignoradas; cópias do índice com `mr` antes da guarda são seguidas.
+- Guarda invertida: `cmplwi crN, rI, max` + `ble crN, +8` + `b padrão`, com o bloco da tabela logo após o
+  `b`. Só vale se o `ble` for a única entrada desse bloco e nenhum outro desvio cair entre ele e o `bctr`;
+  senão o sítio fica "não resolvido". O rótulo padrão é o alvo do `b`.
 - Sem guarda, aceita um índice limitado por máscara (`clrlwi`/`rlwinm ..., 31`/`andi.`) com `2^k` entradas.
 - A avaliação começa antes do `cmplwi`, no início do bloco linear, parando numa instrução que escreva o
   índice ou uma de suas cópias `mr` (ou numa instrução desconhecida), sem nunca passar para antes de um
@@ -100,7 +103,19 @@ tempo de execução. Por isso a etapa `analyse` roda também `src/pipeline/switc
   rIdx`, opcionalmente `rlwinm rT, rT, s, ...`, seguidas de `add rT, rT, rBase` → `mtctr rT` → `bctr`, com
   `rBase` sendo a própria tabela ou outro endereço montado por `lis`/`addi`; rótulo = `rBase + (entrada <<
   s)`. Mesmos critérios: limite por `cmplwi`/máscara, todo rótulo alinhado a 4 dentro da seção de código,
-  no máximo 4096 casos. Sem limite, o sítio continua na lista "sem guarda" abaixo. Os sítios do
+  no máximo 4096 casos. Sem limite, o sítio continua na lista "sem guarda" abaixo, a menos que o próximo
+  item o resolva.
+- Limite num bloco anterior (`resolve_dominated_switches`, M3): um sítio sem guarda dentro de uma função do
+  `.pdata` cujo bloco linear só sabe calcular o alvo com um registrador (o índice) é resolvido se uma
+  análise de fluxo de dados no grafo da função provar um limite superior sem sinal para esse registrador.
+  O limite nasce na saída "dentro da faixa" de `cmplwi crN, rI, max` (o caminho que não salta de `bgt`/
+  `bgtlr`, ou o salto de `ble`) e se perde em qualquer escrita no registrador, chamada, instrução
+  desconhecida, na entrada da função e em todo desvio vindo de fora dela; arestas: queda, desvios
+  relativos e rótulos das tabelas já conhecidas. A função inteira é recusada se tiver desvio absoluto,
+  `bcctr` condicional ou outro salto indexado não resolvido alcançável. Depois de calcular os rótulos, a
+  análise roda de novo com as arestas da nova tabela, e o limite tem de se manter (um caso que muda o
+  índice e volta ao `switch` é recusado). Rótulos alinhados a 4 e dentro da função. Típico: um segundo
+  `switch` sobre o mesmo índice de um primeiro, num bloco que é rótulo do primeiro. Os sítios do
   experimento (`0x82AB1528`, 35 casos; `0x8294E434`, 17 casos) são conferidos com a ISO na Tarefa 4 do M3.
 - Resultado na imagem TU1: **222 tabelas** (7 298 rótulos, até 440 casos), todas com rótulos em código.
 
@@ -108,7 +123,11 @@ Funções folha (sem quadro de pilha) não têm entrada no `.pdata`, e a anális
 `bctr` — os rótulos dos casos caíam "fora da função" (1 329 erros `Switch case ... jump outside function`
 em 46 tabelas). `fit_switch_functions` deriva a extensão delas: início = alvo de `bl` mais próximo (ou a
 primeira palavra não nula após a função anterior do `.pdata`), fim = primeiro alvo de `bl` após o último
-rótulo, senão a próxima função do `.pdata` (descontando os 8 bytes de handler e o preenchimento). Na TU1:
+rótulo, senão a próxima função do `.pdata` (descontando os 8 bytes de handler e o preenchimento). O
+preenchimento também separa funções (M3): uma palavra nula logo após um desvio incondicional, sem desvio
+anterior que salte além dela, sobe o início (a última abaixo da tabela) ou encerra a faixa (a primeira após o
+último rótulo). Sem isso a faixa engolia as funções minúsculas chamadas por ponteiro que vêm depois (ver
+`0x82A12650` abaixo). Na TU1 (M2):
 **38 funções folha**, gravadas em `work/analysis/functions.toml` e mescladas em `[main] functions` pela
 etapa `recompile` (entradas escritas à mão em `recomp.toml` têm prioridade); 31 das 38 começam num alvo de
 `bl`.
@@ -124,7 +143,9 @@ folha, 0 faixas rejeitadas.
 
 ### Pendências para revisão humana (Ghidra + XEXLoaderWV)
 
-Listadas também em `work/logs/analyse.log` a cada execução.
+Listadas também em `work/logs/analyse.log` a cada execução. Para ver a forma de um sítio:
+`python3 -I tools/site_window.py <dump.bin> <endereço> [antes] [depois]` (dump de `legacyrecomp inspect
+--dump-image`) imprime no máximo 64 instruções decodificadas em volta do endereço, nunca bytes.
 
 | Endereço do `bctr` | Situação | O que verificar |
 |---|---|---|
