@@ -5,7 +5,7 @@ LegacyRecomp statically recompiles Minecraft: Xbox 360 Edition to a native Linux
 ## Build and test
 
 ```
-sudo pacman -S --needed clang cmake ninja sdl2 pkgconf   # toolchain
+sudo pacman -S --needed clang cmake ninja sdl2 pkgconf directx-shader-compiler   # toolchain (dxc: XenosRecomp, doctor)
 cmake --preset dev                                        # configure (Debug, ASan+UBSan)
 cmake --build --preset dev
 ctest --preset dev -L unit                                # fast tests, no game data needed
@@ -39,8 +39,9 @@ launcher (cli, gui)
 pipeline -> formats (xdvdfs, stfs, xex2) -> common
 runtime  -> formats (xex2 only), common
 common: Result/Error, log, sha256, paths, fs_util
-thirdparty: XenonRecomp (pinned upstream + thirdparty/patches/xenonrecomp, applied to a copy at configure;
-            bundled tomlplusplus/fmt/xxHash), Catch2, imgui
+thirdparty: XenonRecomp, XenosRecomp (pinned upstream + thirdparty/patches/<name>, applied to a copy at configure by
+            cmake/LrSubmodulePatches.cmake; XenonRecomp bundles tomlplusplus/fmt/xxHash, XenosRecomp adds smol-v/zstd and
+            needs the system DXC), Catch2, imgui, volk, VMA, Vulkan-Headers
 ```
 
 Namespaces: `lr`, `lr::formats`, `lr::pipeline`, `lr::runtime`, `lr::kernel`.

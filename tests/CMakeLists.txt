@@ -65,3 +65,9 @@ add_test(NAME no_gpl_disassembler_in_binaries
           -P ${CMAKE_CURRENT_SOURCE_DIR}/support/check_no_gpl_disassembler.cmake)
 set_tests_properties(no_gpl_disassembler_in_binaries PROPERTIES LABELS unit)
 add_subdirectory(recomp)
+
+# --- patch mechanism (cmake/LrSubmodulePatches.cmake), parameterised over XenonRecomp and XenosRecomp inside the script ---
+add_test(NAME submodule_patches_mechanism
+  COMMAND ${CMAKE_COMMAND} "-DREPO=${CMAKE_SOURCE_DIR}" "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/submodule_patches"
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/support/check_submodule_patches.cmake)
+set_tests_properties(submodule_patches_mechanism PROPERTIES LABELS unit)

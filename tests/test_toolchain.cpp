@@ -31,6 +31,9 @@ void write_exe(const fs::path& p) {
 void make_bundled_tree(const fs::path& resources) {
   const fs::path tc = resources / "toolchain";
   for (const char* f : {"bin/cc", "bin/c++", "bin/ninja", "cmake/bin/cmake", "zig/zig"}) write_exe(tc / f);
+  write_exe(tc / "dxc" / "bin" / "dxc");
+  fs::create_directories(tc / "dxc" / "lib");
+  std::ofstream(tc / "dxc" / "lib" / "libdxcompiler.so") << "fake";
   fs::create_directories(tc / "sdl2" / "lib" / "cmake" / "SDL2");
   std::ofstream(tc / "sdl2" / "lib" / "cmake" / "SDL2" / "SDL2Config.cmake") << "# fake\n";
 }
@@ -138,4 +141,24 @@ TEST_CASE("doctor in bundled mode still refuses a CPU without AVX", "[unit]") {
   auto r = run_doctor(probe, t.path / "root", t.path);
   REQUIRE_FALSE(r);
   CHECK(r.error().code == ErrorCode::InsufficientResources);
+}
+
+TEST_CASE("doctor in bundled mode reports a missing bundled dxc, not the system one", "[unit]") {
+  TempDir t;
+  make_bundled_tree(t.path);
+  HealthyProbe probe;
+  REQUIRE(run_doctor(probe, t.path / "root", t.path));
+
+  fs::remove(t.path / "toolchain" / "dxc" / "bin" / "dxc");
+  auto r = run_doctor(probe, t.path / "root", t.path);
+  REQUIRE_FALSE(r);
+  CHECK(r.error().code == ErrorCode::ToolMissing);
+  CHECK(r.error().message.find("dxc") != std::string::npos);
+  CHECK(r.error().hint.find("directx-shader-compiler") != std::string::npos);
+
+  write_exe(t.path / "toolchain" / "dxc" / "bin" / "dxc");
+  fs::remove(t.path / "toolchain" / "dxc" / "lib" / "libdxcompiler.so");
+  r = run_doctor(probe, t.path / "root", t.path);
+  REQUIRE_FALSE(r);
+  CHECK(r.error().message.find("libdxcompiler.so") != std::string::npos);
 }

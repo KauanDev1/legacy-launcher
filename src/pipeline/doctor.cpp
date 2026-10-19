@@ -111,11 +111,15 @@ Result<DoctorReport> run_doctor(DoctorProbe& probe, const fs::path& root, const 
   if (has_bundled_toolchain(resources)) {
     // AppImage: the bundled zig/cmake/ninja/SDL2 are pinned versions; only check that they are all there.
     LR_TRY(resolve_toolchain(resources));
+    LR_TRY(check_bundled_dxc(resources));
   } else {
     LR_TRY(check_tool(probe, "clang++", 18, 0));
     LR_TRY(check_tool(probe, "cmake", 3, 25));
     LR_TRY(check_tool(probe, "ninja", 0, 0));
     if (!probe.pkg_config_exists("sdl2")) return missing("SDL2 development files (pkg-config sdl2)");
+    // dxc is linked against libdxcompiler.so (as XenosRecomp is), so a dxc that is found comes with its library.
+    if (!probe.find("dxc"))
+      return Error{ErrorCode::ToolMissing, "dxc (DirectX Shader Compiler) not found", std::string(system_dxc_hint())};
   }
 
   std::error_code ec;

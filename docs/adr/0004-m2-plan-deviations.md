@@ -85,7 +85,7 @@ Formato: o quê, por quê, custo se estiver errada.
   atualizar o pin não resolve. O plano previa publicar as nossas mudanças num fork no GitHub (passo humano); como o
   dono não escolheu um fork, elas ficam no próprio repositório, em `thirdparty/patches/xenonrecomp/NNNN-*.patch`
   (`git format-patch ddd128b..legacyrecomp`, com autoria, mensagens e créditos). O gitlink do submódulo volta para
-  `ddd128b`, que qualquer clone consegue buscar. No configure, `cmake/LrXenonRecompPatches.cmake` espelha o
+  `ddd128b`, que qualquer clone consegue buscar. No configure, `cmake/LrSubmodulePatches.cmake` (antes `LrXenonRecompPatches.cmake`) espelha o
   submódulo em `build/<preset>/_deps/XenonRecomp-patched`, normaliza para LF os arquivos que os patches tocam,
   aplica os patches com `git apply` e compila essa cópia; o checkout do submódulo nunca muda. A reaplicação
   acontece quando um patch ou um original tocado muda (carimbo com hash). Tudo o que lia arquivos do XenonRecomp

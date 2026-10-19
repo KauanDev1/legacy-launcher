@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Stages the runtime resources into ${CMAKE_BINARY_DIR}/share/legacyrecomp (same layout as an install
-# prefix's share/legacyrecomp): tools/{XenonAnalyse,XenonRecomp,ppc_context.h}, config/minecraft-tu1/*, and the
+# prefix's share/legacyrecomp): tools/{XenonAnalyse,XenonRecomp,XenosRecomp,ppc_context.h}, config/minecraft-tu1/*, and the
 # game template inputs under runtime/:
 #   runtime/template/CMakeLists.txt   the CMake project the build stage configures
 #   runtime/src/main.cpp              game entry point, compiled by the template with the generated headers
@@ -121,9 +121,20 @@ if(NOT _lr_git_rc EQUAL 0 OR LR_XENONRECOMP_COMMIT STREQUAL "")
   message(WARNING "Could not read the XenonRecomp submodule commit (git -C thirdparty/XenonRecomp rev-parse HEAD). "
                   "The analyse/recompile stage caches will not notice a XenonRecomp update; use --force for those stages.")
 endif()
-# The LegacyRecomp patches (cmake/LrXenonRecompPatches.cmake) change the recompiler too: a new or edited patch
+# The LegacyRecomp patches (cmake/LrSubmodulePatches.cmake) change the recompiler too: a new or edited patch
 # must invalidate the caches even when the submodule commit stays the same.
 if(NOT LR_XENONRECOMP_PATCH_HASH STREQUAL "none")
   string(SUBSTRING "${LR_XENONRECOMP_PATCH_HASH}" 0 16 _lr_patch_hash)
   string(APPEND LR_XENONRECOMP_COMMIT "+patches:${_lr_patch_hash}")
+endif()
+
+# XenosRecomp (shader translator, run at install time by a later stage) when DXC was found at configure time.
+# It links the system libdxcompiler.so (directx-shader-compiler); the bundled-DXC layout is ADR 0005.
+if(LR_HAVE_XENOSRECOMP)
+  add_custom_target(lr_resources_xenosrecomp ALL
+    DEPENDS XenosRecomp
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${LR_RESOURCES_DIR}/tools"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:XenosRecomp>" "${LR_RESOURCES_DIR}/tools/XenosRecomp"
+    COMMENT "Staging XenosRecomp")
+  add_dependencies(lr_resources lr_resources_xenosrecomp)
 endif()
