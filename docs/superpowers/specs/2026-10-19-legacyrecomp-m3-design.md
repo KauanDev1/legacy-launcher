@@ -2,7 +2,7 @@
 # LegacyRecomp — Marco 3: Gráficos (GPU Xenos em Vulkan)
 
 - **Data:** 2026-10-19
-- **Status:** Aprovado para planejamento (2026-10-19)
+- **Status:** Escrito sem rodada de perguntas (pedido do dono); aberto à revisão dele
 - **Escopo:** Marco 3 (M3) do LegacyRecomp
 - **Antecessor:** M2 (`docs/superpowers/specs/2026-10-16-legacyrecomp-m2-design.md`), concluído: o jogo inicializa
   sem tela e para em `VdInitializeEngines`
