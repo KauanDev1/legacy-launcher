@@ -39,14 +39,14 @@ Todavía no se puede jugar. No se dibuja nada en pantalla.
 | Hito | Alcance | Estado |
 |---|---|---|
 | M1 | Pipeline del disco al ejecutable nativo, esqueleto del runtime | Hecho |
-| M2 | Emulación del kernel: memoria, hilos, archivos, sincronización | Siguiente |
-| M3 | Gráficos: renderizador Vulkan, shaders traducidos con XenosRecomp | Previsto |
+| M2 | Emulación del kernel: memoria, hilos, archivos, sincronización | Hecho |
+| M3 | Gráficos: renderizador Vulkan, shaders traducidos con XenosRecomp | Siguiente |
 | M4 | Audio, mandos, partidas guardadas | Previsto |
 | M5 | Jugable: menú principal y mundos | Previsto |
 
-Con el M1 terminado, el launcher convierte tu disco en `legacyrecomp-game`, y `legacyrecomp run` arranca el punto de entrada recompilado. El código del juego se ejecuta hasta su primera llamada al kernel de la Xbox que el runtime todavía no ofrece, `NtAllocateVirtualMemory`, y entonces termina con el código 3 y un informe que indica esa llamada. El juego importa 459 funciones del sistema de xboxkrnl (el kernel) y XAM y, por ahora, ninguna está implementada. Ese es el trabajo del M2.
+El launcher convierte tu disco en `legacyrecomp-game`, y `legacyrecomp run` arranca el juego recompilado. Con el M2 terminado, el runtime emula las partes del kernel de la Xbox que el juego necesita para arrancar: memoria, hilos, archivos, sincronización, temporizadores y los servicios de XAM que pide al inicio. Ahora el juego ejecuta su arranque hasta su primera llamada gráfica, `VdInitializeEngines`, que crearía la GPU, y entonces termina con el código 3 y un informe que indica esa llamada. De las 459 funciones del sistema que el juego importa de xboxkrnl (el kernel) y XAM, 163 están implementadas y 29 son stubs; las gráficas son el trabajo del M3.
 
-Hay un obstáculo conocido para los siguientes hitos: la versión fijada de XenonRecomp no admite algunas instrucciones PowerPC que usa el juego (`bdzf`, `stfsu`, `lfsu`, `vsel128` y otras), lo que aparece como 3279 avisos durante la recompilación.
+Las instrucciones PowerPC que la versión fijada de XenonRecomp no admitía (`bdzf`, `stfsu`, `lfsu`, `vsel128` y otras) ahora están cubiertas por parches guardados en este repositorio (`thirdparty/patches/xenonrecomp/`), y la recompilación termina con 0 avisos.
 
 ## Cómo funciona
 

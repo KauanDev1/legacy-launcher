@@ -39,14 +39,14 @@ Il gioco non è ancora giocabile. Sullo schermo non compare nulla.
 | Traguardo | Contenuto | Stato |
 |---|---|---|
 | M1 | Pipeline dal disco all'eseguibile nativo, scheletro del runtime | Completato |
-| M2 | Emulazione del kernel: memoria, thread, file, sincronizzazione | Il prossimo |
-| M3 | Grafica: renderer Vulkan, shader tradotti con XenosRecomp | Previsto |
+| M2 | Emulazione del kernel: memoria, thread, file, sincronizzazione | Completato |
+| M3 | Grafica: renderer Vulkan, shader tradotti con XenosRecomp | Il prossimo |
 | M4 | Audio, controller, salvataggi | Previsto |
 | M5 | Giocabile: menu principale e mondi | Previsto |
 
-Con M1 completato, il launcher trasforma il tuo disco in `legacyrecomp-game`, e `legacyrecomp run` avvia il punto di ingresso ricompilato. Il codice del gioco gira fino alla prima chiamata al kernel della Xbox che il runtime non fornisce ancora, `NtAllocateVirtualMemory`, poi termina con codice 3 e un report che indica quella chiamata. Il gioco importa 459 funzioni di sistema da xboxkrnl (il kernel) e XAM, e per ora nessuna è implementata. È il lavoro di M2.
+Il launcher trasforma il tuo disco in `legacyrecomp-game`, e `legacyrecomp run` avvia il gioco ricompilato. Con M2 completato, il runtime emula le parti del kernel della Xbox di cui il gioco ha bisogno per avviarsi: memoria, thread, file, sincronizzazione, timer e i servizi XAM che chiede all'avvio. Ora il gioco esegue il suo avvio fino alla prima chiamata grafica, `VdInitializeEngines`, che creerebbe la GPU, poi termina con codice 3 e un report che indica quella chiamata. Delle 459 funzioni di sistema che il gioco importa da xboxkrnl (il kernel) e XAM, 163 sono implementate e 29 sono stub; quelle grafiche sono il lavoro di M3.
 
-C'è già un ostacolo noto per i traguardi successivi: la versione fissata di XenonRecomp non gestisce alcune istruzioni PowerPC usate dal gioco (`bdzf`, `stfsu`, `lfsu`, `vsel128` e altre), e durante la ricompilazione questo si vede in 3.279 avvisi.
+Le istruzioni PowerPC che la versione fissata di XenonRecomp non gestiva (`bdzf`, `stfsu`, `lfsu`, `vsel128` e altre) ora sono coperte da patch conservate in questo repository (`thirdparty/patches/xenonrecomp/`), e la ricompilazione termina con 0 avvisi.
 
 ## Come funziona
 

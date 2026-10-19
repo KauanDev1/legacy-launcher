@@ -39,14 +39,14 @@ Spielbar ist das Spiel noch nicht. Auf dem Bildschirm erscheint nichts.
 | Meilenstein | Umfang | Stand |
 |---|---|---|
 | M1 | Pipeline von der Disc bis zur nativen Programmdatei, Grundgerüst der Laufzeitumgebung | Fertig |
-| M2 | Kernel-Emulation: Speicher, Threads, Dateien, Synchronisation | Als Nächstes |
-| M3 | Grafik: Vulkan-Renderer, mit XenosRecomp übersetzte Shader | Geplant |
+| M2 | Kernel-Emulation: Speicher, Threads, Dateien, Synchronisation | Fertig |
+| M3 | Grafik: Vulkan-Renderer, mit XenosRecomp übersetzte Shader | Als Nächstes |
 | M4 | Audio, Controller, Spielstände | Geplant |
 | M5 | Spielbar: Hauptmenü und Welten | Geplant |
 
-Mit M1 macht der Launcher aus deiner Disc `legacyrecomp-game`, und `legacyrecomp run` startet den rekompilierten Einstiegspunkt. Der Spielcode läuft bis zu seinem ersten Aufruf in den Xbox-Kernel, den die Laufzeitumgebung noch nicht bereitstellt, `NtAllocateVirtualMemory`, und beendet sich dann mit Code 3 und einem Bericht, der diesen Aufruf nennt. Das Spiel importiert 459 Systemfunktionen aus xboxkrnl (dem Kernel) und XAM, und bisher ist keine davon implementiert. Das ist die Aufgabe von M2.
+Der Launcher macht aus deiner Disc `legacyrecomp-game`, und `legacyrecomp run` startet das rekompilierte Spiel. Mit M2 emuliert die Laufzeitumgebung die Teile des Xbox-Kernels, die das Spiel zum Starten braucht: Speicher, Threads, Dateien, Synchronisation, Timer und die XAM-Dienste, die es beim Booten anfragt. Das Spiel durchläuft jetzt seinen Start bis zu seinem ersten Grafikaufruf, `VdInitializeEngines`, der die GPU anlegen würde, und beendet sich dann mit Code 3 und einem Bericht, der diesen Aufruf nennt. Von den 459 Systemfunktionen, die das Spiel aus xboxkrnl (dem Kernel) und XAM importiert, sind 163 implementiert und 29 Stubs; die Grafikfunktionen sind die Aufgabe von M3.
 
-Ein Hindernis für die späteren Meilensteine ist schon bekannt: Die festgelegte XenonRecomp-Version unterstützt einige PowerPC-Befehle nicht, die das Spiel verwendet (`bdzf`, `stfsu`, `lfsu`, `vsel128` und weitere). Beim Rekompilieren zeigt sich das in 3.279 Warnungen.
+Die PowerPC-Befehle, die die festgelegte XenonRecomp-Version nicht unterstützte (`bdzf`, `stfsu`, `lfsu`, `vsel128` und weitere), werden jetzt durch Patches in diesem Repository abgedeckt (`thirdparty/patches/xenonrecomp/`), und das Rekompilieren endet mit 0 Warnungen.
 
 ## So funktioniert es
 

@@ -39,7 +39,8 @@ launcher (cli, gui)
 pipeline -> formats (xdvdfs, stfs, xex2) -> common
 runtime  -> formats (xex2 only), common
 common: Result/Error, log, sha256, paths, fs_util
-thirdparty: XenonRecomp (and its bundled tomlplusplus/fmt/xxHash), Catch2, imgui
+thirdparty: XenonRecomp (pinned upstream + thirdparty/patches/xenonrecomp, applied to a copy at configure;
+            bundled tomlplusplus/fmt/xxHash), Catch2, imgui
 ```
 
 Namespaces: `lr`, `lr::formats`, `lr::pipeline`, `lr::runtime`, `lr::kernel`.

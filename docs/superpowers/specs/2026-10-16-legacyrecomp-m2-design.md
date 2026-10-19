@@ -2,7 +2,7 @@
 # LegacyRecomp — Marco 2: Kernel HLE e inicialização completa sem gráficos
 
 - **Data:** 2026-10-16
-- **Status:** Aguardando revisão
+- **Status:** Implementado
 - **Escopo:** Marco 2 (M2) do LegacyRecomp
 - **Antecessor:** M1 (`docs/superpowers/specs/2026-10-14-legacyrecomp-m1-design.md`), concluído
 

@@ -39,14 +39,14 @@ The game is not playable yet. Nothing is drawn on screen.
 | Milestone | Scope | State |
 |---|---|---|
 | M1 | Pipeline from disc to native executable, runtime skeleton | Done |
-| M2 | Kernel emulation: memory, threads, files, synchronization | Next |
-| M3 | Graphics: Vulkan renderer, shaders translated with XenosRecomp | Planned |
+| M2 | Kernel emulation: memory, threads, files, synchronization | Done |
+| M3 | Graphics: Vulkan renderer, shaders translated with XenosRecomp | Next |
 | M4 | Audio, input, saves | Planned |
 | M5 | Playable: main menu and worlds | Planned |
 
-With M1 done, the launcher turns your disc into `legacyrecomp-game`, and `legacyrecomp run` starts the recompiled entry point. The game's code runs until its first call into the Xbox kernel that the runtime does not provide yet, `NtAllocateVirtualMemory`, and then exits with code 3 and a report naming that call. The game imports 459 system functions from xboxkrnl (the kernel) and XAM, and none of them are implemented so far. That is the work of M2.
+The launcher turns your disc into `legacyrecomp-game`, and `legacyrecomp run` starts the recompiled game. With M2 done, the runtime emulates the parts of the Xbox kernel the game needs to start: memory, threads, files, synchronization, timers and the XAM services it asks for at boot. The game now runs its startup until its first graphics call, `VdInitializeEngines`, which would create the GPU, and then exits with code 3 and a report naming that call. Of the 459 system functions the game imports from xboxkrnl (the kernel) and XAM, 163 are implemented and 29 are stubs; the graphics ones are the work of M3.
 
-One known obstacle for later milestones: the pinned XenonRecomp version does not handle some PowerPC instructions this game uses (`bdzf`, `stfsu`, `lfsu`, `vsel128` and others), which shows up as 3,279 warnings during recompilation.
+The PowerPC instructions the pinned XenonRecomp version did not handle (`bdzf`, `stfsu`, `lfsu`, `vsel128` and others) are now covered by patches kept in this repository (`thirdparty/patches/xenonrecomp/`), and recompilation finishes with 0 warnings.
 
 ## How it works
 

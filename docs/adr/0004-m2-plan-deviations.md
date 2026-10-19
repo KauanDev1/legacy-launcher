@@ -10,16 +10,16 @@ Formato: o quê, por quê, custo se estiver errada.
 ## Decisões
 
 ### M1. O modelo `LR_KERNEL_EXPORT` é substituído por thunks sobre uma ABI fixa (spec §4.1/§4.2)
-- O quê: o M1 gerava um stub fraco `PPC_FUNC(__imp__X)` por importação, que lançava `UnimplementedImport`,
-  e uma implementação seria uma definição forte `LR_KERNEL_EXPORT(X)` no runtime. Agora o gerador
-  (`render_import_thunks`, antes `render_import_stubs`) emite um thunk forte por importação, compilado com o
-  jogo, que procura a implementação pelo nome no registro (uma vez, num `static` local), copia os
-  registradores para o `GuestCall` de layout fixo e chama a `KernelFn` registrada. O registro passa a ter
-  três estados (`Implemented`, `Stub`, `Missing`), com `LR_KERNEL(Nome)` e `LR_KERNEL_STUB(Nome, valor)`;
-  `register_implemented`, `is_implemented` e `LR_KERNEL_EXPORT` foram removidos. `--coverage` passa a
-  imprimir `| Import | Kind | Status |` e `Implemented: a, stub: b, missing: c / total`. Toda chamada de
-  thunk entra na trilha, então o relatório de saída 3 lista todas as importações chamadas antes da que
-  falta (e termina nela).
+- O quê: o M1 gerava um stub fraco `PPC_FUNC(__imp__X)` por importação, que lançava `UnimplementedImport`, e uma
+  implementação seria uma definição forte `LR_KERNEL_EXPORT(X)` no runtime. Agora o gerador
+  (`render_import_thunks`, antes `render_import_stubs`) emite um thunk forte por importação, compilado com o jogo,
+  que procura a implementação pelo nome no registro (uma vez, num `static` local), copia os registradores para o
+  `GuestCall` de layout fixo e chama a `KernelFn` registrada. O registro passa a ter três estados (`Implemented`,
+  `Stub`, `Missing`), com `LR_KERNEL(Nome)` e `LR_KERNEL_STUB(Nome, valor)`; `register_implemented`,
+  `is_implemented` e `LR_KERNEL_EXPORT` foram removidos. `--coverage` passa a imprimir `| Import | Kind | Status |`
+  e as contagens (hoje em duas linhas, `Functions: implemented a, stub b, missing c / N` e `Variables: ... / M`,
+  ver M17). Toda chamada de thunk entra na trilha, então o relatório de saída 3 lista todas as importações chamadas
+  antes da que falta (e termina nela).
 - Por quê: `LR_KERNEL_EXPORT` gera `PPC_FUNC`, que precisa do `ppc_config.h` gerado, mas o `lr_runtime_core`
   é compilado antes de existir código gerado (R16 do ADR 0003). O modelo "forte vence fraco" não podia ser
   usado no runtime pré-compilado. Com a ABI fixa, só o thunk (compilado com o jogo) toca o `PPCContext`.
@@ -85,14 +85,14 @@ Formato: o quê, por quê, custo se estiver errada.
   atualizar o pin não resolve. O plano previa publicar as nossas mudanças num fork no GitHub (passo humano); como o
   dono não escolheu um fork, elas ficam no próprio repositório, em `thirdparty/patches/xenonrecomp/NNNN-*.patch`
   (`git format-patch ddd128b..legacyrecomp`, com autoria, mensagens e créditos). O gitlink do submódulo volta para
-  `ddd128b`, que qualquer clone consegue buscar. No configure, `cmake/LrXenonRecompPatches.cmake` espelha o submódulo
-  em `build/<preset>/_deps/XenonRecomp-patched`, normaliza para LF os arquivos que os patches tocam, aplica os
-  patches com `git apply` e compila essa cópia; o checkout do submódulo nunca muda. A reaplicação acontece quando um
-  patch ou um original tocado muda (carimbo com hash). Tudo o que lia arquivos do XenonRecomp (`ppc_context.h`,
-  simde, libmspack, o harness `tests/recomp`) usa `LR_XENONRECOMP_DIR`. O hash dos patches entra em
-  `LR_XENONRECOMP_COMMIT` (`+patches:<hash>`), a impressão digital das etapas `analyse` e `recompile`. O fluxo para
-  editar o recompilador está em `docs/development.md` (branch local `legacyrecomp`, `-DLR_XENONRECOMP_APPLY_PATCHES=OFF`,
-  regenerar os patches).
+  `ddd128b`, que qualquer clone consegue buscar. No configure, `cmake/LrXenonRecompPatches.cmake` espelha o
+  submódulo em `build/<preset>/_deps/XenonRecomp-patched`, normaliza para LF os arquivos que os patches tocam,
+  aplica os patches com `git apply` e compila essa cópia; o checkout do submódulo nunca muda. A reaplicação
+  acontece quando um patch ou um original tocado muda (carimbo com hash). Tudo o que lia arquivos do XenonRecomp
+  (`ppc_context.h`, simde, libmspack, o harness `tests/recomp`) usa `LR_XENONRECOMP_DIR`. O hash dos patches entra
+  em `LR_XENONRECOMP_COMMIT` (`+patches:<hash>`), a impressão digital das etapas `analyse` e `recompile`. O fluxo
+  para editar o recompilador está em `docs/development.md` (branch local `legacyrecomp`,
+  `-DLR_XENONRECOMP_APPLY_PATCHES=OFF`, regenerar os patches).
 - Conteúdo (10 patches, todos em `XenonRecomp/recompiler.cpp`, cada um coberto por `tests/recomp`): `bdzf`, `bso`,
   `bns`, `bdnzt` e a correção do `bdnzf`; loads/stores com update (`lfsu`, `lfsux`, `stfsu`, `stfsux`, `lhzu`, `sthu`,
   `lbzux`, `lhzux`, `lhau`, `lwzux`, `ldux`, `lfdu`, `lfdux`, `stbux`, `sthux`, `stdux`, `stfdu`), `lhbrx`, `lvehx`;
@@ -126,3 +126,105 @@ Formato: o quê, por quê, custo se estiver errada.
   da GPU).
 - Custo se errado: um título que carregue um XEX de verdade recebe "arquivo não encontrado"; uma mensagem XAM
   desconhecida recebe `X_E_FAIL`, como no Xenia.
+
+### M9. `container.sh` também sincroniza arquivos novos não rastreados (Tarefa 1)
+- O quê: o plano dizia "arquivos rastreados"; a sincronização para o volume `/work` copia também os não rastreados
+  que não estão no `.gitignore` (`git ls-files --others --exclude-standard`), e deixa de fora os rastreados apagados
+  na árvore de trabalho.
+- Por quê: o ciclo teste-falha-implementa roda no contêiner antes do commit, com arquivos novos ainda não
+  adicionados; a spec (§12) quer que o contêiner teste o que o desenvolvedor tem.
+- Custo se errado: um arquivo de rascunho não rastreado pode quebrar o build do contêiner (visível na hora).
+  Arquivos não rastreados dentro de submódulos não são copiados.
+
+### M10. Convenções da ABI das importações que o plano não fixava (Tarefa 8) — não conferidas no jogo
+- O quê: (a) o `marshal` aceita um `GuestCall&` opcional como primeiro parâmetro da implementação, repassado sem
+  consumir posição de argumento (o printf da CRT e `RtlCaptureContext` precisam dos registradores e da base);
+  (b) argumentos de 64 bits na pilha (a partir do 9º) são lidos do slot inteiro de 8 bytes em
+  `r1 + 0x50 + (i − 8)·8`, e floats vêm de `f1` em diante, em sequência, apesar de um resumo do Xenia dizer `0x54` e
+  `f[1 + ordinal]` (o `0x54` é a palavra baixa do mesmo slot).
+- Por quê: (a) evita uma segunda forma de registro só para essas importações; (b) é a ABI PowerPC de 64 bits
+  do Xbox 360 lida diretamente; nenhuma importação do M2 com mais de 8 argumentos recebe 64 bits ou float na pilha.
+- Custo se errado: uma linha em `read_int_arg` ou no índice de float; não verificado pelo jogo real (o boot chama só
+  27 importações antes da GPU).
+
+### M11. Memória física: vista `0xE0` com `+0x1000`, `free` só pela base e `STATUS_CONFLICTING_ADDRESSES` (Tarefas 12 e 13)
+- O quê: (a) `MmGetPhysicalAddress` de um endereço da vista `0xE0000000` dá `(endereço & 0x1FFFFFFF) + 0x1000`, e o
+  endereço `0xE0` de um físico é `0xE0000000 + físico − 0x1000`, como o `PhysicalHeap::GetPhysicalAddress` do Xenia;
+  a spec (§6.2) dizia "menos 0x1000" e foi corrigida; (b) `PhysicalHeap::free` aceita só a base da alocação
+  (`MmFreePhysicalMemory` passa a base), enquanto `allocation_size` aceita qualquer endereço de dentro; (c)
+  `NtAllocateVirtualMemory` com base fixa que conflita devolve `STATUS_CONFLICTING_ADDRESSES` (semântica do NT), não
+  o `STATUS_NO_MEMORY` do Xenia.
+- Por quê: (a) o Xenia é a referência citada pela spec; (b) é o que o kernel faz; (c) o jogo trata os dois como
+  falha.
+- Custo se errado: (a) troca de sinal em duas linhas, visível como endereço de GPU errado no M3; (b) uma busca; (c)
+  uma constante. O aliasing de memória física entre as vistas continua fora do escopo (spec §15).
+
+### M12. Arquivos e objetos: `NtOpenFile` com 6 argumentos e link simbólico repetido (Tarefas 21 e 22)
+- O quê: (a) `NtOpenFile(handle, access, attrs, iosb, share_access, open_options)` com 6 argumentos, como o NT e o
+  xenia-canary (o Xenia master tem 5); (b) `ObCreateSymbolicLink` com um nome que já existe mantém o link antigo e
+  devolve `STATUS_SUCCESS` (registrando em stderr e no trace), como o Xenia, em vez de `STATUS_OBJECT_NAME_COLLISION`.
+- Por quê: (a) o canary é a branch mantida e bate com o NT; (b) o código de boot pode registrar `game:`/`cache:` de
+  novo, e a leniência do Xenia é a aposta segura.
+- Custo se errado: (a) flags de compartilhamento lidas como opções de abertura; (b) um título que dependa da colisão
+  (improvável).
+
+### M13. Família printf com a semântica do CRT da Microsoft (Tarefa 24)
+- O quê: onde o Xenia diverge, segue-se o CRT/kernel da Microsoft: `_vsnprintf` devolve −1 quando trunca, e `%s` em
+  `swprintf` é string larga.
+- Por quê: o jogo foi compilado contra o CRT da Microsoft; o Xenia aproxima.
+- Custo se errado: um comprimento de string diferente, visível no log.
+
+### M14. Valores de vídeo e áudio fixos: `XGetAVPack` = 6 e consultas de vídeo como `stub` (Tarefa 26)
+- O quê: `XGetAVPack` devolve 6, o valor do Xenia testado com jogos reais, e não um valor literal de HDMI;
+  `XAudioGetSpeakerConfig` devolve estéreo com sucesso, como o Xenia. As consultas de vídeo (`VdQueryVideoMode`,
+  `XGetVideoMode`, `VdGetCurrentDisplayInformation`, `VdGetCurrentDisplayGamma`, `VdQueryVideoFlags`,
+  `VdIsHSIOTrainingSucceeded`, `XGetVideoCapabilities`, `XGetAVPack`) são registradas como `stub` (descrevem
+  1280x720 widescreen fixo), e a cobertura as mostra assim. `XamUserGetXUID` responde à máscara de tipo 4, que o
+  Xenia não responderia.
+- Por quê: compatibilidade acima do texto literal do plano; a spec (§1) chama as consultas de stubs.
+- Custo se errado: uma constante; a máscara 4 a rever se um trace a mostrar.
+
+### M15. `XeCryptRotSumSha` continua `missing` (Tarefa 25)
+- O quê: o plano punha a criptografia no M2, mas `XeCryptRotSumSha` não tem implementação de referência (o Xenia não
+  a tem); pela regra da spec (§5.2) uma importação não atingida fica `missing`.
+- Por quê: implementar sem referência seria chute; o boot real não a chama antes da GPU.
+- Custo se errado: uma saída 3 nela quando o jogo a chamar (M3 em diante), a implementar pelo fluxo de engenharia
+  reversa.
+
+### M16. Exceções e contexto: `0x406D1388` retorna, `RtlCaptureContext` parcial (Tarefa 20) — não conferidos
+- O quê: (a) `RtlRaiseException` com o código `0x406D1388` (o `SetThreadName` do MSVC) retorna em vez de terminar com
+  `guest_fatal`, como o Xenia; (b) `RtlCaptureContext` escreve só os campos que preenche (`ContextFlags`, `iar` =
+  lr, lr, r1, r3..r10, r13) no layout do `CONTEXT` público do Xbox 360, sem zerar a estrutura inteira (0xA40 bytes).
+- Por quê: (a) o jogo nomeia threads assim e nada trata a exceção; (b) o layout não foi conferido, e zerar 0xA40 bytes
+  com um layout errado poderia esmagar a pilha de quem chamou. O SEH completo continua fora do escopo (spec §15).
+- Custo se errado: um deslocamento errado do `CONTEXT`, visível quando o jogo chamar `RtlCaptureContext`.
+
+### M17. Detalhes de implementação que mudam o comportamento visível (Tarefas 14, 18 e 29)
+- O quê: (a) criar a thread de trabalho do kernel (timers/DPC) também congela o layout de TLS
+  (`mark_thread_created`), então o `main.cpp` chama `set_image` antes de `resolve_variable_imports`, que pode
+  iniciá-la; uma ordem errada sai com 2; (b) `--coverage` termina com duas linhas de contagem, uma para funções e
+  outra para variáveis (`Functions: implemented a, stub b, missing c / N`, `Variables: ... / M`), em vez de uma
+  linha que somava as duas (spec §5.3, "N funções + M variáveis").
+- Por quê: (a) uma ordem de inicialização errada falha alto em vez de corromper TLS; (b) a soma escondia quantas
+  funções faltam.
+- Custo se errado: nenhum além de quem lê a linha antiga (só a documentação a lia).
+
+### M18. Trailers de coautoria dos commits (todas as tarefas)
+- O quê: os commits feitos pelos subagentes trazem `Co-Authored-By: Claude Sonnet 5.5`, o modelo que os escreveu, e
+  não o `Claude Opus 5.5` literal do `AGENTS.md`; os patches 0001–0003 do XenonRecomp também. O histórico não foi
+  reescrito.
+- Por quê: o objetivo da regra é a atribuição correta (o README diz que commits de agente se identificam).
+- Custo se errado: um rebase não interativo para reescrever os trailers antes do push.
+
+### M19. Lacunas menores do plano preenchidas na execução (Tarefas 11, 15, 18, 22 e ordem das tarefas)
+- O quê: (a) os heaps devolvem `lr::Result` com `InvalidFormat` (argumento ruim), `OutOfRange` (sem espaço ou faixa
+  em conflito) e `NotFound` (não alocado), sem o `enum class HeapError` que o plano também citava; o
+  `NtAllocateVirtualMemory` e companhia mapeiam esses códigos para NTSTATUS; (b) todo objeto com handle precisa de
+  endereço estável no convidado; `ObReferenceObjectByHandle` de um objeto sem endereço (nem cabeçalho nem corpo)
+  devolve `STATUS_OBJECT_TYPE_MISMATCH` sem escrever nada nem fixar referência; (c) timer com período negativo →
+  `STATUS_INVALID_PARAMETER`; DPC com rotina 0 → `guest_fatal`; (d) `NtReadFile`/`NtWriteFile` com deslocamento
+  negativo diferente de −1/−2 → `STATUS_INVALID_PARAMETER`; (e) ordem de execução: Tarefas 1–6, 8–27 e só então 7, 28
+  e 29, as que dependem da ISO e de decisões do dono.
+- Por quê: (a) o plano se contradizia e os códigos de `Result` eram a metade concreta; (b) evita referências presas
+  em objetos sem cabeçalho; (c)–(d) falhar alto em vez de comportamento silencioso; (e) nada de 8–27 dependia da 7.
+- Custo se errado: mudanças pequenas e locais (um mapeamento, uma constante).

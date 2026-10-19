@@ -10,7 +10,7 @@ flowchart TD
   runtime[runtime<br/>memória do convidado, loader,<br/>kernel/, threads, falhas]
   formats[formats<br/>xdvdfs, stfs, xex2]
   common[common<br/>Result/Error, log, sha256, paths, fs_util]
-  third[thirdparty<br/>XenonRecomp, Catch2, imgui]
+  third[thirdparty<br/>XenonRecomp + patches/xenonrecomp, Catch2, imgui]
   cli --> pipeline
   gui --> pipeline
   cli --> runtime
@@ -52,9 +52,10 @@ layout definido no `ppc_config.h` gerado (rulings R2 e R16, `docs/adr/0003-m1-pl
 runtime nunca toca `PPCContext`: as threads do convidado (inclusive a principal, `run_main_thread`) entram no código
 recompilado pela cola `GuestGlue` que o `main.cpp` instala (ver "Kernel").
 
-Linha de comando do jogo: `legacyrecomp-game --image <xex> [--data <dir>] [--headless] [--coverage] [--strict-memory]`.
-`--coverage` imprime a tabela de importações (ver `docs/kernel-coverage.md`); `--headless` não inicia SDL;
-`--strict-memory` liga o modo estrito de memória (`KernelConfig.strict_memory`, ver abaixo).
+Linha de comando do jogo:
+`legacyrecomp-game --image <xex> [--data <dir>] [--headless] [--coverage] [--strict-memory]`. `--coverage` imprime
+a tabela de importações (ver `docs/kernel-coverage.md`); `--headless` não inicia SDL; `--strict-memory` liga o modo
+estrito de memória (`KernelConfig.strict_memory`, ver abaixo).
 
 ## Mapa de memória do convidado
 
@@ -112,11 +113,11 @@ com `static_assert` em `guest_structs.h`; semântica do `xthread.cc`, só refer�
   TLS `+0x68`, id `+0x14C`, endereço de início `+0x150`, último erro `+0x160`), KPCR (`0x2D8` bytes, o `r13`:
   `tls_ptr` `+0x00`, `pcr_ptr` `+0x30`, topo da pilha `+0x70`, fundo `+0x74`, `current_thread` `+0x100`,
   `current_cpu` `+0x10C`) e o bloco TLS: cópia do modelo TLS do XEX (cabeçalho `0x00020104`: dados brutos de
-  `raw_data_address`, completados com zeros até `data_size`) seguida dos slots de `KeTlsAlloc` (`be<uint32_t>`,
-  no mínimo 64, ou o `slot_count` do cabeçalho se maior; bitmap de slots do processo). O `main.cpp` passa o
-  cabeçalho a `Threads::set_image`, que o valida (no máximo 4096 slots e 4 MiB de dados, `raw_data_size` <=
-  `data_size`, dados brutos dentro da imagem carregada; tamanhos calculados em 64 bits): um cabeçalho inválido é erro
-  de carga (saída 2). `set_image` é recusado depois que existe alguma thread, então o layout de TLS é fixo. `tls_ptr` e
+  `raw_data_address`, completados com zeros até `data_size`) seguida dos slots de `KeTlsAlloc` (`be<uint32_t>`, no
+  mínimo 64, ou o `slot_count` do cabeçalho se maior; bitmap de slots do processo). O `main.cpp` passa o cabeçalho
+  a `Threads::set_image`, que o valida (no máximo 4096 slots e 4 MiB de dados, `raw_data_size` <= `data_size`,
+  dados brutos dentro da imagem carregada; tamanhos calculados em 64 bits): um cabeçalho inválido é erro de carga
+  (saída 2). `set_image` é recusado depois que existe alguma thread, então o layout de TLS é fixo. `tls_ptr` e
   `tls_address` apontam para a cópia do modelo, como o `tls_static_address` do Xenia;
 - uma pilha do heap de pilhas (`Kernel::stacks()`), arredondada a 4 KiB, mínimo 16 KiB, com uma página de guarda
   reservada e `PROT_NONE` logo abaixo. A thread começa com `r1` = topo - `0x80`.
@@ -169,15 +170,15 @@ Outras importações (`exports/threads.cpp`): `KeTlsAlloc`/`KeTlsFree`/`KeTlsGet
 
 ### Tempo, timers, DPCs e spinlocks
 
-Relógios (`runtime/kernel/timers.h`, importações em `exports/time.cpp`): o XenonRecomp traduz a leitura do
-timebase (`mftb`) para `__rdtsc()`, então o contador de desempenho do convidado **é o TSC do host**.
-`KeQueryPerformanceFrequency` devolve a frequência do TSC medida **na inicialização** (`init_kernel` grava em `Timers::tsc_hz()` o valor de
-`process_tsc_hz()`, que mede uma vez por processo com `calibrate_tsc_hz()`: três amostras de ~16 ms dentro de 50 ms,
-cada leitura de `CLOCK_MONOTONIC` entre duas leituras de `__rdtsc()`, vence a amostra de colchetes mais estreitos),
-como valor de 64 bits, e não os 50 MHz do console. `KeQuerySystemTime` grava o relógio de tempo real do host como FILETIME (100 ns
-desde 1601-01-01 UTC, BE). `RtlTimeToTimeFields`/`RtlTimeFieldsToTime` convertem para o calendário gregoriano
-proléptico (`X_TIME_FIELDS` do Xenia: oito `be<int16_t>`, dia da semana por último, 0 = domingo); campos fora da
-faixa devolvem FALSE.
+Relógios (`runtime/kernel/timers.h`, importações em `exports/time.cpp`): o XenonRecomp traduz a leitura do timebase
+(`mftb`) para `__rdtsc()`, então o contador de desempenho do convidado **é o TSC do host**.
+`KeQueryPerformanceFrequency` devolve a frequência do TSC medida **na inicialização** (`init_kernel` grava em
+`Timers::tsc_hz()` o valor de `process_tsc_hz()`, que mede uma vez por processo com `calibrate_tsc_hz()`: três
+amostras de ~16 ms dentro de 50 ms, cada leitura de `CLOCK_MONOTONIC` entre duas leituras de `__rdtsc()`, vence a
+amostra de colchetes mais estreitos), como valor de 64 bits, e não os 50 MHz do console. `KeQuerySystemTime` grava
+o relógio de tempo real do host como FILETIME (100 ns desde 1601-01-01 UTC, BE).
+`RtlTimeToTimeFields`/`RtlTimeFieldsToTime` convertem para o calendário gregoriano proléptico (`X_TIME_FIELDS` do
+Xenia: oito `be<int16_t>`, dia da semana por último, 0 = domingo); campos fora da faixa devolvem FALSE.
 
 Thread de trabalho do kernel: uma por kernel, roda as expirações de timers, as rotinas de DPC e a atualização de
 `KeTimeStampBundle`. Como rotinas de DPC são código do convidado, ela é uma thread interna do convidado
@@ -185,28 +186,30 @@ Thread de trabalho do kernel: uma por kernel, roda as expirações de timers, as
 sequência do convidado (a thread principal continua sendo a 1), sem handle, fora de `Threads::live()` e de
 `wait_for_guest_threads_for_tests`; ela espera numa variável de condição própria, nunca no despachante, então o
 detector de impasse não a conta como thread do convidado (ele deve consultar `Timers::has_pending_work()`: timer
-armado ou DPC na fila conta como trabalho pendente). Seu bloco de TLS copia o modelo de TLS do XEX como o de qualquer thread, e criá-la congela o layout
-(`set_image` falha depois); por isso o `main.cpp` chama `set_image` antes de `resolve_variable_imports`, que pode
-iniciá-la. Ela nasce sob demanda (primeiro timer armado, primeiro DPC na fila ou importação de `KeTimeStampBundle`),
-roda em `DISPATCH_LEVEL` e chama o convidado por `call_guest` (a cola, com o FPSCR do host). O destrutor do `Kernel`
-(e `reset_kernel_for_tests`, antes de soltar a instância) a para e faz `join`. Uma `UnimplementedImport` dentro de
-um DPC sai com 3 e o relatório; qualquer outra exceção, inclusive `ExTerminateThread`, sai com 4.
+armado ou DPC na fila conta como trabalho pendente). Seu bloco de TLS copia o modelo de TLS do XEX como o de
+qualquer thread, e criá-la congela o layout (`set_image` falha depois); por isso o `main.cpp` chama `set_image`
+antes de `resolve_variable_imports`, que pode iniciá-la. Ela nasce sob demanda (primeiro timer armado, primeiro DPC
+na fila ou importação de `KeTimeStampBundle`), roda em `DISPATCH_LEVEL` e chama o convidado por `call_guest` (a
+cola, com o FPSCR do host). O destrutor do `Kernel` (e `reset_kernel_for_tests`, antes de soltar a instância) a
+para e faz `join`. Uma `UnimplementedImport` dentro de um DPC sai com 3 e o relatório; qualquer outra exceção,
+inclusive `ExTerminateThread`, sai com 4.
 
 Timers: `NtCreateTimer(handle*, atributos, tipo)` aloca um `X_KTIMER` (0x28 bytes, layout do KTIMER do NT; o Xenia
 não declara um) no pool com cabeçalho tipo 8 (notificação, tipo 0) ou 9 (sincronização, tipo 1, consumido pela
 espera). `NtSetTimerEx(handle, vencimento*, rotina_apc, modo, contexto_apc, resume, período_ms, estado_anterior*)`
 (ordem do Xenia) zera o `signal_state` e arma o timer: vencimento negativo = relativo em 100 ns, senão FILETIME
-absoluto; período negativo devolve `STATUS_INVALID_PARAMETER` (o `Period` do NT é `LONG`); `resume` devolve `STATUS_TIMER_RESUME_IGNORED` como no Xenia. Ao vencer, a thread de trabalho põe
-`signal_state` em 1 e chama `Dispatcher::signal`, enfileira a APC `rotina(contexto, FILETIME baixo, alto)` na
-thread do convidado que armou o timer (semântica do Xbox/Xenia, não roda na thread de trabalho) e rearma o timer
-periódico (períodos perdidos são pulados). `NtCancelTimer` desarma e informa o estado atual. Fechar o último handle
-desarma o timer antes de liberar o corpo. Prazo, período e APC ficam no host, indexados pelo endereço do cabeçalho.
+absoluto; período negativo devolve `STATUS_INVALID_PARAMETER` (o `Period` do NT é `LONG`); `resume` devolve
+`STATUS_TIMER_RESUME_IGNORED` como no Xenia. Ao vencer, a thread de trabalho põe `signal_state` em 1 e chama
+`Dispatcher::signal`, enfileira a APC `rotina(contexto, FILETIME baixo, alto)` na thread do convidado que armou o
+timer (semântica do Xbox/Xenia, não roda na thread de trabalho) e rearma o timer periódico (períodos perdidos são
+pulados). `NtCancelTimer` desarma e informa o estado atual. Fechar o último handle desarma o timer antes de liberar
+o corpo. Prazo, período e APC ficam no host, indexados pelo endereço do cabeçalho.
 
 DPCs: `KeInitializeDpc(dpc*, rotina, contexto)` grava o `XDPC` do Xenia (tipo 19 no byte alto da primeira palavra,
 rotina `+0xC`, contexto `+0x10`, argumentos `+0x14`/`+0x18`). `KeInsertQueueDpc(dpc*, arg1, arg2)` devolve FALSE se
 o DPC já está na fila; senão grava os argumentos e a thread de trabalho chama `rotina(dpc, contexto, arg1, arg2)`.
-O DPC sai da fila antes de a rotina rodar, então pode ser reenfileirado (o Xenia nunca despacha DPCs). Um DPC com rotina 0 é erro fatal do convidado (`guest_fatal`, saída 5), no
-`KeInsertQueueDpc` ou na thread de trabalho.
+O DPC sai da fila antes de a rotina rodar, então pode ser reenfileirado (o Xenia nunca despacha DPCs). Um DPC com
+rotina 0 é erro fatal do convidado (`guest_fatal`, saída 5), no `KeInsertQueueDpc` ou na thread de trabalho.
 
 `KeTimeStampBundle` (`X_TIME_STAMP_BUNDLE`, 24 bytes): tempo de interrupção (100 ns desde o início do kernel), tempo
 do sistema (FILETIME) e contagem de ticks em ms em `+0x10` (o único campo que o Xenia atualiza). O bloco é preenchido
@@ -265,49 +268,48 @@ chamada a endereço sem função recompilada). Escreve `Guest fatal: <o_quê>` e
 e sai com `_exit(5)`. Toda condição fatal que não é importação faltando passa por ela.
 
 **Chamadas do kernel para o convidado** (`runtime/kernel/glue.h`): rotinas de início de thread, APCs, DPCs e
-callbacks são funções recompiladas, mas o `lr_runtime_core` não conhece o `PPCContext`. O `main.cpp`
-(compilado com o jogo) instala no início uma cola `GuestGlue` com dois ponteiros: `call` monta um
-`PPCContext` novo (r3.. = argumentos, r1, r13) e chama a função por `PPC_LOOKUP_FUNC`; `has_function`
-confere primeiro se o endereço está em `[PPC_CODE_BASE, PPC_CODE_BASE + PPC_CODE_SIZE)` e alinhado a 4, e só
-então lê a entrada da tabela de funções (não nula). `call_guest(endereço, args)` usa o quadro atual da thread
-(gravado pelo thunk): a função chamada roda com `r1 = (r1 atual - 0x100) & ~0xF` e o mesmo r13, e o quadro
-de quem chamou é restaurado na volta, inclusive quando uma exceção atravessa a chamada. O `PPCContext` novo
-(também o da entrada de cada thread do convidado) carrega o `fpscr` do MXCSR real do host (`loadFromHost`), com
-todas as exceções SSE mascaradas; a cola restaura o MXCSR de quem chamou depois do callback. Endereço sem função recompilada (ou mais de 8 argumentos, ou thread
-sem quadro) termina com `guest_fatal` citando o endereço do convidado, nunca com salto para o endereço 0 do
-host.
+callbacks são funções recompiladas, mas o `lr_runtime_core` não conhece o `PPCContext`. O `main.cpp` (compilado com
+o jogo) instala no início uma cola `GuestGlue` com dois ponteiros: `call` monta um `PPCContext` novo (r3.. =
+argumentos, r1, r13) e chama a função por `PPC_LOOKUP_FUNC`; `has_function` confere primeiro se o endereço está em
+`[PPC_CODE_BASE, PPC_CODE_BASE + PPC_CODE_SIZE)` e alinhado a 4, e só então lê a entrada da tabela de funções (não
+nula). `call_guest(endereço, args)` usa o quadro atual da thread (gravado pelo thunk): a função chamada roda com
+`r1 = (r1 atual - 0x100) & ~0xF` e o mesmo r13, e o quadro de quem chamou é restaurado na volta, inclusive quando
+uma exceção atravessa a chamada. O `PPCContext` novo (também o da entrada de cada thread do convidado) carrega o
+`fpscr` do MXCSR real do host (`loadFromHost`), com todas as exceções SSE mascaradas; a cola restaura o MXCSR de
+quem chamou depois do callback. Endereço sem função recompilada (ou mais de 8 argumentos, ou thread sem quadro)
+termina com `guest_fatal` citando o endereço do convidado, nunca com salto para o endereço 0 do host.
 
 Como todo thunk passa por `trace`, a trilha do relatório de saída 3 (`Trail (last N): ...`, últimas 32
 chamadas da thread) lista todas as importações chamadas antes da que falta, inclusive stubs, terminando
 nela. `--coverage` imprime `| Import | Kind | Status |` para as 459 importações (tipo `function`; estado
 `implemented`, `stub` ou `missing`; com `--image <xex>`, também as importações de variável, tipo `variable`) e
-termina com `Implemented: a, stub: b, missing: c / N functions + M variables` (ver
+termina com duas linhas de contagem, `Functions: implemented a, stub b, missing c / N` e `Variables: ... / M` (ver
 `docs/kernel-coverage.md`). Esse modelo substitui o do M1 (`LR_KERNEL_EXPORT` forte contra stub fraco), que
 não funcionava com o runtime pré-compilado: ver `docs/adr/0004-m2-plan-deviations.md`.
 
 ### Objetos, handles e esperas
 
-`Kernel::objects()` (`runtime/kernel/objects.h`) é a tabela de handles (`0xF8000000 + 4·slot`). Um `KObject`
-pode ter um corpo no convidado (`guest_header()`, o `DISPATCHER_HEADER`); `ObReferenceObjectByHandle` recusa
-objetos sem endereço no convidado (nem cabeçalho nem corpo) com `STATUS_OBJECT_TYPE_MISMATCH`, sem escrever nada e sem fixar
+`Kernel::objects()` (`runtime/kernel/objects.h`) é a tabela de handles (`0xF8000000 + 4·slot`). Um `KObject` pode
+ter um corpo no convidado (`guest_header()`, o `DISPATCHER_HEADER`); `ObReferenceObjectByHandle` recusa objetos sem
+endereço no convidado (nem cabeçalho nem corpo) com `STATUS_OBJECT_TYPE_MISMATCH`, sem escrever nada e sem fixar
 referência.
 
 `Kernel::dispatcher()` (`runtime/kernel/dispatcher.h`) é o motor de espera. A memória do convidado é a fonte da
-verdade: ele trabalha só com endereços de `DISPATCHER_HEADER` (tipo `+0`, `signal_state` `+4`), então eventos que
-o próprio jogo inicializa (o `KeInitializeEvent` é inline) funcionam sem handle. Um mutex global serializa tudo;
-`signal_state` é lido e escrito com operações atômicas sobre a palavra big-endian, coerentes com o
-`lwarx`/`stwcx.` do código gerado. Os esperadores ficam numa lista FIFO por endereço de cabeçalho, cada um com sua
-variável de condição, e quem sinaliza (set, pulse, release) já os satisfaz e consome sob o mutex, então um pulso
-ou um evento de reset automático nunca perde o despertar. Tipos: evento de notificação (0) e de sincronização (1,
-consumido), mutante (2: `signal_state` 1 livre, desce a cada aquisição, recursão pelo dono; dono em `+0x18`),
-semáforo (5, limite em `+0x10`), thread (6) e timers (8, 9 = reset automático). WaitAll adquire tudo ou nada.
-Tempo limite: nulo = infinito, 0 = consulta, negativo = relativo em 100 ns, positivo = FILETIME absoluto contra o
-relógio real; as esperas usam prazos do `steady_clock`. `wake_for_apc(thread)` faz uma espera alertável devolver
-`STATUS_USER_APC` (ou a próxima, se a thread não está esperando). A identidade da thread vem de
-`current_thread_token()`: o endereço do KTHREAD numa thread do convidado, um número por thread do host nas outras.
-`snapshot()` lista as esperas em curso para o detector de impasse, cada uma com `apc_pending` (há um
-`wake_for_apc` pendente para aquela thread); `activity()` conta entradas e saídas de espera. Um convidado que muda `signal_state` com
-escrita comum, sem importação, só acorda alguém na próxima operação do despachante naquele cabeçalho.
+verdade: ele trabalha só com endereços de `DISPATCHER_HEADER` (tipo `+0`, `signal_state` `+4`), então eventos que o
+próprio jogo inicializa (o `KeInitializeEvent` é inline) funcionam sem handle. Um mutex global serializa tudo;
+`signal_state` é lido e escrito com operações atômicas sobre a palavra big-endian, coerentes com o `lwarx`/`stwcx.`
+do código gerado. Os esperadores ficam numa lista FIFO por endereço de cabeçalho, cada um com sua variável de
+condição, e quem sinaliza (set, pulse, release) já os satisfaz e consome sob o mutex, então um pulso ou um evento
+de reset automático nunca perde o despertar. Tipos: evento de notificação (0) e de sincronização (1, consumido),
+mutante (2: `signal_state` 1 livre, desce a cada aquisição, recursão pelo dono; dono em `+0x18`), semáforo (5,
+limite em `+0x10`), thread (6) e timers (8, 9 = reset automático). WaitAll adquire tudo ou nada. Tempo limite: nulo
+= infinito, 0 = consulta, negativo = relativo em 100 ns, positivo = FILETIME absoluto contra o relógio real; as
+esperas usam prazos do `steady_clock`. `wake_for_apc(thread)` faz uma espera alertável devolver `STATUS_USER_APC`
+(ou a próxima, se a thread não está esperando). A identidade da thread vem de `current_thread_token()`: o endereço
+do KTHREAD numa thread do convidado, um número por thread do host nas outras. `snapshot()` lista as esperas em
+curso para o detector de impasse, cada uma com `apc_pending` (há um `wake_for_apc` pendente para aquela thread);
+`activity()` conta entradas e saídas de espera. Um convidado que muda `signal_state` com escrita comum, sem
+importação, só acorda alguém na próxima operação do despachante naquele cabeçalho.
 
 As importações (`exports/sync.cpp`, semântica do `xboxkrnl_threading.cc` do Xenia, só referência) são
 `KeSetEvent`/`KeResetEvent`, `KeInitializeMutant`/`KeReleaseMutant` (assinaturas do NT; liberar sem ser dono
@@ -327,9 +329,9 @@ handles de arquivo, enquanto as esperas continuam recusando-os (o `guest_header(
 `Kernel::vfs()` (`runtime/kernel/vfs.h`) traduz caminhos do convidado (`game:\...`, `\??\...`,
 `\Device\Cdrom0\...`, `cache:\...`) para caminhos do host, sem diferenciar maiúsculas; `game:` é só leitura e
 `cache:` fica em `<user>/cache`. Os dispositivos de disco `\Device\Harddisk0\Partition0` (o disco inteiro) e
-`\Device\Harddisk0\Partition1` (a partição de dados) também são montados, graváveis, na mesma pasta
-`<user>/cache` que `\Device\Harddisk0\Cache0` (spec, seção 9): o jogo vê uma única pasta gravável qualquer que
-seja o dispositivo que nomeia, e os saves ficam todos num lugar só. As importações de arquivo (`exports/files.cpp`, semântica do
+`\Device\Harddisk0\Partition1` (a partição de dados) também são montados, graváveis, na mesma pasta `<user>/cache`
+que `\Device\Harddisk0\Cache0` (spec, seção 9): o jogo vê uma única pasta gravável qualquer que seja o dispositivo
+que nomeia, e os saves ficam todos num lugar só. As importações de arquivo (`exports/files.cpp`, semântica do
 `xboxkrnl_io.cc`/`xboxkrnl_io_info.cc`/`xfile.cc` do Xenia, só referência) usam o `resolve()` dele:
 
 - **`FileObject`** (`runtime/kernel/files.h`): um descritor do host aberto com `O_CLOEXEC` (arquivo ou
@@ -344,10 +346,10 @@ seja o dispositivo que nomeia, e os saves ficam todos num lugar só. As importa�
   Nome faltando → `STATUS_OBJECT_NAME_NOT_FOUND`; diretório intermediário faltando ou dispositivo desconhecido →
   `STATUS_OBJECT_PATH_NOT_FOUND`; criar, substituir ou truncar num ponto só leitura → `STATUS_ACCESS_DENIED`. Pedir
   acesso de escrita a um arquivo só leitura abre só para leitura (como o Xenia); a escrita por esse handle é
-  recusada. Em pontos graváveis a máscara de acesso não é aplicada (leniente, como o Xenia): todo handle de
-  arquivo pode ler e escrever. `FILE_DIRECTORY_FILE` (0x1) cria um diretório (ou recusa um arquivo com `STATUS_NOT_A_DIRECTORY`);
-  `FILE_NON_DIRECTORY_FILE` (0x40) num diretório → `STATUS_FILE_IS_A_DIRECTORY`. Em falha o handle de saída recebe
-  `0xFFFFFFFF`.
+  recusada. Em pontos graváveis a máscara de acesso não é aplicada (leniente, como o Xenia): todo handle de arquivo
+  pode ler e escrever. `FILE_DIRECTORY_FILE` (0x1) cria um diretório (ou recusa um arquivo com
+  `STATUS_NOT_A_DIRECTORY`); `FILE_NON_DIRECTORY_FILE` (0x40) num diretório → `STATUS_FILE_IS_A_DIRECTORY`. Em
+  falha o handle de saída recebe `0xFFFFFFFF`.
 - **`NtReadFile`**, **`NtReadFileScatter`** (uma página de 4 KiB por segmento) e **`NtWriteFile`**: síncronos
   (`pread`/`pwrite`). O deslocamento é `*byte_offset`, ou a posição atual quando o ponteiro é nulo ou vale -1 ou
   -2 (`FILE_USE_FILE_POINTER_POSITION`); outro valor negativo → `STATUS_INVALID_PARAMETER`; depois a posição fica
@@ -383,18 +385,20 @@ seja o dispositivo que nomeia, e os saves ficam todos num lugar só. As importa�
   indicado dos flags de sistema (`0x00030000`), `XamGetExecutionId` devolve o ponteiro para as informações de
   execução (`0x00040006`) e `XexGetModuleSection` procura em `0x000002FF`.
 - **Módulos**: `XexGetModuleHandle` aceita NULL ou `default.xex` (a entrada LDR do executável) e
-  `xboxkrnl.exe`/`xam.xex` (entradas LDR falsas, criadas na primeira consulta e guardadas no `Kernel`); outro
-  nome → `*saída = 0`, `ERROR_NOT_FOUND`. `XexGetProcedureAddress(módulo, ordinal)` devolve o thunk da
-  importação (`Kernel::import_thunks()`, preenchido por `resolve_variable_imports`); só existem ordinais que o
-  executável importa, o resto (e a busca por nome) dá `0xC0000263`. `XexLoadImage` só "carrega" módulos já presentes
+  `xboxkrnl.exe`/`xam.xex` (entradas LDR falsas, criadas na primeira consulta e guardadas no `Kernel`); outro nome
+  → `*saída = 0`, `ERROR_NOT_FOUND`. `XexGetProcedureAddress(módulo, ordinal)` devolve o thunk da importação
+  (`Kernel::import_thunks()`, preenchido por `resolve_variable_imports`); só existem ordinais que o executável
+  importa, o resto (e a busca por nome) dá `0xC0000263`. `XexLoadImage` só "carrega" módulos já presentes
   (executável, `xboxkrnl.exe`, `xam.xex`: devolve o handle, como o Xenia; outro nome → `*saída = 0`,
   `STATUS_NO_SUCH_FILE`, carregar XEX do disco é M5); `XexUnloadImage` nunca descarrega (sucesso para módulos
-  conhecidos). `XamLoaderLaunchTitle` continua faltando (M5). `XamLoaderGetLaunchData[Size]` → `ERROR_NOT_FOUND`; `XamLoaderTerminateTitle` sai com 0.
+  conhecidos). `XamLoaderLaunchTitle` continua faltando (M5). `XamLoaderGetLaunchData[Size]` → `ERROR_NOT_FOUND`;
+  `XamLoaderTerminateTitle` sai com 0.
 - **Valores fixos** (os padrões do Xenia): título `0x584111F7`; região do jogo (`XGetGameRegion`) `0xFFFF`
   (sem região); versão do dashboard (`XamGetSystemVersion`) 0; `ExGetXConfigSetting`: região AV
   (categoria 2, configuração 2) `0x00001000`, flags de vídeo do usuário `0x00040000`, país 103 (1 byte), fuso
   horário e flags de varejo 0; configuração ou categoria desconhecida → `0xC00000F0` / `0xC00000EF`, buffer
-  pequeno → `STATUS_BUFFER_TOO_SMALL`, e `*required_size` só é escrito em caso de sucesso.
+  pequeno → `STATUS_BUFFER_TOO_SMALL`; `*required_size` é sempre escrito (se o ponteiro for válido): o tamanho
+  em caso de sucesso, 0 em qualquer erro, como no Xenia.
 - **Idioma**: `main.cpp` copia `LC_ALL` (ou `LANG`) para `KernelConfig::language`; `XGetLanguage` e
   `USER_LANGUAGE` mapeiam o prefixo: en 1, ja 2, de 3, fr 4, es 5, it 6, ko 7, zh_TW/zh_HK 8, pt 9, outros zh 10,
   pl 11, ru 12; qualquer outro valor (incluindo `C`) → 1.
@@ -412,18 +416,20 @@ seja o dispositivo que nomeia, e os saves ficam todos num lugar só. As importa�
 estrutura, são registradas como `stub` (`LR_KERNEL_STUB` ou `LR_KERNEL_STUB_FN`).
 
 - **XOVERLAPPED** (`XAM_OVERLAPPED`, 0x1C bytes): toda operação XAM conclui na hora. Com overlapped, preenche
-  `result`, `length`, `context` (handle da thread atual), `extended_error` (HRESULT do resultado), sinaliza o evento
-  (se o handle for de um evento; outro tipo de objeto, como um semáforo, é ignorado sem erro), enfileira a rotina
-  de conclusão como APC na thread atual e devolve `ERROR_IO_PENDING`; sem overlapped devolve o resultado direto. `XamGetOverlappedResult(ov, length*, wait)`: resultado pronto → ele mesmo (`*length`
-  só em sucesso); pendente sem evento ou sem `wait` → `ERROR_IO_INCOMPLETE`; senão espera o evento. Diferença do
-  Xenia: ele adia `XamEnumerate` em 100 ms numa thread de trabalho.
+  `result`, `length`, `context` (handle da thread atual), `extended_error` (HRESULT do resultado), sinaliza o
+  evento (se o handle for de um evento; outro tipo de objeto, como um semáforo, é ignorado sem erro), enfileira a
+  rotina de conclusão como APC na thread atual e devolve `ERROR_IO_PENDING`; sem overlapped devolve o resultado
+  direto. `XamGetOverlappedResult(ov, length*, wait)`: resultado pronto → ele mesmo (`*length` só em sucesso);
+  pendente sem evento ou sem `wait` → `ERROR_IO_INCOMPLETE`; senão espera o evento. Diferença do Xenia: ele adia
+  `XamEnumerate` em 100 ms numa thread de trabalho.
 - **Enumeradores**: objeto `Enumerator` cujo corpo no convidado (pool) é um `X_KENUMERATOR` (0x18 bytes) seguido
   dos bytes privados. `create_enumerator` (C++) cria um sobre itens fixos; `XamEnumerate` copia até
   `items_per_enumerate` itens por chamada, `ERROR_INSUFFICIENT_BUFFER` se o lote não cabe e `ERROR_NO_MORE_FILES`
-  no fim. `XamCreateEnumeratorHandle(user_index, app_id, open_message, close_message, extra_size,
-  items_per_enumerate, flags, handle*)` cria um enumerador vazio (no Xenia é um stub que falha; a ordem dos
-  argumentos segue os campos de `XEnumerator::Initialize` e é suposição). `XamGetPrivateEnumStructureFromHandle`
-  devolve o `X_KENUMERATOR` com uma referência de kernel liberada por `ObDereferenceObject` (ponteiro de saída inválido →
+  no fim.
+  `XamCreateEnumeratorHandle(user_index, app_id, open_message, close_message, extra_size, items_per_enumerate, flags, handle*)`
+  cria um enumerador vazio (no Xenia é um stub que falha; a ordem dos argumentos segue os campos de
+  `XEnumerator::Initialize` e é suposição). `XamGetPrivateEnumStructureFromHandle` devolve o `X_KENUMERATOR` com
+  uma referência de kernel liberada por `ObDereferenceObject` (ponteiro de saída inválido →
   `STATUS_INVALID_PARAMETER`, sem referência).
 - **Tarefas**: `XamTaskSchedule(callback, mensagem, ?, handle*)` roda `callback(mensagem)` numa thread do convidado
   nova e escreve o handle real dela (o Xenia escreve um marcador).
@@ -439,13 +445,12 @@ estrutura, são registradas como `stub` (`LR_KERNEL_STUB` ou `LR_KERNEL_STUB_FN`
   listener e também manda notificações de UI e de entrada.
 - **Usuário**: um usuário local "Player", XUID offline `0xE000000000000001`, estado 1 (conectado localmente), só no
   índice 0. Outros índices: estado 0, `X_E_NO_SUCH_USER` (`0x80070525`); índice ≥ 4 → `X_E_INVALIDARG` em
-  `XamUserGetXUID`, `XamUserGetName` e `XamUserGetSigninInfo`.
-  `XamUserGetXUID` responde a qualquer bit de tipo (offline 1, online 2 e 4), como o perfil local do Xenia; máscara sem
-  esses bits → `X_E_NO_SUCH_USER`. `XamUserReadProfileSettings` não tem perfil gravado:
-  configurações int32/float com padrão no Xenia vêm com `from = 1` e o valor; o resto (strings, binários,
-  desconhecidas) vem sem valor (`from = 0`, só o tipo). Buffer menor que o necessário → `*buffer_size` =
-  necessário e `ERROR_INSUFFICIENT_BUFFER`; o necessário é 8 + por usuário 0x28 por configuração + o tamanho das
-  strings/binários (o espaço que o Xenia reserva).
+  `XamUserGetXUID`, `XamUserGetName` e `XamUserGetSigninInfo`. `XamUserGetXUID` responde a qualquer bit de tipo
+  (offline 1, online 2 e 4), como o perfil local do Xenia; máscara sem esses bits → `X_E_NO_SUCH_USER`.
+  `XamUserReadProfileSettings` não tem perfil gravado: configurações int32/float com padrão no Xenia vêm com
+  `from = 1` e o valor; o resto (strings, binários, desconhecidas) vem sem valor (`from = 0`, só o tipo). Buffer
+  menor que o necessário → `*buffer_size` = necessário e `ERROR_INSUFFICIENT_BUFFER`; o necessário é 8 + por
+  usuário 0x28 por configuração + o tamanho das strings/binários (o espaço que o Xenia reserva).
 - **Conteúdo**: nenhum dispositivo de armazenamento no M2 (`XamContentGetDeviceState` →
   `ERROR_DEVICE_NOT_CONNECTED`, enumeração de dispositivos vazia com itens de 0x50 bytes) e licença completa
   (`0xFFFFFFFF`).
@@ -511,13 +516,14 @@ como trabalho pendente para o detector, senão uma espera legítima por ele vira
 do detector não puder ser criada, o jogo avisa em stderr e roda sem ele. Antes de sair, o detector repete a
 observação depois de montar o relatório: se algo mudou nesse meio tempo, descarta o relatório e continua observando.
 
-**Importações de depuração** (`exports/debug.cpp`, semântica do `xboxkrnl_debug.cc`/`xboxkrnl_hal.cc` do Xenia,
-só referência): `DbgPrint` imprime a string de formato literal com prefixo `[guest] ` (até o interpretador de
+**Importações de depuração** (`exports/debug.cpp`, semântica do `xboxkrnl_debug.cc`/`xboxkrnl_hal.cc` do Xenia, só
+referência): `DbgPrint` imprime a string de formato literal com prefixo `[guest] ` (até o interpretador de
 `printf`); `DbgBreakPoint` registra e continua; `KeBugCheck(código)`/`KeBugCheckEx(código, p1..p4)` →
 `guest_fatal("KeBugCheckEx 0x%08X (0x..., ...)")`; `HalReturnToFirmware` esvazia o trace e sai com 0;
-`RtlCaptureContext` preenche o `X_CONTEXT` do convidado (`guest_structs.h`, 0xA40 bytes; o Xenia não define
-esse tipo, o layout é o do `CONTEXT` público do Xbox 360) escrevendo só os campos conhecidos (`ContextFlags` = controle | inteiros, `iar` = lr, lr, r1, r3..r10 e r13) e
-nada mais: como o layout não foi conferido, zerar 0xA40 bytes poderia sobrescrever a pilha de quem chamou; `RtlRaiseException` → `guest_fatal` com o código da exceção, exceto
-`0x406D1388` (o `SetThreadName` do MSVC, que o Xenia também trata e retorna); `RtlUnwind` e
-`__C_specific_handler` → `guest_fatal` com o nome (sem SEH do convidado). Stubs com sucesso:
-`EtxProducerRegister`/`Unregister`/`Log`, `KeLockL2`/`KeUnlockL2`.
+`RtlCaptureContext` preenche o `X_CONTEXT` do convidado (`guest_structs.h`, 0xA40 bytes; o Xenia não define esse
+tipo, o layout é o do `CONTEXT` público do Xbox 360) escrevendo só os campos conhecidos (`ContextFlags` = controle
+| inteiros, `iar` = lr, lr, r1, r3..r10 e r13) e nada mais: como o layout não foi conferido, zerar 0xA40 bytes
+poderia sobrescrever a pilha de quem chamou; `RtlRaiseException` → `guest_fatal` com o código da exceção, exceto
+`0x406D1388` (o `SetThreadName` do MSVC, que o Xenia também trata e retorna); `RtlUnwind` e `__C_specific_handler`
+→ `guest_fatal` com o nome (sem SEH do convidado). Stubs com sucesso: `EtxProducerRegister`/`Unregister`/`Log`,
+`KeLockL2`/`KeUnlockL2`.

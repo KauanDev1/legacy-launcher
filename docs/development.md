@@ -59,7 +59,9 @@ copia o submódulo para `build/<preset>/_deps/XenonRecomp-patched`, aplica os pa
 `git apply`) e compila a cópia; o checkout do submódulo nunca é alterado. Os patches são reaplicados quando
 um deles muda ou quando muda o original de um arquivo que eles tocam. O hash dos patches entra na impressão
 digital das etapas `analyse` e `recompile` (`LR_XENONRECOMP_COMMIT`), então um patch novo invalida o cache
-da instalação.
+da instalação. A cópia é só acrescentada e atualizada (`file(COPY)`), nunca podada: um arquivo que o upstream
+apagar continua nela até alguém remover `build/<preset>/_deps/XenonRecomp-patched` (ou a pasta de build inteira),
+o que vale fazer depois de atualizar o submódulo.
 
 Para editar o recompilador:
 

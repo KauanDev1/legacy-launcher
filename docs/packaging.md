@@ -42,7 +42,9 @@ do Ninja), `sha256sum`, `readelf`, `openssl` (opcional, confere a assinatura min
 desenvolvimento dos backends do SDL2 que se quer embutir (X11 e extensões, Wayland com `wayland-scanner`,
 libdecor, PipeWire, PulseAudio, ALSA, D-Bus, IBus, udev, DRM/GBM). O SDL2 desliga sozinho o backend cujo
 header não encontra; o resumo fica em `cache/build/sdl2.log`. FUSE não é necessário (o `appimagetool` roda
-com `APPIMAGE_EXTRACT_AND_RUN=1`).
+com `APPIMAGE_EXTRACT_AND_RUN=1`). O binário `git` é obrigatório duas vezes: para o arquivo-fonte e no configure
+do LegacyRecomp, que aplica os patches de `thirdparty/patches/xenonrecomp/` com `git apply` (ADR 0004, M7); o
+script precisa rodar num checkout git com os submódulos.
 
 O que o `build.sh` faz:
 
@@ -66,7 +68,9 @@ O que o `build.sh` faz:
    raiz do AppDir, mais `AppRun`, `.desktop` e ícone, e chama o `appimagetool` com o runtime fixado.
 6. Gera o arquivo-fonte: `git archive` do `HEAD` mais `git submodule foreach --recursive git archive`,
    concatenados sob o prefixo `LegacyRecomp-<versão>/`. Os `.tar.gz` que o GitHub gera para as tags não
-   trazem os submódulos.
+   trazem os submódulos. O arquivo leva o XenonRecomp do upstream (`ddd128b`) e, separados, os patches de
+   `thirdparty/patches/xenonrecomp/` que o configure aplica: é o fonte correspondente do `XenonAnalyse` e do
+   `XenonRecomp` embutidos.
 7. Gera `LegacyRecomp-<versão>-runtime-sources.tar.gz`, o fonte correspondente do runtime do AppImage: o
    fonte do type2-runtime na tag fixada (com os scripts de build e o patch que ele aplica na libfuse) e o
    tarball da libfuse 3.15.0 que esses scripts compilam (mesma versão e mesmo SHA-256), mais um `README`.
@@ -173,6 +177,23 @@ Executado em 2026-10-14 na máquina de desenvolvimento (Manjaro, glibc 2.44, 12 
   avisa; isso só afeta o cache das etapas `analyse`/`recompile`. Extraído dentro de outro repositório git (como
   neste teste, em `work/`), o `git rev-parse` acha o repositório de fora e registra o commit dele.
 - `THIRD-PARTY-LICENSES` está na raiz do AppImage e em `usr/share/doc/legacyrecomp/` (156 KB).
+
+## Aceite do M2 (Task 29)
+
+Executado em 2026-10-18 no contêiner (Docker Desktop no Windows 11, 12 GB, 6 jobs), critério 5 da spec do M2.
+
+- `build.sh` dentro da imagem de desenvolvimento (`tools/dev/Dockerfile`, sem nenhum pacote a mais: os
+  backends X11/Wayland do SDL2 ficam de fora por falta de headers, o que não importa para o teste sem interface),
+  num clone do repositório com os submódulos, `LR_VERSION=0.2.0-m2`: 315 s com os downloads do zero. AppImage de
+  83,7 MB; arquivo-fonte de 9,0 MB.
+- Teste num contêiner `archlinux:latest` puro, sem `clang`, `cc`, `c++`, `gcc`, `cmake`, `ninja`, `make`,
+  `pkg-config` nem `git` (só o `ld`/`ar` do binutils da imagem base), com
+  `env -i HOME=/home PATH=/usr/bin:/bin XDG_CACHE_HOME=<pasta nova> APPIMAGE_EXTRACT_AND_RUN=1` (sem FUSE no
+  contêiner) e pasta de dados nova num volume em disco.
+- `install --iso <ISO> --root <pasta>`: código 0 em 529 s, as sete etapas; o `CMakeCache.txt` do jogo aponta para
+  o `c++` do toolchain embutido (`/tmp/appimage_extracted_*/usr/share/legacyrecomp/toolchain/bin/c++`).
+- `run --root <pasta> -- --headless`: código 3 em 1 s, com `Unimplemented import: VdInitializeEngines` na thread 1,
+  igual ao build do sistema (a linha de chegada do M2).
 
 ## Limitações
 
