@@ -35,6 +35,16 @@ if(TARGET SDL2::SDL2)
   target_link_libraries(imgui PUBLIC SDL2::SDL2)
 endif()
 
+# Vulkan loader (volk), allocator (VMA) and headers: third-party, built without our strict flags. VK_NO_PROTOTYPES
+# because every entry point comes from volk; lr_vulkan (src/runtime) is our wrapper on top of this.
+add_library(lr_vulkan_thirdparty STATIC
+  thirdparty/volk/volk.c src/runtime/gpu/vk/vma_impl.cpp)
+target_include_directories(lr_vulkan_thirdparty SYSTEM PUBLIC
+  thirdparty/Vulkan-Headers/include thirdparty/volk thirdparty/VulkanMemoryAllocator/include)
+target_compile_definitions(lr_vulkan_thirdparty PUBLIC VK_NO_PROTOTYPES)
+target_link_libraries(lr_vulkan_thirdparty PUBLIC ${CMAKE_DL_LIBS})
+set_target_properties(lr_vulkan_thirdparty PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 add_subdirectory(src)
 add_subdirectory(tests)
 

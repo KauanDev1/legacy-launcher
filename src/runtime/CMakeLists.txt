@@ -27,3 +27,13 @@ set_target_properties(lr_runtime_core_staged PROPERTIES
 set(LR_MSPACK_INCLUDE "${LR_XENONRECOMP_DIR}/thirdparty/libmspack/libmspack/mspack")
 target_include_directories(lr_runtime_core PRIVATE ${LR_MSPACK_INCLUDE})
 target_include_directories(lr_runtime_core_staged PRIVATE ${LR_MSPACK_INCLUDE})
+
+# --- Vulkan backend (lr::gpu::vk): our wrapper over volk + VMA (lr_vulkan_thirdparty, root CMakeLists.txt) ---
+add_library(lr_vulkan STATIC gpu/vk/device.cpp)
+target_include_directories(lr_vulkan PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(lr_vulkan PUBLIC lr_common lr_vulkan_thirdparty)
+if(TARGET SDL2::SDL2)
+  target_compile_definitions(lr_vulkan PRIVATE LR_HAVE_SDL2)
+  target_link_libraries(lr_vulkan PRIVATE SDL2::SDL2)
+endif()
+lr_configure_target(lr_vulkan)

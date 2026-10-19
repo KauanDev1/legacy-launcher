@@ -56,6 +56,9 @@ LegacyRecomp                       MIT                                       lau
 XenonRecomp/XenonAnalyse/XenonUtils MIT                                      tools; XenonUtils in the launchers
 Xenia (code in XenonUtils)         BSD-3-Clause                              launchers, tools (in XenonUtils), note 5
 Dear ImGui                         MIT                                       legacyrecomp-gui
+volk (v1.4.309)                    MIT                                       runtime GPU backend (lr_vulkan)
+VulkanMemoryAllocator (v3.2.1)     MIT                                       runtime GPU backend (lr_vulkan)
+Vulkan-Headers (1.4.309)           Apache-2.0                                runtime GPU backend (headers only)
 toml++                             MIT                                       launchers, XenonRecomp
 {fmt}                              MIT                                       launchers, tools
 xxHash (library)                   BSD-2-Clause                              XenonRecomp
@@ -121,6 +124,9 @@ printf -- '--- notice from thirdparty/XenonRecomp/XenonUtils/xex_patcher.cpp ---
 sed -n '3,10p' "$repo/thirdparty/XenonRecomp/XenonUtils/xex_patcher.cpp"
 section "Xenia license (the LICENSE the notice above refers to)" "$here/licenses/xenia-LICENSE"
 section "Dear ImGui (MIT)" "$repo/thirdparty/imgui/LICENSE.txt"
+section "volk (MIT)" "$repo/thirdparty/volk/LICENSE.md"
+section "Vulkan Memory Allocator (MIT)" "$repo/thirdparty/VulkanMemoryAllocator/LICENSE.txt"
+section "Vulkan-Headers (Apache-2.0)" "$repo/thirdparty/Vulkan-Headers/LICENSES/Apache-2.0.txt"
 section "toml++ (MIT)" "$tp/tomlplusplus/LICENSE"
 section "{fmt} (MIT)" "$tp/fmt/LICENSE"
 section "xxHash library (BSD-2-Clause)" "$tp/xxHash/LICENSE"
