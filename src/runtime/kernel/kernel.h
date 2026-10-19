@@ -23,6 +23,10 @@
 // Process-wide kernel state. Every kernel subsystem (allocators, objects and handles, threads, files, ...) hangs
 // off the single Kernel instance created by init_kernel; later tasks add them as members.
 
+namespace lr::gpu {
+struct MemoryAccess;  // runtime/gpu/pm4.h; forward-declared so the staged game headers stay small
+}
+
 namespace lr::kernel {
 
 struct KernelConfig {
@@ -37,6 +41,7 @@ struct KernelConfig {
   // sets 10 or LR_DEADLOCK_SECONDS).
   uint32_t deadlock_seconds = 0;
 };
+
 
 class Kernel {
  public:
@@ -55,6 +60,9 @@ class Kernel {
   runtime::PageHeap& heap4k() { return heap4k_; }
   runtime::PageHeap& heap64k() { return heap64k_; }
   runtime::PhysicalHeap& physical() { return physical_; }
+  // How the GPU command processor reaches guest memory: base, physical -> guest translation through physical(),
+  // and the guest space size. Valid while this Kernel lives.
+  gpu::MemoryAccess gpu_memory_access();
   // Guest thread stacks [kStacksBase, kStacksEnd), 4 KiB pages (runtime/kernel/threads.h).
   runtime::PageHeap& stacks() { return stacks_; }
   // The virtual heap containing addr (the stacks heap included), or nullptr.

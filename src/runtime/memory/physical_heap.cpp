@@ -64,6 +64,7 @@ Result<uint32_t> PhysicalHeap::allocate(uint32_t size, uint32_t protect, uint32_
       const uint64_t phys = first * kPage;
       const uint32_t guest = static_cast<uint32_t>(base + phys - (e0 ? kE0Offset : 0));
       allocs_[guest] = Alloc{static_cast<uint32_t>(bytes), static_cast<uint32_t>(first)};
+      by_phys_[static_cast<uint32_t>(phys)] = guest;
       return guest;
     }
     // Next candidate must end at or before the conflicting page.
@@ -79,6 +80,7 @@ Result<void> PhysicalHeap::free(uint32_t guest_address) {
   auto it = allocs_.find(guest_address);
   if (it == allocs_.end()) return err(ErrorCode::NotFound, "address is not a physical allocation base");
   std::fill_n(used_.begin() + it->second.first_page, it->second.size / kPage, uint8_t{0});
+  by_phys_.erase(it->second.first_page * static_cast<uint32_t>(kPage));
   allocs_.erase(it);
   return {};
 }
@@ -105,6 +107,18 @@ Result<uint32_t> PhysicalHeap::allocation_size(uint32_t guest_address) const {
       return it->second.size;
   }
   return err(ErrorCode::NotFound, "address is not inside a physical allocation");
+}
+
+std::optional<uint32_t> PhysicalHeap::guest_from_physical(uint32_t phys) const {
+  if (phys >= kPhysicalSize) return std::nullopt;
+  std::lock_guard<std::mutex> lock(mu_);
+  auto it = by_phys_.upper_bound(phys);
+  if (it == by_phys_.begin()) return std::nullopt;
+  --it;
+  const uint32_t guest = it->second;
+  const uint64_t offset = phys - it->first;
+  if (offset >= allocs_.at(guest).size) return std::nullopt;
+  return static_cast<uint32_t>(guest + offset);
 }
 
 }  // namespace lr::runtime

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 #include "common/result.h"
@@ -44,6 +45,10 @@ class PhysicalHeap {
   Result<uint32_t> allocation_size(uint32_t guest_address) const;
   // Number of 4 KiB physical pages currently allocated (MmQueryStatistics).
   uint32_t used_pages() const;
+  // View address of the allocation that owns physical address `phys` (the exact byte: view base of the allocation
+  // + offset inside it, linear across the whole allocation); nullopt when the page is unallocated or phys is
+  // outside the 512 MiB. A page belongs to one view only, so the answer is never ambiguous. The GPU uses this.
+  std::optional<uint32_t> guest_from_physical(uint32_t phys) const;
 
  private:
   struct Alloc {
@@ -54,6 +59,7 @@ class PhysicalHeap {
   mutable std::mutex mu_;
   std::vector<uint8_t> used_;         // one entry per 4 KiB physical page
   std::map<uint32_t, Alloc> allocs_;  // keyed by guest address
+  std::map<uint32_t, uint32_t> by_phys_;  // first physical byte of each allocation -> its guest address
 };
 
 }  // namespace lr::runtime

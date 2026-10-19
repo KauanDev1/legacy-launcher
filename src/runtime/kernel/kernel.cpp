@@ -10,6 +10,8 @@
 #include <string>
 
 #include "runtime/guest_thread.h"
+#include "runtime/gpu/mmio.h"
+#include "runtime/gpu/pm4.h"
 #include "runtime/kernel/guest_structs.h"
 #include "runtime/kernel/registry.h"
 #include "runtime/kernel/trace.h"
@@ -54,6 +56,7 @@ Result<void> Kernel::setup_memory() {
   heap4k_.set_commit_hook(hook);
   heap64k_.set_commit_hook(hook);
   stacks_.set_commit_hook(hook);
+  LR_TRY(gpu::init_mmio_window(mem_.base()));
   return {};
 }
 
@@ -68,6 +71,11 @@ void Kernel::on_commit(uint32_t addr, uint32_t size, bool committed, bool zero) 
     r = mem_.protect(addr, size, PROT_NONE);
   }
   if (!r) guest_fatal("guest memory commit hook failed: " + r.error().message);
+}
+
+gpu::MemoryAccess Kernel::gpu_memory_access() {
+  return gpu::MemoryAccess{mem_.base(), [this](uint32_t phys) { return physical_.guest_from_physical(phys); },
+                           mem_.size()};
 }
 
 runtime::PageHeap* Kernel::virtual_heap_for(uint32_t addr) {

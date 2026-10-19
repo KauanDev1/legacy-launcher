@@ -68,7 +68,7 @@ convidado `G` fica em `base() + G`. Regiões fixas (spec M2 §6.1; constantes em
 | `0x00010000`–`0x3FFFFFFF` | Heap virtual de páginas de 4 KiB: `NtAllocateVirtualMemory`, pool do kernel, corpos de objetos, PCR/KTHREAD/TLS |
 | `0x40000000`–`0x6FFFFFFF` | Heap virtual de páginas de 64 KiB (`MEM_LARGE_PAGES`) |
 | `0x70000000`–`0x7EFFFFFF` | Pilhas das threads do convidado, com página de guarda |
-| `0x7F000000`–`0x7FFFFFFF` | Reservada para MMIO e write-back da GPU (M3) |
+| `0x7F000000`–`0x7FFFFFFF` | Reservada para MMIO e write-back da GPU (M3); janela MMIO em `0x7FC80000`–`0x7FCFFFFF` |
 | `0x80000000`–`0x81FFFFFF` | Dados do kernel (`Kernel::kernel_data_alloc`, alocação sequencial, nunca liberada): cópia do cabeçalho XEX (sempre em `0x80000000`), `LDR_DATA_TABLE_ENTRY`, blocos das variáveis exportadas, páginas `PROT_NONE` de variáveis faltando |
 | `0x82000000`–`~0x8659FFFF` | Imagem do jogo (`PPC_IMAGE_BASE`, `PPC_IMAGE_SIZE = 0x032D0000`, código em `0x82200000`) e tabela de funções em `PPC_IMAGE_BASE + PPC_IMAGE_SIZE` (`2 x PPC_CODE_SIZE`, um slot de 8 bytes por instrução). Nunca entregue por um heap |
 | `0xA0000000`–`0xFFFFFFFF` | Vistas físicas: `0xA0` (64 KiB), `0xC0` (16 MiB), `0xE0` (4 KiB) |
@@ -94,6 +94,28 @@ confirmadas leitura/escrita e zeradas. `MmMapIoSpace` fica faltando até o M3.
 O gancho de confirmação dos heaps virtuais zera as páginas recém-confirmadas (salvo `MEM_NOZERO`) com
 `GuestMemory::zero`, que devolve páginas inteiras ao host com `madvise(MADV_DONTNEED)` em vez de escrevê-las.
 Memória física também é zerada ao ser alocada.
+
+### Janela MMIO da GPU e tradução física para convidado (M3)
+
+O XenonRecomp não emula MMIO: o jogo lê e escreve registradores da GPU como memória comum. A janela
+`0x7FC80000`–`0x7FCFFFFF` (dentro da faixa reservada à GPU) é confirmada leitura/escrita por `Kernel::setup_memory`
+(`gpu::init_mmio_window`, `src/runtime/gpu/mmio.{h,cpp}`). O registrador de índice `i` fica em `0x7FC80000 + 4 * i`,
+em big-endian. Tudo lê 0, exceto os valores iniciais abaixo, que fazem a GPU parecer ociosa:
+
+| Registrador | Índice | Valor inicial | Motivo |
+|---|---|---|---|
+| `RBBM_STATUS` | `0x05D0` | `0x00000040` | bit 31 ("GUI active") e os bits de ocupado limpos; `CMDFIFO_AVAIL` (bits 0-6) = 64 entradas livres |
+| `CP_RB_WPTR` | `0x01C5` | `0` | ponteiro de escrita do ring buffer; a thread da GPU (Tarefa 10) o lê daqui |
+| `COHER_STATUS_HOST` | `0x0A31` | `0` | nenhuma sincronização de cache pendente (bit 31 limpo) |
+
+O índice e o valor ocioso de `RBBM_STATUS` vêm do mapa de registradores AMD R5xx/Xenos e do Xenia (só referência,
+sem cópia de código); não há segunda fonte conferida, então o conjunto é mínimo de propósito e cresce quando o jogo
+real mostrar o que consulta.
+
+`PhysicalHeap::guest_from_physical(phys)` converte um endereço físico no endereço de vista da alocação dona da
+página (linear dentro da alocação; `nullopt` se não alocado). Cada página física pertence a uma única vista
+(decisão do M2), então a resposta não é ambígua; na vista `0xE0` vale o deslocamento de `0x1000`.
+`Kernel::gpu_memory_access()` monta o `gpu::MemoryAccess` do processador de comandos sobre essa conversão.
 
 **Modo estrito** (`--strict-memory`): no `init_kernel` os dois heaps virtuais e o de pilhas ficam `PROT_NONE`
 (`GuestMemory::protect`, `mprotect` por página de 4 KiB do host); o gancho deixa leitura/escrita as páginas
