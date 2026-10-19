@@ -5,7 +5,7 @@
 //
 // Deviations: XexGetProcedureAddress resolves only ordinals of the xboxkrnl.exe / xam.xex system modules, and only
 // those the executable imports (the thunk exists); a by-name lookup or the executable's own exports are "not found".
-// XexLoadImage and XamLoaderLaunchTitle stay missing (M5).
+// XexLoadImage only "loads" modules that are already loaded; XamLoaderLaunchTitle stays missing (M5).
 #include <strings.h>
 #include <unistd.h>
 
@@ -98,6 +98,25 @@ uint32_t XexGetModuleHandle(GuestCall& c, uint32_t name, U32Ptr out) {
   return handle != 0 ? ERROR_SUCCESS : ERROR_NOT_FOUND;
 }
 
+// XexLoadImage(name*, flags, min_version, handle_out*): every module this runtime has is already loaded (the
+// executable and the xboxkrnl.exe / xam.xex system modules), so a load of one of those returns its handle, as Xenia
+// does for a loaded module. Loading another image from disk is a feature this runtime lacks (M5): *handle_out = 0,
+// STATUS_NO_SUCH_FILE, the status Xenia returns when the module cannot be loaded.
+uint32_t XexLoadImage(GuestCall& c, uint32_t name, uint32_t, uint32_t, U32Ptr handle_out) {
+  const std::string n = lower(read_guest_string(c.base, name, 260));
+  const uint32_t handle = n == "default.xex" ? kernel().executable_module() : kernel().system_module(n);
+  put_u32(c, handle_out, handle);
+  return handle != 0 ? STATUS_SUCCESS : STATUS_NO_SUCH_FILE;
+}
+
+// XexUnloadImage(handle): loaded modules are never unloaded (system modules cannot be, and XexLoadImage only hands
+// out modules that stay loaded); STATUS_INVALID_HANDLE for anything else.
+uint32_t XexUnloadImage(uint32_t handle) {
+  if (handle == 0) return STATUS_INVALID_HANDLE;
+  return is_executable(handle) || !kernel().system_module_name(handle).empty() ? STATUS_SUCCESS
+                                                                              : STATUS_INVALID_HANDLE;
+}
+
 // XexCheckExecutablePrivilege(privilege): bit `privilege` of the system flags header; 0 without the header.
 uint32_t XexCheckExecutablePrivilege(GuestCall& c, uint32_t privilege) {
   if (privilege >= 32) return 0;
@@ -180,6 +199,8 @@ LR_KERNEL(XexGetModuleHandle);
 LR_KERNEL(XexCheckExecutablePrivilege);
 LR_KERNEL(XexGetModuleSection);
 LR_KERNEL(XexGetProcedureAddress);
+LR_KERNEL(XexLoadImage);
+LR_KERNEL(XexUnloadImage);
 LR_KERNEL(XamGetExecutionId);
 LR_KERNEL(XamLoaderGetLaunchDataSize);
 LR_KERNEL(XamLoaderGetLaunchData);

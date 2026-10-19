@@ -386,8 +386,10 @@ seja o dispositivo que nomeia, e os saves ficam todos num lugar só. As importa�
   `xboxkrnl.exe`/`xam.xex` (entradas LDR falsas, criadas na primeira consulta e guardadas no `Kernel`); outro
   nome → `*saída = 0`, `ERROR_NOT_FOUND`. `XexGetProcedureAddress(módulo, ordinal)` devolve o thunk da
   importação (`Kernel::import_thunks()`, preenchido por `resolve_variable_imports`); só existem ordinais que o
-  executável importa, o resto (e a busca por nome) dá `0xC0000263`. `XexLoadImage` e `XamLoaderLaunchTitle`
-  continuam faltando (M5). `XamLoaderGetLaunchData[Size]` → `ERROR_NOT_FOUND`; `XamLoaderTerminateTitle` sai com 0.
+  executável importa, o resto (e a busca por nome) dá `0xC0000263`. `XexLoadImage` só "carrega" módulos já presentes
+  (executável, `xboxkrnl.exe`, `xam.xex`: devolve o handle, como o Xenia; outro nome → `*saída = 0`,
+  `STATUS_NO_SUCH_FILE`, carregar XEX do disco é M5); `XexUnloadImage` nunca descarrega (sucesso para módulos
+  conhecidos). `XamLoaderLaunchTitle` continua faltando (M5). `XamLoaderGetLaunchData[Size]` → `ERROR_NOT_FOUND`; `XamLoaderTerminateTitle` sai com 0.
 - **Valores fixos** (os padrões do Xenia): título `0x584111F7`; região do jogo (`XGetGameRegion`) `0xFFFF`
   (sem região); versão do dashboard (`XamGetSystemVersion`) 0; `ExGetXConfigSetting`: região AV
   (categoria 2, configuração 2) `0x00001000`, flags de vídeo do usuário `0x00040000`, país 103 (1 byte), fuso

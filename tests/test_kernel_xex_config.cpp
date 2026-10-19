@@ -119,6 +119,31 @@ TEST_CASE("XexGetProcedureAddress maps an ordinal to its thunk", "[unit][kernel]
   CHECK(static_cast<uint32_t>(f.call("XexGetProcedureAddress", 0xDEADu, kDbgPrint, out)) == STATUS_INVALID_HANDLE);
 }
 
+TEST_CASE("XexLoadImage returns the handle of an already loaded module", "[unit][kernel][xex]") {
+  KernelFixture f;
+  const auto img = load(f);
+  const uint32_t out = f.alloc(4), xam = f.alloc(4);
+  f.call("XexGetModuleHandle", put_str(f, "xam.xex"), xam);
+  CHECK(f.call("XexLoadImage", put_str(f, "xam.xex"), 9u, 0u, out) == STATUS_SUCCESS);
+  CHECK(u32(f, out) == u32(f, xam));
+  CHECK(f.call("XexLoadImage", put_str(f, "XBOXKRNL.EXE"), 0u, 0u, out) == STATUS_SUCCESS);
+  CHECK(u32(f, out) != 0u);
+  CHECK(f.call("XexLoadImage", put_str(f, "default.xex"), 0u, 0u, out) == STATUS_SUCCESS);
+  CHECK(u32(f, out) == img.ldr_entry);
+  CHECK(f.call("XexUnloadImage", u32(f, xam)) == STATUS_SUCCESS);
+}
+
+TEST_CASE("XexLoadImage of a module that is not loaded is absent", "[unit][kernel][xex]") {
+  KernelFixture f;
+  load(f);
+  const uint32_t out = f.alloc(4);
+  *f.mem.translate<be<uint32_t>>(out) = 0x1234u;
+  CHECK(static_cast<uint32_t>(f.call("XexLoadImage", put_str(f, "game:\\extra.xex"), 9u, 0u, out)) ==
+        STATUS_NO_SUCH_FILE);
+  CHECK(u32(f, out) == 0u);
+  CHECK(static_cast<uint32_t>(f.call("XexUnloadImage", 0xDEADu)) == STATUS_INVALID_HANDLE);
+}
+
 TEST_CASE("XGetLanguage maps pt_BR.UTF-8 to 9", "[unit][kernel][config]") {
   struct Case {
     const char* locale;
