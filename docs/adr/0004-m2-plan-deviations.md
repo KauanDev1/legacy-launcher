@@ -114,3 +114,15 @@ Formato: o quê, por quê, custo se estiver errada.
 - Custo se errado: atualizar o upstream exige reaplicar os patches (`git am` na branch local e regenerar); o
   configure passa a precisar do `git` (já exigido pelo container e pelo build do AppImage). Se o upstream aceitar
   instruções equivalentes, os patches correspondentes saem.
+
+### M8. `XexLoadImage`, `XexUnloadImage` e `XMsg*` no M2 (Tarefa 28)
+
+- O plano deixava `XexLoadImage`/`XexUnloadImage` (M5) e o `XMsg*` (M5) como `missing`. O trace real mostrou que o
+  jogo chama `XexLoadImage("xam.xex")` e `XMsgStartIORequest(0xFE, 0x00022005)` no boot, antes da GPU.
+- Decisão: `XexLoadImage` devolve o handle de um módulo já presente (executável, `xboxkrnl.exe`, `xam.xex`, como o
+  Xenia faz para módulos carregados) e falha com `STATUS_NO_SUCH_FILE` para o resto (carregar XEX do disco continua
+  M5); `XexUnloadImage` nunca descarrega. O `XMsg*` tem só o app XAM (`0xFE`) com as mensagens que o Xenia responde
+  (`exports/msg.cpp`); `XMsgCompleteIORequest`/`XMsgCancelIORequest` continuam `missing` (o jogo não os chama antes
+  da GPU).
+- Custo se errado: um título que carregue um XEX de verdade recebe "arquivo não encontrado"; uma mensagem XAM
+  desconhecida recebe `X_E_FAIL`, como no Xenia.
