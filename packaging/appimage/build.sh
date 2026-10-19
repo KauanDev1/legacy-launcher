@@ -255,8 +255,9 @@ rm -rf "$tc/sdl2/bin" "$tc/sdl2/lib/pkgconfig" "$tc/sdl2/share/aclocal"
 # The release preset, with zig instead of the system clang and Release (no debug info) instead of RelWithDebInfo.
 # -include cstdlib: XenonRecomp's bundled {fmt} relies on <cstdlib> arriving through other libstdc++ headers,
 # which libc++ does not do. -DLR_BUILD_XENOSRECOMP=OFF: the system DXC needs glibc 2.38 and libstdc++, so
-# XenosRecomp stays out of the AppImage until Task 24 of M3 builds DXC from source (ADR 0005). -idirafter /usr/include: imgui's SDL2 backend includes SDL_syswm.h, which includes
-# the X11 headers. --strip-debug: zig's cached libc++ carries debug info (about 20 MB per launcher).
+# XenosRecomp stays out of the AppImage until Task 24 of M3 builds DXC from source (ADR 0005).
+# -idirafter /usr/include: imgui's SDL2 backend includes SDL_syswm.h, which includes the X11 headers.
+# --strip-debug: zig's cached libc++ carries debug info (about 20 MB per launcher).
 
 lr_build=$cache/build/legacyrecomp
 log "building LegacyRecomp"

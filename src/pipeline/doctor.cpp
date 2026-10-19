@@ -10,6 +10,8 @@
 #include <charconv>
 #include <regex>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 #include "pipeline/process.h"
 #include "pipeline/toolchain.h"
@@ -102,6 +104,7 @@ bool SystemDoctorProbe::cpu_supports_avx() {
 }
 
 Result<DoctorReport> run_doctor(DoctorProbe& probe, const fs::path& root, const fs::path& resources) {
+  std::vector<std::string> notes;  // non-fatal findings, reported as warnings
   // Checked first: no toolchain install can fix it. InsufficientResources (a property of the machine, like RAM/disk).
   if (!probe.cpu_supports_avx())
     return Error{ErrorCode::InsufficientResources, "CPU without AVX support",
@@ -111,13 +114,20 @@ Result<DoctorReport> run_doctor(DoctorProbe& probe, const fs::path& root, const 
   if (has_bundled_toolchain(resources)) {
     // AppImage: the bundled zig/cmake/ninja/SDL2 are pinned versions; only check that they are all there.
     LR_TRY(resolve_toolchain(resources));
-    LR_TRY(check_bundled_dxc(resources));
+    // DXC is mandatory only when the XenosRecomp host tool is staged (it links libdxcompiler.so). No AppImage ships
+    // either yet (ADR 0005, Task 24), so otherwise this is a note, not a failure.
+    std::error_code tool_ec;
+    if (fs::exists(resources / "tools" / "XenosRecomp", tool_ec))
+      LR_TRY(check_bundled_dxc(resources));
+    else
+      notes.push_back("DXC (shader compiler) is not bundled yet; the shader translator is unavailable in this build");
   } else {
     LR_TRY(check_tool(probe, "clang++", 18, 0));
     LR_TRY(check_tool(probe, "cmake", 3, 25));
     LR_TRY(check_tool(probe, "ninja", 0, 0));
     if (!probe.pkg_config_exists("sdl2")) return missing("SDL2 development files (pkg-config sdl2)");
-    // dxc is linked against libdxcompiler.so (as XenosRecomp is), so a dxc that is found comes with its library.
+    // Only the `dxc` executable is looked up on PATH; its libdxcompiler.so (the library XenosRecomp links) is not
+    // checked separately.
     if (!probe.find("dxc"))
       return Error{ErrorCode::ToolMissing, "dxc (DirectX Shader Compiler) not found", std::string(system_dxc_hint())};
   }
@@ -135,6 +145,7 @@ Result<DoctorReport> run_doctor(DoctorProbe& probe, const fs::path& root, const 
                  "free disk space or choose another data root with --root"};
 
   DoctorReport report;
+  report.warnings = std::move(notes);
   uint64_t ram = probe.total_ram();
   if (ram < 8 * kGiB)
     report.warnings.push_back("only " + std::to_string(ram / (1024 * 1024)) +

@@ -143,11 +143,27 @@ TEST_CASE("doctor in bundled mode still refuses a CPU without AVX", "[unit]") {
   CHECK(r.error().code == ErrorCode::InsufficientResources);
 }
 
-TEST_CASE("doctor in bundled mode reports a missing bundled dxc, not the system one", "[unit]") {
+TEST_CASE("doctor in bundled mode: dxc is optional until XenosRecomp is staged", "[unit]") {
   TempDir t;
   make_bundled_tree(t.path);
   HealthyProbe probe;
-  REQUIRE(run_doctor(probe, t.path / "root", t.path));
+  // No XenosRecomp in tools/: a missing dxc is only a note.
+  fs::remove_all(t.path / "toolchain" / "dxc");
+  auto ok = run_doctor(probe, t.path / "root", t.path);
+  REQUIRE(ok);
+  REQUIRE(ok.value().warnings.size() == 1);
+  CHECK(ok.value().warnings[0].find("DXC") != std::string::npos);
+  CHECK(ok.value().warnings[0].find("not bundled") != std::string::npos);
+}
+
+TEST_CASE("doctor in bundled mode reports a missing bundled dxc, not the system one", "[unit]") {
+  TempDir t;
+  make_bundled_tree(t.path);
+  write_exe(t.path / "tools" / "XenosRecomp");  // the host tool is staged: dxc is now required
+  HealthyProbe probe;
+  auto fine = run_doctor(probe, t.path / "root", t.path);
+  REQUIRE(fine);
+  CHECK(fine.value().warnings.empty());
 
   fs::remove(t.path / "toolchain" / "dxc" / "bin" / "dxc");
   auto r = run_doctor(probe, t.path / "root", t.path);
