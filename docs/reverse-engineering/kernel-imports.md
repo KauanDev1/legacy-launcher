@@ -3,8 +3,8 @@
 
 Esta é a classificação das 459 importações de função (de `docs/kernel-coverage.md`) por subsistema e por marco,
 feita em 2026-10-16 para a spec do M2 (`docs/superpowers/specs/2026-10-16-legacyrecomp-m2-design.md`). Ela se
-baseia no conhecimento da semântica do Xenia (usado apenas como referência). A ordem de inicialização abaixo é uma
-estimativa e deve ser substituída pelo trace real (`--trace-imports`).
+baseia no conhecimento da semântica do Xenia (usado apenas como referência). A ordem de inicialização abaixo é a real,
+registrada com `--trace-imports` na Task 28 do M2.
 
 Fontes: `docs/kernel-coverage.md` (459 nomes, todos `missing`) e `docs/reverse-engineering/*`. Categorias e marcos
 vêm do conhecimento da ABI do kernel/XAM do Xbox 360 e das implementações `xboxkrnl_*.cc`/`xam_*.cc` do Xenia. A
@@ -98,55 +98,46 @@ Consequências para o M2:
 Estado: os itens 2 e 3 foram feitos na Task 14 do M2 (`kernel::resolve_variable_imports`, `inspect --imports`,
 linhas `variable` em `--coverage --image`); detalhes em `docs/formats/xex2.md`.
 
-## Ordem estimada das chamadas na inicialização (primeiras ~40)
+## Ordem real das chamadas na inicialização
 
-Melhor palpite a partir da inicialização típica de um título XDK (`mainCRTStartup` -> init de processo da XAPI ->
-`_cinit` da CRT -> construtores estáticos C++ -> `main`/init do jogo), ancorado na primeira chamada observada.
-Confiança: H/M/L (alta/média/baixa). Esta ordem é uma estimativa e será substituída pelo trace real
-(`--trace-imports`).
+Registrada na Task 28 do M2 (2026-10-18) com `legacyrecomp run -- --headless --trace-imports` sobre a imagem TU1:
+2428 chamadas, todas na thread 1 (o jogo não cria nenhuma thread antes da GPU), terminando com saída 3 em
+`VdInitializeEngines` (a linha de chegada do M2). A tabela lista cada importação na ordem da sua primeira chamada,
+com o número de chamadas até a parada. Apenas nomes, contagens e constantes do kernel; nada do jogo.
 
-| # | Importação | Motivo | Conf. |
+| # | Importação | Chamadas | Observação |
 |---|---|---|---|
-| 1 | `NtAllocateVirtualMemory` | primeira chamada observada: a XAPI/CRT reserva o heap do processo (tamanho vindo do cabeçalho XEX) | H |
-| 2 | `NtAllocateVirtualMemory` (commit) / `NtQueryVirtualMemory` | commit do heap, consultas de regiões | M |
-| 3 | `RtlInitializeCriticalSection` / `RtlInitializeCriticalSectionAndSpinCount` | lock do heap, `_mtinitlocks` da CRT | H |
-| 4 | `KeGetCurrentProcessType` | a XAPI verifica se é processo de título ou de sistema | M |
-| 5 | `RtlImageXexHeaderField` | tamanho padrão de pilha/heap, info de TLS, workspace do título (lê a variável `XexExecutableModuleHandle`) | H |
-| 6 | `XexCheckExecutablePrivilege` | verificações de privilégio da XAPI/CRT (ex.: 'no game region', 'title allocates 32MB') | M |
-| 7 | `KeTlsAlloc` | slot FLS/TLS do `_mtinit` da CRT | H |
-| 8 | `KeTlsSetValue` / `KeTlsGetValue` | dados da CRT por thread (`_getptd`) | H |
-| 9 | `RtlEnterCriticalSection` / `RtlLeaveCriticalSection` | locks da CRT, daqui em diante o tempo todo | H |
-| 10 | `ExAllocatePoolTypeWithTag` / `XamAlloc` | pequenas alocações da XAPI/XAM | M |
-| 11 | `KeQueryPerformanceFrequency` | relógio da CRT / init do timer do título | H |
-| 12 | `KeQuerySystemTime` | `time()`, semente do RNG | H |
-| 13 | `RtlTimeToTimeFields` | conversões no estilo `localtime` | M |
-| 14 | `ExGetXConfigSetting` | locale / AV / configurações do usuário | M |
-| 15 | `XGetLanguage` / `XGetGameRegion` | seleção de localização | H |
-| 16 | `XamGetCurrentTitleId` / `XamGetExecutionId` | identidade do título para as libs XAM/LIVE | M |
-| 17 | `XamLoaderGetLaunchDataSize` (+ `XamLoaderGetLaunchData`) | lançado pelo stub de disco `Default.xex`; verifica se há launch data | M |
-| 18 | `NtCreateEvent` | eventos para threads de trabalho / objetos da XAPI | H |
-| 19 | `ExCreateThread` (suspended) | threads de trabalho (render, áudio, chunk/IO, rede) | H |
-| 20 | `KeSetAffinityThread` / `KeSetBasePriorityThread` | fixar em thread de hardware, prioridade | H |
-| 21 | `NtResumeThread` / `KeResumeThread` | iniciar a thread de trabalho | H |
-| 22 | `NtWaitForSingleObjectEx` / `KeWaitForSingleObject` | esperar a thread de trabalho ficar pronta | H |
-| 23 | `NtSetEvent` / `KeSetEvent` / `NtClearEvent` | handshakes entre threads | H |
-| 24 | `NtCreateSemaphore` / `NtReleaseSemaphore` | filas de jobs | M |
-| 25 | `KeDelayExecutionThread` / `NtYieldExecution` | `Sleep`/`SwitchToThread` em laços de espera | H |
-| 26 | `XamNotifyCreateListener` | listener de notificações do sistema (sign-in, armazenamento, UI) | H |
-| 27 | `XNotifyGetNext` | consultado a cada tick | H |
-| 28 | `XamUserGetSigninState` / `XamUserGetXUID` / `XamUserGetName` | verificação de perfil | H |
-| 29 | `XamUserCheckPrivilege` / `XamUserReadProfileSettings` | opções do perfil | M |
-| 30 | `NtCreateFile`/`NtOpenFile` em `game:\...` | arquivos compactados, localização, `media` | H |
-| 31 | `NtQueryInformationFile` / `NtQueryFullAttributesFile` | tamanho / existência de arquivo | H |
-| 32 | `NtReadFile` (+ espera ou conclusão overlapped) | carregamento de assets | H |
-| 33 | `LDICreateDecompression` / `LDIDecompress` | XMemDecompress de assets comprimidos | M |
-| 34 | `NtClose` | após o carregamento | H |
-| 35 | `XeCryptSha*` / `XeCryptRandom` | hashes, semente do RNG | L |
-| 36 | `NetDll_XNetStartup` / `NetDll_WSAStartup` / `XHttpStartup` | init das libs de rede no boot | M |
-| 37 | `XAudioGetSpeakerConfig` / `XAudioRegisterRenderDriverClient` / `XMACreateContext` | init do XAudio2/XACT (M4, mas pode vir antes do D3D) | M |
-| 38 | `XamInputGetCapabilities` / `XamInputGetState` | leitura do controle (geralmente começa após o primeiro quadro) | M |
-| 39 | `XGetVideoMode` / `VdQueryVideoMode` / `XGetAVPack` | preparação da criação do device D3D; stubs do M2 (1280x720 widescreen HDMI) | H |
-| 40 | `VdInitializeEngines`, `VdSetGraphicsInterruptCallback`, `VdInitializeRingBuffer`, `VdEnableRingBufferRPtrWriteBack`, `VdSetSystemCommandBuffer...` | `Direct3D_CreateDevice` (M3); a primeira chamada Vd* que cria ou usa a GPU é a **linha de chegada do M2** | H |
+| 1 | `RtlImageXexHeaderField` | 1 | primeira chamada; chave `0x00020401` ausente -> 0 |
+| 2 | `NtAllocateVirtualMemory` | 5 | heaps da XAPI/CRT |
+| 3 | `KeGetCurrentProcessType` | 2 | título (1) |
+| 4 | `RtlInitializeCriticalSection` | 38 | |
+| 5 | `RtlEnterCriticalSection` | 1159 | daqui em diante o tempo todo |
+| 6 | `RtlLeaveCriticalSection` | 1159 | |
+| 7 | `XexCheckExecutablePrivilege` | 1 | privilégio 10 -> 1 |
+| 8 | `XGetAVPack` | 1 | 6 (HDMI), confirmado: o jogo segue adiante |
+| 9 | `RtlInitializeCriticalSectionAndSpinCount` | 14 | |
+| 10 | `KeTlsAlloc` | 9 | |
+| 11 | `KeTlsSetValue` | 1 | |
+| 12 | `KeQuerySystemTime` | 1 | |
+| 13 | `KeQueryPerformanceFrequency` | 10 | |
+| 14 | `XamNotifyCreateListener` | 1 | |
+| 15 | `XNotifyPositionUI` | 1 | stub |
+| 16 | `XexLoadImage` | 1 | `xam.xex`, já carregado -> handle |
+| 17 | `XexGetProcedureAddress` | 6 | ordinais `0xAFF`, `0xB00`, `0xB0B`, `0xB10`, `0x305`, `0x30B` do `xam.xex` que o executável não importa: `0xC0000263`, e o jogo segue |
+| 18 | `RtlNtStatusToDosError` | 6 | uma por falha acima |
+| 19 | `XexUnloadImage` | 1 | |
+| 20 | `KeTlsGetValue` | 1 | |
+| 21 | `XamUserGetSigninState` | 4 | usuários 0..3 |
+| 22 | `XamUserGetSigninInfo` | 1 | |
+| 23 | `XMsgStartIORequest` | 1 | app XAM `0xFE`, mensagem `0x00022005` |
+| 24 | `XamLoaderGetLaunchDataSize` | 1 | sem launch data (`ERROR_NOT_FOUND`) |
+| 25 | `XGetVideoMode` | 1 | stub de consulta (1280x720) |
+| 26 | `MmAllocatePhysicalMemoryEx` | 1 | `0x12C0` bytes, proteção `0x404` |
+| 27 | `VdInitializeEngines` | 1 | **linha de chegada do M2**: primeira importação Vd* que cria a GPU (M3) |
+
+A estimativa anterior (40 passos) errou sobretudo no que *não* acontece antes da GPU: nenhum arquivo é aberto,
+nenhuma thread é criada, nada de rede, áudio, entrada, LZX ou criptografia. As importações que faltavam para chegar
+aqui foram `XexLoadImage`/`XexUnloadImage` e `XMsgStartIORequest` (Task 28).
 
 Conselho prático para a spec: registrar cada uma das 459 com pelo menos um stub que registra no log e retorna a
 falha padrão da categoria, e manter `UnimplementedImport` só para importações marcadas explicitamente como "abort"
