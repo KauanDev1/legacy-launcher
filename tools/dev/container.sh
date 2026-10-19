@@ -135,7 +135,7 @@ case "$cmd" in
     ;;
   run)
     [ "${1:-}" != "--" ] || shift
-    run_in_container "$tty_flags" "$build_script"'exec "build/$LR_PRESET/bin/legacyrecomp" run --root /data "$@"' "$@"
+    run_in_container "$tty_flags" "$build_script"'exec "build/$LR_PRESET/bin/legacyrecomp" run --root /data -- "$@"' "$@"
     ;;
   *)
     usage
