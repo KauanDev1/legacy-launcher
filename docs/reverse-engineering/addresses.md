@@ -116,8 +116,9 @@ tempo de execução. Por isso a etapa `analyse` roda também `src/pipeline/switc
   análise roda de novo com as arestas da nova tabela, e o limite tem de se manter (um caso que muda o
   índice e volta ao `switch` é recusado). Rótulos alinhados a 4 e dentro da função. Típico: um segundo
   `switch` sobre o mesmo índice de um primeiro, num bloco que é rótulo do primeiro. Os sítios do
-  experimento (`0x82AB1528`, 35 casos; `0x8294E434`, 17 casos) são conferidos com a ISO na Tarefa 4 do M3.
-- Resultado na imagem TU1: **222 tabelas** (7 298 rótulos, até 440 casos), todas com rótulos em código.
+  experimento conferidos com a ISO estão em "Sítios do experimento do M3" abaixo.
+- Resultado na imagem TU1: **223 tabelas mantidas** (7 348 rótulos, até 440 casos), todas com rótulos em
+  código; 159 delas são relativas (`lhzx`/`lbzx`). No M2 eram 222 encontradas e 221 mantidas (7 298 rótulos).
 
 Funções folha (sem quadro de pilha) não têm entrada no `.pdata`, e a análise do XenonRecomp para no
 `bctr` — os rótulos dos casos caíam "fora da função" (1 329 erros `Switch case ... jump outside function`
@@ -138,8 +139,29 @@ descartadas — se sobrepõe outra faixa derivada ou uma entrada `functions` esc
 de que engoliu outra função ou um final compartilhado). Na TU1: **0 faixas rejeitadas**. Tabelas cujos
 rótulos saem da própria função do `.pdata` também são descartadas (não "consertadas").
 
-Contagem final na TU1: 222 tabelas encontradas, **221 mantidas**, 1 descartada (`0x8243C83C`), 38 funções
-folha, 0 faixas rejeitadas.
+Contagem final na TU1 (M3, Tarefa 4): 224 tabelas encontradas (223 pela varredura linear, 1 pelo limite num
+bloco anterior), **223 mantidas**, 1 descartada (`0x8243C83C`), **41 funções folha** (eram 38: o preenchimento
+separou três faixas que juntavam duas funções cada, em `0x82A18A68`, `0x82B14CB8` e `0x82B14FD0`), 0 faixas
+rejeitadas, **3 254 funções só por ponteiro** (eram 3 253). Saída do `analyse.log`:
+
+```
+jump tables: 0 from XenonAnalyse, 223 from the LegacyRecomp scanner, 223 kept (159 relative, 1 bounded by an earlier check), 1 dropped, 41 leaf-function boundaries (0 rejected), 1 guarded bctr sites unresolved, 19 unguarded indexed bctr sites
+pointer-only functions: 3254
+```
+
+### Sítios do experimento do M3 (Tarefa 4)
+
+Conferidos com a ISO (`install --force analyse`, mapa de funções do XenonRecomp gerado), sem nenhuma entrada
+manual em `recomp.toml`:
+
+| Sítio | Forma | Resultado |
+|---|---|---|
+| `0x82AB1528` (em `sub_82AB0C68`) | guarda invertida `cmplwi cr6, r11, 34` / `ble cr6, +8` / `b 0x82AB9A34`; tabela `lhzx` relativa a `0x82AB152C` | **coberto**: 35 casos, `r11`, padrão `0x82AB9A34` |
+| `0x8294E434` (em `sub_8294DF28`) | segundo `switch` sobre `r9`, sem guarda no bloco; `r9` é limitado por `cmplwi cr6, r9, 14` + `bgt` antes do primeiro `switch` (`0x8294E3DC`, tabela `lbzx`), do qual este bloco (`0x8294E410`) é rótulo | **coberto**: 15 casos (`r9` ≤ 14 provado em todos os caminhos). O experimento estimou 17; a tabela de meias palavras em `0x82106F68` tem só 16 posições antes da tabela de bytes do primeiro `switch` (`0x82106F88`), e índices acima de 14 não chegam ao bloco |
+| `0x82A12650`–`0x82A127F0` | `0x82A12650` é uma função folha com salto calculado (`0x82A12688`, 42 rótulos) chamada por ~300 `bl`; depois dela, separadas por palavras nulas, `0x82A126E0`, `0x82A126F0`, `0x82A12730`, `0x82A12768` e `0x82A127A8` (comparador passado a uma ordenação: `lis`/`addi` em `0x82A17A3C`). A faixa folha do M2 ia até `0x82A127F0` e engolia as cinco | **coberto**: `0x82A12650` (+`0x8C`) e `0x82A127A8` (+`0x48`, só por ponteiro) em `functions.toml`; as seis estão no mapa de funções do XenonRecomp (as quatro sem referência achada são criadas pela análise de lacunas dele) |
+
+Com o build refeito, `legacyrecomp run -- --headless --trace-imports` continua saindo com **código 3** em
+`VdInitializeEngines` (chamado de `0x82446210`), como no fim do M2: nenhuma regressão.
 
 ### Pendências para revisão humana (Ghidra + XEXLoaderWV)
 
@@ -151,7 +173,7 @@ Listadas também em `work/logs/analyse.log` a cada execução. Para ver a forma 
 |---|---|---|
 | `0x8243C83C` | descartada: índice limitado por `clrlwi ..., 26` (64 entradas), mas parte dos rótulos cai na função seguinte (`0x8243C9B0`) | o número real de casos (a tabela de bytes em `0x8202F558` provavelmente tem menos de 64 entradas válidas); depois, `[[switch]]` manual |
 | `0x826796FC` | guarda `cmpw` com sinal: muito provavelmente chamada virtual num vetor 2D, não `switch` | confirmar que não é tabela |
-| `0x8235B7AC`, `0x82366274`, `0x82366544`, `0x825495A0`, `0x82549798`, `0x82615C18`, `0x8261F07C`, `0x826282C0`, `0x8265827C`, `0x826582B4`, `0x826A6818`, `0x826A6910`, `0x826F92B4`, `0x82787348`, `0x82787370`, `0x82787398`, `0x8294E434`, `0x82A1A6C4`, `0x82AB1528`, `0x82B1AA00`, `0x82B1CA68` | sem guarda nem máscara, com carga indexada de endereço montado por `lis` | separar `switch` sem limite (ex.: `0x8235B7AC` e `0x82A1A6C4`, tabelas de deslocamentos de código) de chamadas por vetor de ponteiros (ex.: `0x82787348`, `0x82B1AA00`); para os `switch`, achar o número de casos e escrever `[[switch]]` manual |
+| `0x8235B7AC`, `0x82366274`, `0x82366544`, `0x825495A0`, `0x82549798`, `0x82615C18`, `0x8261F07C`, `0x826282C0`, `0x8265827C`, `0x826582B4`, `0x826A6818`, `0x826A6910`, `0x826F92B4`, `0x82787348`, `0x82787370`, `0x82787398`, `0x82A1A6C4`, `0x82B1AA00`, `0x82B1CA68` (19; `0x8294E434` e `0x82AB1528` saíram da lista no M3) | sem guarda nem máscara, com carga indexada de endereço montado por `lis` | separar `switch` sem limite (ex.: `0x8235B7AC` e `0x82A1A6C4`, tabelas de deslocamentos de código) de chamadas por vetor de ponteiros (ex.: `0x82787348`, `0x82B1AA00`); para os `switch`, achar o número de casos e escrever `[[switch]]` manual |
 
 ## Desvios condicionais para fora da função
 
