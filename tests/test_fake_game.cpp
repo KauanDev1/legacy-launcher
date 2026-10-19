@@ -394,6 +394,22 @@ TEST_CASE("launch runs <root>/bin/legacyrecomp-game on the patched image and ret
   REQUIRE(u);
   CHECK(u.value() == 2);
 }
+
+TEST_CASE("fake guest indirect call to a hole reports the guest address", "[unit]") {
+  TempDir td;
+  auto r = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x820003A0)});
+  CHECK(r.code == 4);
+  CHECK(r.out.find("Indirect call to 0x82000240 without a recompiled function (from 0x820003A4)") != std::string::npos);
+
+  // Outside the code range: reported too, without reading the function table.
+  auto o = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x820003B0)});
+  CHECK(o.code == 4);
+  CHECK(o.out.find("Indirect call to 0x12345678 without a recompiled function (from 0x820003B4)") != std::string::npos);
+
+  // An indirect call to a real function still goes through.
+  auto ok = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x820003A8)});
+  CHECK(ok.code == 0);
+}
 #else
 TEST_CASE("fake game tests need SDL2 (target lr_fake_game not built)", "[unit]") { SKIP("SDL2 not found"); }
 #endif

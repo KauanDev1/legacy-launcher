@@ -51,6 +51,8 @@ target_include_directories(legacyrecomp-game PRIVATE "${LR_GENERATED}" "${_rt}/i
 #  -ffp-model=strict        UnleashedRecomp's setting for the generated code: no FMA contraction, and the compiler
 #                           respects the FP environment the code changes (rounding mode / flush-to-zero via MXCSR).
 #  -fexceptions             default, kept explicit: lr::kernel::UnimplementedImport unwinds through generated frames.
+#  -include runtime/indirect_call.h  forced before the generated headers: replaces PPC_CALL_INDIRECT_FUNC with a
+#                           checked call that reports a guest address without a function (exit 4).
 #  -march=sandybridge       x86-64 baseline UnleashedRecomp targets; lets simde map ppc_context.h's VMX helpers to
 #                           real SSE4.1/AVX instructions instead of scalar fallbacks. REQUIREMENT: the host CPU
 #                           must support AVX (2011+); the doctor stage refuses CPUs without it, and the runtime's
@@ -58,6 +60,7 @@ target_include_directories(legacyrecomp-game PRIVATE "${LR_GENERATED}" "${_rt}/i
 #  -Wno-*                   XenonRecomp output trips these by design; the template never uses -Werror.
 target_compile_options(legacyrecomp-game PRIVATE
   -O2 -fno-strict-aliasing -ffp-model=strict -fexceptions
+  -include runtime/indirect_call.h
   $<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=sandybridge>
   -Wno-switch -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-label
   -Wno-null-arithmetic -Wno-null-conversion -Wno-tautological-undefined-compare -Wno-void-pointer-to-int-cast

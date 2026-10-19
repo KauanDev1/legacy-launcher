@@ -28,6 +28,8 @@ if(TARGET SDL2::SDL2)
   # --whole-archive like the game template, so LR_KERNEL registrations inside lr_runtime_core are linked exactly as
   # in the real game (an object nothing references is otherwise dropped with its registration).
   target_link_libraries(lr_fake_game PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,lr_runtime_core>" XenonUtils SDL2::SDL2)
+  # The same forced include as the game template, so the fake game exercises the real PPC_CALL_INDIRECT_FUNC.
+  target_compile_options(lr_fake_game PRIVATE -include runtime/indirect_call.h)
   lr_configure_target(lr_fake_game)
   add_dependencies(lr_tests lr_fake_game)
   target_compile_definitions(lr_tests PRIVATE LR_FAKE_GAME_PATH="$<TARGET_FILE:lr_fake_game>")
@@ -41,7 +43,7 @@ if(TARGET SDL2::SDL2)
   endif()
   add_test(NAME template_compiles_with_staged_headers
     COMMAND ${CMAKE_COMMAND} "-DCXX=${CMAKE_CXX_COMPILER}"
-            "-DSOURCES=${LR_RESOURCES_DIR}/runtime/src/main.cpp|${LR_FAKE_STUBS}"
+            "-DSOURCES=${LR_RESOURCES_DIR}/runtime/src/main.cpp|${LR_FAKE_STUBS}|${LR_FAKE_DIR}/fake_recomp.cpp"
             "-DGENERATED=${LR_FAKE_DIR}" "-DPPC_CONTEXT_DIR=${LR_RESOURCES_DIR}/tools"
             "-DRUNTIME_INCLUDE=${LR_RESOURCES_DIR}/runtime/include"
             "-DEXTRA_INCLUDES=$<JOIN:$<TARGET_PROPERTY:SDL2::SDL2,INTERFACE_INCLUDE_DIRECTORIES>,|>"

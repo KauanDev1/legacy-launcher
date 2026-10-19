@@ -323,3 +323,25 @@ PPC_FUNC(sub_82000300) {
   __imp__VdInitializeEngines(ctx, base);
   ctx.r1.u64 += kFrame;
 }
+
+// Entry point: bctrl to an address inside the code range with no recompiled function (a hole in the function
+// table): the forced-include PPC_CALL_INDIRECT_FUNC reports it with exit 4 instead of jumping to host address 0.
+PPC_FUNC(sub_820003A0) {
+  ctx.ctr.u64 = 0x82000240;
+  ctx.lr = 0x820003A4;
+  PPC_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+}
+
+// Entry point: bctrl to an address outside the code range (the function table must not be read for it).
+PPC_FUNC(sub_820003B0) {
+  ctx.ctr.u64 = 0x12345678;
+  ctx.lr = 0x820003B4;
+  PPC_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+}
+
+// Entry point: bctrl to a function that exists (sub_82000180 returns normally) must still reach it: exit 0.
+PPC_FUNC(sub_820003A8) {
+  ctx.ctr.u64 = 0x82000180;
+  ctx.lr = 0x820003AC;
+  PPC_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+}

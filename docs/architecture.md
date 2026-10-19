@@ -144,6 +144,14 @@ tamanho_da_pilha)` cria a thread principal pelo mesmo caminho (tamanho de pilha 
 256 KiB por padrão) e espera seu KTHREAD; quando ela termina, o `main.cpp` sai com 0 via `_exit`, derrubando as
 outras threads. Com janela, o SDL roda na thread principal do host e a espera numa thread auxiliar, como antes.
 
+Chamada indireta (`bctr`/`bctrl`, ponteiro de função) para um endereço sem função recompilada: o código gerado não passa
+pelo `main.cpp`; o template o compila com `-include runtime/indirect_call.h` (staged; o `lr_fake_game`
+usa o mesmo include forçado), que redefine `PPC_CALL_INDIRECT_FUNC` antes de `ppc_context.h`. O caminho rápido é uma
+checagem de faixa `[PPC_CODE_BASE, PPC_CODE_BASE + PPC_CODE_SIZE)`, alinhamento e a leitura do slot; fora disso ou
+com slot nulo, `lr::kernel::bad_indirect_call(alvo, ctx.lr)` imprime `Indirect call to 0x... without a recompiled
+function (from 0x...)` com a trilha de importações e sai com 4 (em vez de saltar para o endereço de host 0 e dar
+`SIGSEGV at host 0x0`). Num `bctr` de cauda, `ctx.lr` é o retorno da própria função envolvente.
+
 Suspensão: o contador fica na `GuestThread`. Criação suspensa (bit 0 das flags) e auto-suspensão
 (`NtSuspendThread` na própria thread) bloqueiam na hora; suspender outra thread em execução é cooperativo: o
 gancho de entrada de importação (`set_import_entry_hook`, chamado por `trace` em todo thunk; uma leitura atômica)

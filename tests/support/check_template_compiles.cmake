@@ -6,11 +6,13 @@
 # Include path (template order): GENERATED (fake generated dir), PPC_CONTEXT_DIR (staged tools/, stand-in for the
 # ppc_context.h XenonRecomp copies into work/generated), RUNTIME_INCLUDE (staged runtime/include), its simde/, then
 # EXTRA_INCLUDES ("|"-separated, SDL2's headers). Never src/: that is the point of the test.
+# The template force-includes runtime/indirect_call.h (found through RUNTIME_INCLUDE), so the check does too, and
+# SOURCES includes a file that expands PPC_CALL_INDIRECT_FUNC.
 # Inputs: CXX, SOURCES ("|"-separated), GENERATED, PPC_CONTEXT_DIR, RUNTIME_INCLUDE, EXTRA_INCLUDES, MARCH (0/1).
 # Run: cmake -DCXX=clang++ -DSOURCES=a.cpp|b.cpp -DGENERATED=... ... -P check_template_compiles.cmake
 string(REPLACE "|" ";" _sources "${SOURCES}")
 string(REPLACE "|" ";" _extra "${EXTRA_INCLUDES}")
-set(_flags -std=c++20 -fsyntax-only -fno-strict-aliasing -fexceptions -w
+set(_flags -std=c++20 -fsyntax-only -fno-strict-aliasing -fexceptions -w -include runtime/indirect_call.h
   "-I${GENERATED}" "-I${PPC_CONTEXT_DIR}" "-I${RUNTIME_INCLUDE}" "-I${RUNTIME_INCLUDE}/simde")
 foreach(_dir IN LISTS _extra)
   if(NOT _dir STREQUAL "")

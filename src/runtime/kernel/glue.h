@@ -41,4 +41,11 @@ uint64_t call_guest(uint32_t fn, std::span<const uint64_t> args);
 // stack and PCR. Same guest_fatal conditions as call_guest, except that no current frame is needed.
 uint64_t call_guest_on_frame(uint32_t fn, std::span<const uint64_t> args, uint32_t r1, uint32_t r13);
 
+// Called by the PPC_CALL_INDIRECT_FUNC override (runtime/indirect_call.h) for an indirect call (bctr/bctrl) to guest
+// address `target` with no recompiled function (outside the code range, unaligned or empty function-table slot);
+// `lr` is the guest return address the call sequence set (0 when unknown). Writes "Indirect call to 0x<target>
+// without a recompiled function (from 0x<lr>)" (or "(from unknown)") followed by the calling thread's import trail
+// to stderr, flushes stdio and the import trace and calls _exit(kExitFault), i.e. exit code 4.
+[[noreturn]] void bad_indirect_call(uint32_t target, uint32_t lr);
+
 }  // namespace lr::kernel

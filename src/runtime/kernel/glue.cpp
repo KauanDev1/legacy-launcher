@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
 #include "runtime/kernel/glue.h"
 
+#include <unistd.h>
+
 #include <atomic>
 #include <cstdio>
 #include <string>
 
+#include "runtime/guest_thread.h"
 #include "runtime/kernel/kernel.h"
+#include "runtime/kernel/registry.h"
+#include "runtime/kernel/trace.h"
 
 namespace lr::kernel {
 
@@ -65,4 +70,18 @@ uint64_t call_guest_on_frame(uint32_t fn, std::span<const uint64_t> args, uint32
   return call_on(fn, args, r1, r13);
 }
 
+
+void bad_indirect_call(uint32_t target, uint32_t lr) {
+  char head[128];
+  if (lr != 0) {
+    std::snprintf(head, sizeof head, "Indirect call to 0x%08X without a recompiled function (from 0x%08X)\n", target, lr);
+  } else {
+    std::snprintf(head, sizeof head, "Indirect call to 0x%08X without a recompiled function (from unknown)\n", target);
+  }
+  const std::string msg = std::string(head) + format_trail(current_trail());
+  std::fputs(msg.c_str(), stderr);
+  std::fflush(nullptr);
+  flush_import_trace();
+  _exit(runtime::kExitFault);
+}
 }  // namespace lr::kernel
