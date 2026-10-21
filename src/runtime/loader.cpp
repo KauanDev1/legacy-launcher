@@ -82,8 +82,18 @@ Result<LoadedImage> load_image(GuestMemory& mem, std::span<const std::byte> xex)
   if (image.entry_point < image.base || image.entry_point >= end) {
     return Error{ErrorCode::InvalidFormat, "entry point " + hex(image.entry_point) + " is outside the image", ""};
   }
-  for (const Section& s : image.sections) {
-    if (s.size && s.data) std::memcpy(mem.base() + s.base, s.data, s.size);
+  if (is_xex2(xex)) {
+    // A XEX image is the whole decompressed PE (image.data, image.size bytes at image.base): map all of it, as the
+    // console does. The resources (XexGetModuleSection, e.g. the game's XUI package) lie outside every PE section.
+    if (image.base + image.size > mem.size()) {
+      return Error{ErrorCode::OutOfRange, "image at " + hex(image.base) + " does not fit in guest memory", ""};
+    }
+    std::memcpy(mem.base() + image.base, image.data.get(), image.size);
+  } else {
+    // Other images (the test ELF): image.data is the file, so only the sections are mapped.
+    for (const Section& s : image.sections) {
+      if (s.size && s.data) std::memcpy(mem.base() + s.base, s.data, s.size);
+    }
   }
   LoadedImage out;
   out.base = static_cast<uint32_t>(image.base);

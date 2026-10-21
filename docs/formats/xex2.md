@@ -69,6 +69,11 @@ XenonUtils (as mesmas que o ParseImage usa).
 
 ### Loader v2 e variáveis do kernel
 
+`load_image` mapeia a imagem descomprimida inteira de um XEX2 (`image.size` bytes a partir da base), não só as
+seções do PE: os recursos do XEX (`XexGetModuleSection`; no jogo, o pacote XUI `media`, em `0x82C70000`, com
+`0x26205FC` bytes) ficam fora de todas as seções e o jogo mostra "Loading Error" se não estiverem na memória. Uma
+imagem que não é XEX2 (o ELF dos testes) continua copiada seção por seção.
+
 `load_image` (para XEX2, depois de `init_kernel`) copia os `pe_data_offset` bytes do cabeçalho para o início
 da área de dados do kernel (`0x80000000`) e monta logo depois um `X_LDR_DATA_TABLE_ENTRY` (layout do Xenia,
 `xmodule.h`; listas apontando para a própria entrada, `dll_base`/`image_base`, tamanhos, ponto de entrada,

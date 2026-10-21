@@ -66,6 +66,11 @@ class Xex2Builder {
     has_pe_ = true;
     return *this;
   }
+  // Bytes at `rva` of the PE image that belong to no section (as the XEX resources do).
+  Xex2Builder& image_bytes(uint32_t rva, std::vector<uint8_t> bytes) {
+    extra_.push_back({rva, std::move(bytes)});
+    return *this;
+  }
   // Raw extra pair appended verbatim (key, value) with no data.
   Xex2Builder& raw_pair(uint32_t key, uint32_t value) { inline_.push_back({key, value}); return *this; }
   // Overrides the optional header count written in the header.
@@ -183,6 +188,7 @@ class Xex2Builder {
       le32(img, h + 36, s.code ? 0x60000020u : 0xC0000040u);
       std::memcpy(img.data() + s.rva, s.data.data(), s.data.size());
     }
+    for (const auto& [rva, bytes] : extra_) std::memcpy(img.data() + rva, bytes.data(), bytes.size());
     return img;
   }
 
@@ -196,6 +202,7 @@ class Xex2Builder {
   std::vector<std::pair<std::string, std::vector<uint32_t>>> libs_;
   uint32_t load_address_ = 0, image_size_ = 0;
   std::vector<PeSection> sections_;
+  std::vector<std::pair<uint32_t, std::vector<uint8_t>>> extra_;
 };
 
 }  // namespace lr::testing

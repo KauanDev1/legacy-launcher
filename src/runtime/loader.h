@@ -27,7 +27,8 @@ struct LoadedImage {
   uint32_t stack_size = kDefaultStackSize;
 };
 
-// Parses the (patched, decrypted) image via XenonUtils and copies every section to its guest address.
+// Parses the (patched, decrypted) image via XenonUtils and maps it: an XEX2 as the whole decompressed image (its
+// resources lie outside every PE section), other images (the test ELF) section by section.
 // XenonUtils reports section bases as absolute guest addresses (image base + RVA).
 // For an XEX2 it also copies the XEX header (pe_data_offset bytes) to the kernel data area and builds the module's
 // X_LDR_DATA_TABLE_ENTRY after it: init_kernel must have run (the copies come from Kernel::kernel_data_alloc).

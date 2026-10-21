@@ -104,6 +104,17 @@ TEST_CASE("loader copies header to kernel data", "[unit]") {
   CHECK(img.stack_size == 0x80000u);
 }
 
+// The XEX resources (XexGetModuleSection, e.g. the game's XUI package) live in the image but in no PE section; the
+// whole image must be mapped, not only the sections.
+TEST_CASE("loader maps the whole XEX image, bytes outside every section included", "[unit]") {
+  lr::testing::KernelFixture f;
+  const std::vector<uint8_t> resource = {'X', 'U', 'I', 'Z', 1, 2, 3, 4};
+  auto r = load_image(f.mem, loadable_xex(std::move(lr::testing::Xex2Builder().image_bytes(0x2800, resource))));
+  REQUIRE(r.ok());
+  CHECK(r.value().size == 0x3000u);
+  CHECK(std::memcmp(f.mem.translate<uint8_t>(0x82002800), resource.data(), resource.size()) == 0);
+}
+
 TEST_CASE("loader defaults the stack size to 256 KiB", "[unit]") {
   lr::testing::KernelFixture f;
   auto r = load_image(f.mem, loadable_xex(lr::testing::Xex2Builder()));
