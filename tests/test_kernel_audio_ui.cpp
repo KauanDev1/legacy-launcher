@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Silent audio driver (exports/audio.cpp), message box reporting and relaunch (exports/xam_ui.cpp).
+// Silent audio driver (exports/audio.cpp), message box reporting and relaunch (exports/xam_ui.cpp), absent Kinect
+// (exports/nui.cpp).
 #include <catch2/catch_test_macros.hpp>
 
 #include <sys/wait.h>
@@ -103,4 +104,12 @@ TEST_CASE("XamLoaderLaunchTitle is guest fatal", "[unit][kernel][xam]") {
   auto r = in_child([&] { f.call("XamLoaderLaunchTitle", 0u, 0u); });
   CHECK(r.code == 5);
   CHECK(r.err.find("Guest fatal: the game asked to relaunch itself (XamLoaderLaunchTitle)") != std::string::npos);
+}
+
+TEST_CASE("XamNuiGetDeviceStatus reports no Kinect sensor", "[unit][kernel][xam]") {
+  KernelFixture f;
+  const uint32_t status = f.alloc(24);
+  std::memset(f.mem.translate<uint8_t>(status), 0xAB, 24);
+  CHECK(f.call("XamNuiGetDeviceStatus", status) == 0);
+  for (uint32_t i = 0; i < 24; i += 4) CHECK(rd(f, status + i) == 0);  // status (offset 12) 0: not connected
 }
