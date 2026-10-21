@@ -2,6 +2,9 @@
 // Hand-written stand-ins for recompiled guest functions.
 #include "ppc_recomp_shared.h"
 
+#include <cstdint>
+#include <utility>
+
 // Calls an implemented import, a stub, then an unimplemented one: the run must stop with exit code 3.
 PPC_FUNC(sub_82000100) {
   ctx.lr = 0x82000104;
@@ -246,8 +249,8 @@ PPC_FUNC(sub_82000380) {
 // Entry point: boots like a game. NtAllocateVirtualMemory(64 KiB scratch block), RtlInitializeCriticalSection in
 // it, NtCreateEvent (notification, not signaled), ExCreateThread(sub_82000380, block), ObReferenceObjectByHandle
 // on the event (any type) and KeWaitForSingleObject on the object it returns, NtWaitForSingleObjectEx on the worker
-// thread, then VdInitializeEngines with the 4 bytes the worker read in r3 (missing: exit 3 from 0x82000320). A
-// failed status calls FakeMissing from 0x82000324.
+// thread, then VdInitializeEngines with the 4 bytes the worker read in r3 (must return 1) and FakeMissing (exit 3
+// from 0x82000328). A failed status calls FakeMissing from 0x82000324.
 PPC_FUNC(sub_82000300) {
   using namespace boot;
   ctx.r1.u64 -= kFrame;
@@ -321,6 +324,9 @@ PPC_FUNC(sub_82000300) {
   ctx.r3.u64 = PPC_LOAD_U32(s + kData);
   ctx.lr = 0x82000320;
   __imp__VdInitializeEngines(ctx, base);
+  if (ctx.r3.u32 != 1) fail();
+  ctx.lr = 0x82000328;
+  __imp__FakeMissing(ctx, base);
   ctx.r1.u64 += kFrame;
 }
 
@@ -344,4 +350,139 @@ PPC_FUNC(sub_820003A8) {
   ctx.ctr.u64 = 0x82000180;
   ctx.lr = 0x820003AC;
   PPC_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+}
+
+// --- Fake GPU boot (sub_82000400 + interrupt callback sub_82000480): ring buffer, write-back, interrupts, VdSwap. ---
+namespace gpu_boot {
+constexpr uint32_t kFrame = 0x100;
+constexpr uint32_t kRingLog2 = 12;                     // 2^(12 + 3) = 32 KiB, like the real game
+constexpr uint32_t kRingDwords = 1u << (kRingLog2 + 1);
+constexpr uint32_t kWptrMmio = 0x7FC80000 + 4 * 0x1C5;  // CP_RB_WPTR in the MMIO window
+constexpr uint32_t kFrames = 3;
+// Offsets inside the data block D (physical memory): write-back, interrupt counters, fence, VdSwap arguments.
+constexpr uint32_t kWriteBack = 0x00, kVblanks = 0x10, kCpInterrupts = 0x14, kSwapFence = 0x20, kFetch = 0x40,
+                   kFrontPtr = 0x60, kWidth = 0x64, kHeight = 0x68, kFrontBuffer = 0x1000;
+}  // namespace gpu_boot
+
+// Graphics interrupt callback(source, user_data = D + kVblanks): counts vblanks (source 0) at user_data and
+// command-processor interrupts (source 1) at user_data + 4. Runs on the kernel worker.
+PPC_FUNC(sub_82000480) {
+  const uint32_t counter = ctx.r4.u32 + (ctx.r3.u32 == 0 ? 0 : 4);
+  PPC_STORE_U32(counter, PPC_LOAD_U32(counter) + 1);
+  ctx.r3.u64 = 0;
+}
+
+// Entry point: VdInitializeEngines (must be 1); a 32 KiB ring and a data block from MmAllocatePhysicalMemoryEx and
+// their physical addresses (MmGetPhysicalAddress); VdSetGraphicsInterruptCallback(sub_82000480, D + kVblanks),
+// VdInitializeRingBuffer(ring, 12), VdEnableRingBufferRPtrWriteBack(D, 6). Then kFrames frames, each an optional
+// INTERRUPT packet (frame 0) and the 64 dwords VdSwap fills (10 arguments, the last two on the guest stack), WPTR
+// published through the MMIO window after each; then EVENT_WRITE_SHD with initiator bit 31 (stores the swap
+// counter at D + kSwapFence). It waits (KeDelayExecutionThread 1 ms, at most 5000 times) until the write-back RPTR
+// equals WPTR, kFrames vblanks and one CP interrupt arrived, and checks the fence holds kFrames: exit 0. Any
+// failure calls FakeMissing from 0x82000420 (exit 3).
+PPC_FUNC(sub_82000400) {
+  using namespace gpu_boot;
+  ctx.r1.u64 -= kFrame;
+  const uint32_t l = uint32_t(ctx.r1.u64) + 0x60;  // locals: delay interval (be int64)
+  bool failed = false;
+  const auto fail = [&] {
+    if (failed) return;
+    failed = true;
+    ctx.lr = 0x82000420;
+    __imp__FakeMissing(ctx, base);
+  };
+  const auto alloc_phys = [&](uint32_t size, uint32_t lr) {
+    ctx.r3.u64 = 0;
+    ctx.r4.u64 = size;
+    ctx.r5.u64 = 0x20000004;  // MEM_LARGE_PAGES | PAGE_READWRITE
+    ctx.r6.u64 = 0;
+    ctx.r7.u64 = 0xFFFFFFFF;
+    ctx.r8.u64 = 0;
+    ctx.lr = lr;
+    __imp__MmAllocatePhysicalMemoryEx(ctx, base);
+    const uint32_t guest = ctx.r3.u32;
+    if (guest == 0) fail();
+    ctx.r3.u64 = guest;
+    ctx.lr = lr + 4;
+    __imp__MmGetPhysicalAddress(ctx, base);
+    return std::pair<uint32_t, uint32_t>{guest, ctx.r3.u32};
+  };
+
+  ctx.r3.u64 = 0;
+  ctx.r4.u64 = 0;
+  ctx.r5.u64 = 0;
+  ctx.r6.u64 = 0;
+  ctx.lr = 0x82000404;
+  __imp__VdInitializeEngines(ctx, base);
+  if (ctx.r3.u32 != 1) fail();
+
+  const auto [ring, ring_phys] = alloc_phys(kRingDwords * 4, 0x82000408);
+  const auto [d, d_phys] = alloc_phys(0x10000, 0x82000410);
+
+  ctx.r3.u64 = 0x82000480;
+  ctx.r4.u64 = d + kVblanks;
+  ctx.lr = 0x82000418;
+  __imp__VdSetGraphicsInterruptCallback(ctx, base);
+  ctx.r3.u64 = ring_phys;
+  ctx.r4.u64 = kRingLog2;
+  ctx.lr = 0x8200041C;
+  __imp__VdInitializeRingBuffer(ctx, base);
+  ctx.r3.u64 = d_phys + kWriteBack;
+  ctx.r4.u64 = 6;
+  ctx.lr = 0x82000424;
+  __imp__VdEnableRingBufferRPtrWriteBack(ctx, base);
+
+  PPC_STORE_U32(d + kFetch + 4, 0);
+  PPC_STORE_U32(d + kFrontPtr, d + kFrontBuffer);
+  PPC_STORE_U32(d + kWidth, 1280);
+  PPC_STORE_U32(d + kHeight, 720);
+  uint32_t wptr = 0;
+  const auto put = [&](uint32_t v) {
+    PPC_STORE_U32(ring + wptr * 4, v);
+    wptr = (wptr + 1) % kRingDwords;
+  };
+  for (uint32_t frame = 0; frame < kFrames; ++frame) {
+    if (frame == 0) {
+      put((3u << 30) | (0u << 16) | (0x54u << 8));  // INTERRUPT, 1 payload dword
+      put(1);                                       // CPU mask
+    }
+    const uint32_t area = ring + wptr * 4;
+    ctx.r3.u64 = area;
+    ctx.r4.u64 = d + kFetch;
+    ctx.r5.u64 = 0;
+    ctx.r6.u64 = 0;
+    ctx.r7.u64 = 0;
+    ctx.r8.u64 = d + kFrontPtr;
+    ctx.r9.u64 = 0;
+    ctx.r10.u64 = 0;
+    // Ninth and tenth arguments: low halves of the parameter-area slots at r1 + 0x50 and r1 + 0x58.
+    const uint32_t params = uint32_t(ctx.r1.u64) + 0x50;
+    PPC_STORE_U32(params + 0x4, d + kWidth);
+    PPC_STORE_U32(params + 0xC, d + kHeight);
+    ctx.lr = 0x82000428;
+    __imp__VdSwap(ctx, base);
+    wptr = (wptr + 64) % kRingDwords;  // VdSwap filled the 64 reserved dwords
+    PPC_STORE_U32(kWptrMmio, wptr);
+  }
+  put((3u << 30) | (2u << 16) | (0x58u << 8));  // EVENT_WRITE_SHD, 3 payload dwords
+  put(0x80000000u);                              // initiator bit 31: write the swap counter
+  put((d_phys + kSwapFence) | 2);                // 8-in-32 endian: lands big-endian
+  put(0);
+  PPC_STORE_U32(kWptrMmio, wptr);
+
+  PPC_STORE_U64(l, uint64_t(-10000));  // 1 ms, relative
+  for (int i = 0; i < 5000; ++i) {
+    if (PPC_LOAD_U32(d + kWriteBack) == wptr && PPC_LOAD_U32(d + kVblanks) >= kFrames &&
+        PPC_LOAD_U32(d + kCpInterrupts) >= 1)
+      break;
+    ctx.r3.u64 = 1;  // UserMode
+    ctx.r4.u64 = 0;  // not alertable
+    ctx.r5.u64 = l;
+    ctx.lr = 0x8200042C;
+    __imp__KeDelayExecutionThread(ctx, base);
+  }
+  if (PPC_LOAD_U32(d + kWriteBack) != wptr || PPC_LOAD_U32(d + kVblanks) < kFrames ||
+      PPC_LOAD_U32(d + kCpInterrupts) < 1 || PPC_LOAD_U32(d + kSwapFence) != kFrames)
+    fail();
+  ctx.r1.u64 += kFrame;
 }

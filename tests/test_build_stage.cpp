@@ -161,7 +161,7 @@ TEST_CASE("launch forwards Ctrl+C to the game, survives it and returns 128 + SIG
   CHECK(r.value() == 130);
 }
 
-TEST_CASE("launch passes --trace-file <root>/work/logs/game-trace.log to the game", "[unit][trace]") {
+TEST_CASE("launch passes --trace-file and --gpu-trace-file under <root>/work/logs to the game", "[unit][trace]") {
   TempDir t;
   write(t.path / "work" / "image" / "default_tu1.xex", "image");
   // Stand-in game: records its arguments, one per line.
@@ -180,6 +180,8 @@ TEST_CASE("launch passes --trace-file <root>/work/logs/game-trace.log to the gam
   ss << f.rdbuf();
   const std::string expect_file = (t.path / "work" / "logs" / "game-trace.log").string();
   CHECK(ss.str().find("--trace-file\n" + expect_file + "\n") != std::string::npos);
+  const std::string expect_gpu = (t.path / "work" / "logs" / "gpu-trace.log").string();
+  CHECK(ss.str().find("--gpu-trace-file\n" + expect_gpu + "\n") != std::string::npos);
   CHECK(ss.str().find("--trace-imports\n") != std::string::npos);  // extra arguments still reach the game
 }
 

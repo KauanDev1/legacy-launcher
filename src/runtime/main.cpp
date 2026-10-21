@@ -4,9 +4,12 @@
 // lr_runtime_core with --whole-archive so its LR_KERNEL / LR_KERNEL_STUB registrations are kept.
 //
 // Usage: <game> --image <xex> [--data <dir>] [--user <dir>] [--headless] [--coverage] [--strict-memory] [--trace-imports]
-//        [--trace-file <path>]
+//        [--trace-file <path>] [--trace-gpu] [--gpu-trace-file <path>]
 // --trace-imports logs every import call (runtime/kernel/trace.h) to --trace-file, or stderr without one; the
-// launcher always passes --trace-file, which alone does nothing. LR_DEADLOCK_SECONDS (default 10, 0 = off) sets the
+// launcher always passes --trace-file, which alone does nothing. --trace-gpu logs the GPU's PM4 packets, draws,
+// swaps and per-second counters (runtime/gpu/gpu_system.h) to --gpu-trace-file, or stderr without one (capped at
+// 64 MiB); the launcher always passes --gpu-trace-file, which alone does nothing too. Headless runs pace the vblank
+// by swaps, window runs at 60 Hz of wall time. LR_DEADLOCK_SECONDS (default 10, 0 = off) sets the
 // deadlock detector threshold (runtime/kernel/deadlock.h).
 // Exit codes: 0 ok (also: window closed by the user), 2 usage/load error, 3 unimplemented import, 4 fault,
 // 5 guest fatal (lr::kernel::guest_fatal), 6 deadlock.
@@ -58,13 +61,15 @@ struct Options {
   bool strict_memory = false;  // uncommitted heap pages PROT_NONE (lr::kernel::KernelConfig::strict_memory)
   bool trace_imports = false;
   std::string trace_file;  // empty: stderr
+  bool trace_gpu = false;
+  std::string gpu_trace_file;  // empty: stderr
 };
 
 int usage(const char* msg) {
   if (msg) std::fprintf(stderr, "error: %s\n", msg);
   std::fprintf(stderr,
                "usage: game --image <xex> [--data <dir>] [--user <dir>] [--headless] [--coverage] [--strict-memory] "
-               "[--trace-imports] [--trace-file <path>]\n");
+               "[--trace-imports] [--trace-file <path>] [--trace-gpu] [--gpu-trace-file <path>]\n");
   return kExitUsage;
 }
 
@@ -236,9 +241,14 @@ int main(int argc, char** argv) {
     else if (a == "--coverage") opt.coverage = true;
     else if (a == "--strict-memory") opt.strict_memory = true;
     else if (a == "--trace-imports") opt.trace_imports = true;
-    else if (a == "--image" || a == "--data" || a == "--user" || a == "--trace-file") {
+    else if (a == "--trace-gpu") opt.trace_gpu = true;
+    else if (a == "--image" || a == "--data" || a == "--user" || a == "--trace-file" || a == "--gpu-trace-file") {
       if (i + 1 >= argc) return usage(("missing value for " + a).c_str());
-      (a == "--image" ? opt.image : a == "--data" ? opt.data : a == "--user" ? opt.user : opt.trace_file) = argv[++i];
+      (a == "--image"        ? opt.image
+       : a == "--data"       ? opt.data
+       : a == "--user"       ? opt.user
+       : a == "--trace-file" ? opt.trace_file
+                             : opt.gpu_trace_file) = argv[++i];
     } else {
       return usage(("unknown argument " + a).c_str());
     }
@@ -273,6 +283,9 @@ int main(int argc, char** argv) {
   }
   cfg.trace_imports = opt.trace_imports;
   if (!opt.trace_file.empty()) cfg.trace_file = opt.trace_file;
+  cfg.trace_gpu = opt.trace_gpu;
+  if (!opt.gpu_trace_file.empty()) cfg.gpu_trace_file = opt.gpu_trace_file;
+  cfg.vblank_paced_by_swap = opt.headless;  // spec section 11: a slow headless renderer must not starve waits
   cfg.deadlock_seconds = deadlock_seconds();
   if (auto r = lr::kernel::init_kernel(mem.value(), std::move(cfg)); !r) {
     std::fprintf(stderr, "error: %s\n", r.error().message.c_str());

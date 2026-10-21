@@ -2,7 +2,7 @@
 // Memory imports: virtual memory (Nt*VirtualMemory) over the 4 KiB / 64 KiB page heaps, physical memory (Mm*) over
 // the physical heap, and the kernel pool (ExAllocatePool*, XamAlloc*). Argument order, flag handling and status
 // codes follow Xenia's xboxkrnl_memory.cc and xam_info.cc (semantic reference only, no code copied); every
-// deviation is commented where it happens. MmMapIoSpace stays missing until M3 (GPU).
+// deviation is commented where it happens. MmMapIoSpace (M3) returns the address it is given.
 #include <cstdint>
 #include <cstring>
 #include <optional>
@@ -324,6 +324,11 @@ uint32_t XamFree(uint32_t addr) {
   return 0;
 }
 
+// MmMapIoSpace(unk0, address, size, flags): the address itself, as Xenia (which has only seen it map XMA contexts).
+// Our I/O ranges already live at their guest addresses (the GPU registers in the MMIO window, runtime/gpu/mmio.h,
+// committed read/write), so the identity mapping is also right for the GPU register range.
+uint32_t MmMapIoSpace(uint32_t /*unk0*/, uint32_t address, uint32_t /*size*/, uint32_t /*flags*/) { return address; }
+
 }  // namespace exports
 }  // namespace lr::kernel
 
@@ -334,6 +339,7 @@ LR_KERNEL(NtQueryVirtualMemory);
 LR_KERNEL(MmAllocatePhysicalMemoryEx);
 LR_KERNEL(MmFreePhysicalMemory);
 LR_KERNEL(MmGetPhysicalAddress);
+LR_KERNEL(MmMapIoSpace);
 LR_KERNEL(MmQueryAddressProtect);
 LR_KERNEL(MmSetAddressProtect);
 LR_KERNEL(MmQueryAllocationSize);

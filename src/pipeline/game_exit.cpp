@@ -9,6 +9,10 @@ std::filesystem::path game_trace_file(const std::filesystem::path& root) {
   return DataPaths::from_root(root).logs / "game-trace.log";
 }
 
+std::filesystem::path gpu_trace_file(const std::filesystem::path& root) {
+  return DataPaths::from_root(root).logs / "gpu-trace.log";
+}
+
 std::string describe_game_exit(int code, const std::filesystem::path& trace_file, ExitTextLanguage language) {
   const bool en = language == ExitTextLanguage::English;
   const std::string n = std::to_string(code);

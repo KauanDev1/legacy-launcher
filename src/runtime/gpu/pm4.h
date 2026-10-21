@@ -113,6 +113,12 @@ class CommandProcessor {
   // Frames swapped through LR_SWAP so far (the value EVENT_WRITE_SHD writes when initiator bit 31 is set).
   uint32_t swap_counter() const { return swap_counter_; }
 
+  // Called for every complete packet before it executes (ring and indirect buffers alike): header type (0-3),
+  // type-3 opcode (0 for types 0-2) and the packet's size in dwords, header included. An all-zero padding dword is
+  // not reported. For --trace-gpu (GpuSystem). Set it before the first execute().
+  using PacketObserver = std::function<void(uint32_t type, uint32_t opcode, uint32_t dwords)>;
+  void set_packet_observer(PacketObserver observer) { observer_ = std::move(observer); }
+
  private:
   // Returns the dwords consumed; inside an INDIRECT_BUFFER (depth > 0) an incomplete trailing packet is an error.
   Result<uint32_t> execute_buffer(uint32_t guest_addr, uint32_t dwords, uint32_t depth);
@@ -132,6 +138,7 @@ class CommandProcessor {
   RegisterFile& regs_;
   Backend& backend_;
   std::function<void(uint32_t)> raise_interrupt_;
+  PacketObserver observer_;
   std::map<uint32_t, uint64_t> counts_;
   std::atomic<bool> stop_{false};
   uint32_t swap_counter_ = 0;

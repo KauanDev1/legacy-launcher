@@ -67,7 +67,7 @@ RunResult run_game(const fs::path& dir, const std::vector<std::string>& args, co
 std::string write_image(const fs::path& dir, uint32_t entry) {
   const fs::path p = dir / "fake.elf";
   auto elf = lr::test::build_elf(entry, {{".rdata", 0x82000000, std::vector<uint8_t>(16, 0), false},
-                                         {".text", 0x82000100, std::vector<uint8_t>(0x300, 0), true}});
+                                         {".text", 0x82000100, std::vector<uint8_t>(0x400, 0), true}});
   std::ofstream(p, std::ios::binary).write(reinterpret_cast<const char*>(elf.data()), std::streamsize(elf.size()));
   return p.string();
 }
@@ -83,7 +83,7 @@ TEST_CASE("fake game --coverage lists three states", "[unit]") {
   CHECK(r.out.find("| FakeCallback | function | implemented |") != std::string::npos);
   CHECK(r.out.find("| FakeMissing | function | missing |") != std::string::npos);
   // Spec section 5.3: functions and variables are counted separately.
-  CHECK(r.out.find("Functions: implemented 12, stub 1, missing 2 / 15\n"
+  CHECK(r.out.find("Functions: implemented 20, stub 1, missing 1 / 22\n"
                    "Variables: implemented 0, stub 0, missing 0 / 0\n") != std::string::npos);
 }
 
@@ -113,7 +113,7 @@ TEST_CASE("fake game --coverage --image adds the XEX's variable imports", "[unit
   CHECK(r.out.find("| XboxKrnlVersion4Digit | variable | missing |") != std::string::npos);
   CHECK(r.out.find("DbgPrint") == std::string::npos);  // a function: its row comes from the generated thunks
   CHECK(r.out.find("| KeTimeStampBundle | variable | implemented |") != std::string::npos);
-  CHECK(r.out.find("Functions: implemented 12, stub 1, missing 2 / 15\n"
+  CHECK(r.out.find("Functions: implemented 20, stub 1, missing 1 / 22\n"
                    "Variables: implemented 2, stub 0, missing 1 / 3\n") != std::string::npos);
 }
 
@@ -266,8 +266,8 @@ TEST_CASE("two guest threads waiting on each other exit 6 with both waits listed
 // 1 turns the event handle into its dispatcher object (ObReferenceObjectByHandle), waits on it
 // (KeWaitForSingleObject), then waits for the worker thread to end (NtWaitForSingleObjectEx: trace lines are written
 // after a call returns, so this makes every worker line precede it) and calls VdInitializeEngines with the 4 bytes
-// read in r3, big-endian: the run stops there with exit 3, and the trace line of that call carries the bytes. Any
-// failed status on either thread calls FakeMissing instead (the report then names it and the call site). The ninth
+// read in r3, big-endian (the trace line of that call carries the bytes; since M3 it returns 1), then FakeMissing
+// from 0x82000328: exit 3. Any failed status on either thread calls FakeMissing from another call site instead. The ninth
 // NtCreateFile argument is surrounded by FILE_DIRECTORY_FILE sentinels, so a thunk reading the wrong stack word fails.
 TEST_CASE("fake guest boots like a game", "[unit][threads][files]") {
   TempDir td;
@@ -279,8 +279,7 @@ TEST_CASE("fake guest boots like a game", "[unit][threads][files]") {
                               write_image(td.path, 0x82000300)});
   INFO(r.out);
   CHECK(r.code == 3);
-  CHECK(r.out.find("Unimplemented import: VdInitializeEngines\nCalled from: 0x82000320\nThread: 1\n") !=
-        std::string::npos);
+  CHECK(r.out.find("Unimplemented import: FakeMissing\nCalled from: 0x82000328\nThread: 1\n") != std::string::npos);
 
   // Trace lines are "[tid] Name r3=... -> result"; the two threads interleave, so order is checked per thread.
   std::ifstream f(trace);
@@ -314,18 +313,67 @@ TEST_CASE("fake guest boots like a game", "[unit][threads][files]") {
       if (name == "NtReadFile") read_at = i;
       if (name == "NtSetEvent") set_at = i;
     }
-    if (name != "VdInitializeEngines" && name != "RtlInitializeCriticalSection")
+    if (name != "VdInitializeEngines" && name != "RtlInitializeCriticalSection" && name != "FakeMissing")
       CHECK(lines[i].ends_with("-> 0x00000000"));  // every status is STATUS_SUCCESS
   }
   CHECK(main_calls == std::vector<std::string>{"NtAllocateVirtualMemory", "RtlInitializeCriticalSection", "NtCreateEvent",
                                                "ExCreateThread", "ObReferenceObjectByHandle", "KeWaitForSingleObject",
-                                               "NtWaitForSingleObjectEx", "VdInitializeEngines"});
+                                               "NtWaitForSingleObjectEx", "VdInitializeEngines", "FakeMissing"});
   CHECK(worker_calls == std::vector<std::string>{"NtCreateFile", "NtReadFile", "NtSetEvent"});
   CHECK(read_at < wait_at);  // the event wait returned only after the worker had read the file
   CHECK(set_at < join_at);   // the thread wait returned only after the worker (and its trace lines) had finished
   REQUIRE(vd_at != none);
   CHECK(lines[vd_at].starts_with("[1] VdInitializeEngines r3=0x4C523237 "));  // "LR27", the first 4 bytes of data.bin
-  CHECK(lines[vd_at].ends_with("-> missing"));
+  CHECK(lines[vd_at].ends_with("-> 0x00000001"));  // implemented in M3
+  CHECK(lines.back().starts_with("[1] FakeMissing "));
+}
+
+// sub_82000400 initializes the GPU through the Vd* imports (engines, interrupt callback, a 32 KiB ring, RPTR
+// write-back), submits an INTERRUPT packet and three VdSwap frames through the ring and CP_RB_WPTR in the MMIO
+// window, then EVENT_WRITE_SHD with the swap counter. It returns (exit 0) only once the written-back RPTR reached
+// WPTR, three vblanks and the CP interrupt reached its callback, and the fence holds 3 swaps; otherwise exit 3.
+TEST_CASE("fake guest initializes the GPU, submits a ring buffer and swaps", "[unit][gpu][threads]") {
+  TempDir td;
+  auto r = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x82000400)});
+  INFO(r.out);
+  CHECK(r.code == 0);
+  CHECK(r.out.empty());
+}
+
+// The same guest with --trace-gpu: one line per PM4 packet, per swap, and the per-second counters line format.
+TEST_CASE("fake game --trace-gpu writes packet and swap lines", "[unit][gpu][trace]") {
+  TempDir td;
+  const fs::path file = td.path / "logs" / "gpu-trace.log";
+  auto r = run_game(td.path, {"--headless", "--trace-gpu", "--gpu-trace-file", file.string(), "--image",
+                              write_image(td.path, 0x82000400)});
+  INFO(r.out);
+  CHECK(r.code == 0);
+  std::ifstream f(file);
+  std::vector<std::string> lines;
+  for (std::string l; std::getline(f, l);) lines.push_back(l);
+  INFO([&] {
+    std::string all;
+    for (const auto& l : lines) all += l + "\n";
+    return all;
+  }());
+  const auto count = [&](const std::string& line) {
+    size_t n = 0;
+    for (const auto& l : lines) n += l == line ? 1 : 0;
+    return n;
+  };
+  CHECK(count("pm4 type3 INTERRUPT dwords=2") == 1);
+  CHECK(count("pm4 type0 dwords=7") == 3);  // VdSwap's fetch-constant write
+  CHECK(count("pm4 type3 LR_SWAP dwords=57") == 3);
+  CHECK(count("pm4 type3 EVENT_WRITE_SHD dwords=4") == 1);
+  size_t swaps = 0;
+  for (const auto& l : lines) swaps += l.starts_with("swap ") && l.ends_with(" 1280x720") ? 1 : 0;
+  CHECK(swaps == 3);
+
+  // Without --trace-gpu nothing is written, even with --gpu-trace-file.
+  const fs::path off = td.path / "off.log";
+  auto o = run_game(td.path, {"--headless", "--gpu-trace-file", off.string(), "--image", write_image(td.path, 0x82000400)});
+  CHECK(o.code == 0);
+  CHECK_FALSE(fs::exists(off));
 }
 
 // sub_82000180 calls FakeImplemented(41) -> 42 and FakeStub(7) -> 0 on thread 1, nothing else.

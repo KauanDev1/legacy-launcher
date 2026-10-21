@@ -112,7 +112,7 @@ TEST_CASE("memory imports are registered (whole-archive link of exports/memory.c
     INFO(n);
     CHECK(find_import(n).state == ImportState::Implemented);
   }
-  CHECK(find_import("MmMapIoSpace").state == ImportState::Missing);  // M3
+  CHECK(find_import("MmMapIoSpace").state == ImportState::Implemented);  // M3 (identity mapping)
 }
 
 TEST_CASE("NtAllocateVirtualMemory reserve+commit writes base and size back", "[unit]") {

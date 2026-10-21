@@ -36,5 +36,14 @@ PPCFuncMapping PPCFuncMappings[] = {
 	{ 0x820003D4, __imp__NtSetEvent },
 	{ 0x820003D8, __imp__ObReferenceObjectByHandle },
 	{ 0x820003DC, __imp__VdInitializeEngines },
+	{ 0x82000400, sub_82000400 },
+	{ 0x82000480, sub_82000480 },
+	{ 0x820004C0, __imp__MmAllocatePhysicalMemoryEx },
+	{ 0x820004C4, __imp__MmGetPhysicalAddress },
+	{ 0x820004C8, __imp__VdSetGraphicsInterruptCallback },
+	{ 0x820004CC, __imp__VdInitializeRingBuffer },
+	{ 0x820004D0, __imp__VdEnableRingBufferRPtrWriteBack },
+	{ 0x820004D4, __imp__VdSwap },
+	{ 0x820004D8, __imp__KeDelayExecutionThread },
 	{ 0, nullptr }
 };

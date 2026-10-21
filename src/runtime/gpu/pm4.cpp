@@ -202,6 +202,7 @@ Result<uint32_t> CommandProcessor::execute_buffer(uint32_t guest_addr, uint32_t 
         if (header == 0) break;  // an all-zero dword is a one-dword no-op (padding)
         const uint32_t count = ((header >> 16) & 0x3FFF) + 1;
         if (count > left) return incomplete(packet_pos, count, "type-0");
+        if (observer_) observer_(pm4::kType0, 0, count + 1);
         const uint32_t base = header & 0x7FFF;
         const bool one_reg = (header & 0x8000) != 0;
         for (uint32_t i = 0; i < count; ++i) {
@@ -212,18 +213,21 @@ Result<uint32_t> CommandProcessor::execute_buffer(uint32_t guest_addr, uint32_t 
       }
       case pm4::kType1: {
         if (left < 2) return incomplete(packet_pos, 2, "type-1");
+        if (observer_) observer_(pm4::kType1, 0, 3);
         LR_TRY(write_register(header & 0x7FF, read_be(payload)));
         LR_TRY(write_register((header >> 11) & 0x7FF, read_be(payload + 4)));
         pos += 2;
         break;
       }
       case pm4::kType2:
+        if (observer_) observer_(pm4::kType2, 0, 1);
         break;
       default: {
         const uint32_t count = ((header >> 16) & 0x3FFF) + 1;
         const uint32_t opcode = (header >> 8) & 0x7F;
         if (count > left) return incomplete(packet_pos, count, op_label(opcode));
         ++counts_[opcode];
+        if (observer_) observer_(pm4::kType3, opcode, count + 1);
         // Predicated packets run only for the selected bins.
         if ((header & 1) == 0 || (bin_select_ & bin_mask_) != 0) {
           Result<void> r = execute_type3(opcode, payload, count, depth);

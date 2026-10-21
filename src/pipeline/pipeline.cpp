@@ -85,10 +85,12 @@ Result<int> launch(const Options& options, std::span<const std::string> extra_ar
                    "check the permissions of the data root or choose another one with --root"};
   }
 
-  // --trace-file always: the game only writes it when --trace-imports is among the extra arguments (spec section 11).
+  // --trace-file and --gpu-trace-file always: the game only writes them when --trace-imports / --trace-gpu is among
+  // the extra arguments (spec section 11).
   std::vector<std::string> args = {game.string(), "--image", image.string(), "--data", p.game.string(),
                                    "--user", p.user.string(),
-                                   "--trace-file", game_trace_file(p.root).string()};
+                                   "--trace-file", game_trace_file(p.root).string(),
+                                   "--gpu-trace-file", gpu_trace_file(p.root).string()};
   args.insert(args.end(), extra_args.begin(), extra_args.end());
   std::vector<char*> argv;
   for (auto& a : args) argv.push_back(a.data());

@@ -165,9 +165,33 @@ Registradas pela Task 26 (`src/runtime/kernel/exports/xam.cpp`, `video.cpp`, `ne
   `VdGetCurrentDisplayInformation`, `VdGetCurrentDisplayGamma`, `VdQueryVideoFlags` (3), `XGetAVPack` (6),
   `XGetVideoCapabilities` (0), `VdIsHSIOTrainingSucceeded` (1), `NetDll_WSAStartup` (0), `NetDll_XNetStartup` (0),
   `NetDll_XNetGetEthernetLinkStatus` (0, sem link).
-- **missing de propósito**: os `Vd*` que criam ou usam a GPU (`VdInitializeEngines`,
+- **missing de propósito** (no M2): os `Vd*` que criam ou usam a GPU (`VdInitializeEngines`,
   `VdSetGraphicsInterruptCallback`, `VdInitializeRingBuffer`, `VdSwap`...): a primeira chamada a um deles é a linha de
-  chegada do M2.
+  chegada do M2. Implementados no M3 (seção seguinte).
+
+## Estado no M3: a GPU por trás dos Vd* (Task 10 do M3)
+
+`src/runtime/kernel/exports/video.cpp` e `memory.cpp`, sobre `gpu::GpuSystem` (detalhes em `docs/architecture.md`,
+seção "GPU emulada"). Semântica do `xboxkrnl_video.cc` / `graphics_system.cc` / `command_processor.cc` do Xenia, só
+como referência.
+
+- **implemented**: `VdInitializeEngines` (1), `VdSetGraphicsInterruptCallback` (callback(fonte, dado): fonte 0 =
+  vblank, 1 = pacote `INTERRUPT`; roda no worker do kernel), `VdInitializeRingBuffer` (anel de 2^(log2 + 3) bytes no
+  endereço físico; inicia a thread da GPU), `VdEnableRingBufferRPtrWriteBack` (RPTR em dwords, big-endian, no
+  endereço físico), `VdSwap` (10 argumentos, os dois últimos na pilha: buffer, fetch constant, 3 desconhecidos,
+  ponteiro do front buffer, formato, espaço de cor, largura, altura; preenche os 64 dwords reservados com a fetch
+  constant tipo 0 e um `LR_SWAP`), `MmMapIoSpace` (devolve o próprio endereço, como o Xenia).
+- **stub**: `VdGetSystemCommandBuffer` (`0xBEEF0000`/`0xBEEF0001`), `VdPersistDisplay` (1, e um bloco físico de 64
+  bytes no ponteiro opcional), `VdInitializeScalerCommandBuffer` (destino cheio de NOPs tipo 2, devolve a contagem),
+  e com 0: `VdShutdownEngines`, `VdSetSystemCommandBuffer`, `VdQuerySystemCommandBuffer`,
+  `VdSetSystemCommandBufferGpuIdentifierAddress`, `VdRetrainEDRAM`, `VdRetrainEDRAMWorker`,
+  `VdCallGraphicsNotificationRoutines`, `VdSetDisplayMode`, `VdSetDisplayModeOverride`, `VdEnableDisableClockGating`.
+- **variáveis**: `VdGlobalDevice` e `VdGlobalXamDevice` (0), `VdGpuClockInMHz` (500), `VdHSIOCalibrationLock` (seção
+  crítica, spin 10000), `KeCertMonitorData` (ponteiro nulo, o padrão do Xenia).
+- Dados do jogo real (experimento de 2026-10-18, spec seção 2): `VdInitializeRingBuffer(0x1FFF4000, 12)`, write-back
+  em `0x1FFFD03C`, `VdSetGraphicsInterruptCallback(0x824371B0, 0x40055980)`. Ainda não confirmados com esta
+  implementação: isso é a Task 12.
+- `KeLockL2`/`KeUnlockL2` (categoria 16, M3) continuam missing até o jogo chamá-los.
 
 ## Categorias (listas completas)
 

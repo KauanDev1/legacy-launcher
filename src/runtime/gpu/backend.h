@@ -36,6 +36,8 @@ class Backend {
   virtual void resolve(const RegisterFile& regs) = 0;
   virtual void swap(uint32_t frontbuffer_phys, uint32_t width, uint32_t height) = 0;
   virtual void wait_idle() = 0;
+  // Host textures created so far, for the --trace-gpu per-second counters. Backends without textures report 0.
+  virtual uint64_t textures_created() const { return 0; }
 };
 
 }  // namespace lr::gpu

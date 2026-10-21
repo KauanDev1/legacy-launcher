@@ -16,6 +16,9 @@ enum class ExitTextLanguage { English, Portuguese };
 // --trace-imports.
 std::filesystem::path game_trace_file(const std::filesystem::path& root);
 
+// <root>/work/logs/gpu-trace.log: launch always passes it as --gpu-trace-file; the game writes it only with --trace-gpu.
+std::filesystem::path gpu_trace_file(const std::filesystem::path& root);
+
 // One message for `code`; empty for 0 (normal exit). The import trace hint (rerun with `run -- --trace-imports`,
 // read trace_file) accompanies the codes where the calls before the stop help: 3, 4, 5 and 6.
 std::string describe_game_exit(int code, const std::filesystem::path& trace_file, ExitTextLanguage language);

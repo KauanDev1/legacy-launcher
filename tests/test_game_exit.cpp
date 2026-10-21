@@ -16,6 +16,7 @@ bool has(const std::string& s, const std::string& part) { return s.find(part) !=
 
 TEST_CASE("game_trace_file is <root>/work/logs/game-trace.log", "[unit]") {
   CHECK(lr::pipeline::game_trace_file("/r") == fs::path("/r/work/logs/game-trace.log"));
+  CHECK(lr::pipeline::gpu_trace_file("/r") == fs::path("/r/work/logs/gpu-trace.log"));
 }
 
 TEST_CASE("describe_game_exit explains every game exit code", "[unit]") {

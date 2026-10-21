@@ -2,6 +2,7 @@
 #pragma once
 
 #include <filesystem>
+#include <memory>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -25,6 +26,7 @@
 
 namespace lr::gpu {
 struct MemoryAccess;  // runtime/gpu/pm4.h; forward-declared so the staged game headers stay small
+class GpuSystem;     // runtime/gpu/gpu_system.h; same reason
 }
 
 namespace lr::kernel {
@@ -40,6 +42,12 @@ struct KernelConfig {
   // Deadlock detector threshold in seconds (runtime/kernel/deadlock.h); 0 = no detector (the default; main.cpp
   // sets 10 or LR_DEADLOCK_SECONDS).
   uint32_t deadlock_seconds = 0;
+  // --trace-gpu: init_kernel enables the GPU trace (GpuSystem::enable_trace) to gpu_trace_file, or stderr without
+  // one. gpu_trace_file alone enables nothing.
+  bool trace_gpu = false;
+  std::optional<std::filesystem::path> gpu_trace_file;
+  // Vblank pacing: true (headless runs) = GpuSystem PacedBySwap, false (window) = Realtime60Hz.
+  bool vblank_paced_by_swap = false;
 };
 
 class Kernel {
@@ -62,6 +70,10 @@ class Kernel {
   // How the GPU command processor reaches guest memory: base, physical -> guest translation through physical(),
   // and the guest space size. Valid while this Kernel lives.
   gpu::MemoryAccess gpu_memory_access();
+  // The emulated GPU behind the Vd* imports (runtime/gpu/gpu_system.h): created with the kernel, started by
+  // VdInitializeRingBuffer / VdSetGraphicsInterruptCallback, stopped first by ~Kernel. Interrupts run on the kernel
+  // worker (Timers::queue_call + call_guest), its fatal errors are guest_fatal (exit 5).
+  gpu::GpuSystem& gpu() { return *gpu_; }
   // Guest thread stacks [kStacksBase, kStacksEnd), 4 KiB pages (runtime/kernel/threads.h).
   runtime::PageHeap& stacks() { return stacks_; }
   // The virtual heap containing addr (the stacks heap included), or nullptr.
@@ -147,6 +159,8 @@ class Kernel {
   Vfs vfs_;
   // Last: its watcher reads the members above; ~Kernel stops it first anyway.
   DeadlockDetector deadlock_;
+  // Stopped first by ~Kernel (its interrupts go to timers_).
+  std::unique_ptr<gpu::GpuSystem> gpu_;
 };
 
 // Creates the process-wide Kernel over `mem`, which must outlive all guest code and span the whole 4 GiB guest

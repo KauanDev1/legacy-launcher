@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -87,12 +88,16 @@ class Timers {
   // routine(dpc, context, arg1, arg2). False when it is already queued.
   bool queue_dpc(uint32_t dpc, uint32_t arg1, uint32_t arg2);
 
+  // Queues host code for the worker, which runs it at DISPATCH_LEVEL in FIFO order with the DPCs (the GPU's
+  // graphics interrupts: `fn` calls the guest callback through call_guest). Dropped once shutdown() started.
+  void queue_call(std::function<void()> fn);
+
   // The game imports KeTimeStampBundle: writes the block at `addr` now and every 1 ms from the worker.
   void enable_time_stamp_bundle(uint32_t addr);
   // Fills an X_TIME_STAMP_BUNDLE at `host` with the current times.
   void fill_time_stamp_bundle(uint8_t* host) const;
 
-  // An armed timer or a queued/running DPC (for the deadlock detector).
+  // An armed timer, a queued/running DPC or a queued/running call (for the deadlock detector).
   bool has_pending_work() const;
 
   // Stops and joins the worker (Kernel's destructor, before the dispatcher and objects go away). Idempotent.
@@ -125,6 +130,7 @@ class Timers {
   std::map<uint32_t, Armed> timers_;
   std::deque<uint32_t> dpcs_;
   std::set<uint32_t> queued_dpcs_;
+  std::deque<std::function<void()>> calls_;
   bool dpc_running_ = false;
   uint32_t bundle_ = 0;
   bool stop_ = false;

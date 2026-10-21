@@ -89,7 +89,8 @@ de memória também o consultam, então `NtQueryVirtualMemory`/`MmQueryAddressPr
 `NtAllocateVirtualMemory`/`NtFreeVirtualMemory`/`NtProtectVirtualMemory`/`NtQueryVirtualMemory` (ponteiros de
 base e tamanho de entrada e saída em big-endian), `MmAllocatePhysicalMemoryEx` e afins, e o pool
 (`ExAllocatePool*`, `XamAlloc*`, `ExFreePool`, `XamFree`), que é feito de alocações inteiras de páginas de 4 KiB,
-confirmadas leitura/escrita e zeradas. `MmMapIoSpace` fica faltando até o M3.
+confirmadas leitura/escrita e zeradas. `MmMapIoSpace` (M3) devolve o próprio endereço recebido, como o Xenia: a janela
+MMIO da GPU já está no seu endereço do convidado.
 
 O gancho de confirmação dos heaps virtuais zera as páginas recém-confirmadas (salvo `MEM_NOZERO`) com
 `GuestMemory::zero`, que devolve páginas inteiras ao host com `madvise(MADV_DONTNEED)` em vez de escrevê-las.
@@ -490,13 +491,70 @@ estrutura, são registradas como `stub` (`LR_KERNEL_STUB` ou `LR_KERNEL_STUB_FN`
 - **Vídeo** (só consultas): 1280x720, widescreen, progressivo, 60 Hz, NTSC (`X_VIDEO_MODE` de 0x30 bytes, com os
   valores desconhecidos `0x4A`/`0x01` do Xenia); `VdQueryVideoFlags` 3; `VdGetCurrentDisplayInformation` com
   escalonador 1:1 e overscan 320/180; gama tipo 2, potência 2.22222233; `XGetAVPack` 6 (o valor do Xenia; os jogos
-  tratam qualquer valor fora de 3/4/6/8 como PAL); `VdIsHSIOTrainingSucceeded` 1. Os `Vd*` que criam ou usam a GPU
-  continuam faltando: são a linha de chegada do M2.
+  tratam qualquer valor fora de 3/4/6/8 como PAL); `VdIsHSIOTrainingSucceeded` 1. Os `Vd*` que criam ou usam a GPU são do M3 (seção "GPU emulada" abaixo).
 - **Rede, UI, entrada, áudio**: os `NetDll_*` recebem o chamador em r3; `NetDll_WSAStartup` preenche o `WSADATA`
   (versão pedida, 100 sockets, datagramas de 1024 bytes) e devolve 0, `NetDll_XNetStartup` 0,
   `NetDll_XNetGetEthernetLinkStatus` 0 (sem link). `XamIsUIActive` 0, `XNotifyPositionUI` no-op,
   `XamInputGetCapabilities` `ERROR_DEVICE_NOT_CONNECTED`, `XAudioGetSpeakerConfig` estéreo (`0x00010001`) e
   `XamShowDirtyDiscErrorUI` encerra com `guest_fatal("dirty disc")` (saída 5).
+
+## GPU emulada: ring buffer, write-back e interrupções (M3)
+
+`gpu::GpuSystem` (`src/runtime/gpu/gpu_system.{h,cpp}`) é a GPU por trás das importações `Vd*`
+(`src/runtime/kernel/exports/video.cpp`). O `Kernel` a cria no construtor (`Kernel::gpu()`), ligada por
+`gpu::GpuHooks`: as interrupções vão para o worker do kernel (`Timers::queue_call`, que chama o callback do jogo com
+`call_guest`), a memória de rascunho vem do pool do kernel e os erros fatais viram `guest_fatal` (saída 5). O
+`~Kernel` (e o `reset_kernel_for_tests`) para a GPU antes do worker. O `kernel.h` só declara `gpu::GpuSystem`
+adiantado, para os cabeçalhos do template do jogo continuarem pequenos.
+
+- **Ring buffer**: `VdInitializeRingBuffer(físico, size_log2)` dá um anel de 2^(size_log2 + 3) bytes (o jogo real
+  usa `0x1FFF4000`, log2 12 = 32 KiB) e inicia as threads. Uma thread do host ("GPU") lê `CP_RB_WPTR` na janela
+  MMIO (índice em dwords, gravado pelo jogo como memória comum), executa `[RPTR, WPTR)` no `CommandProcessor` e, a
+  cada passo, grava o RPTR (dwords, big-endian) no endereço de write-back (`VdEnableRingBufferRPtrWriteBack`,
+  físico; o jogo real usa `0x1FFFD03C`) e em `CP_RB_RPTR` (`0x01C4`) na janela MMIO. Ociosa, a thread gira 200 vezes
+  com `yield` e depois espera 0,5 ms por vez.
+- **Volta do anel**: o `execute()` recebe um trecho contíguo: `[RPTR, WPTR)` ou, se o anel deu a volta,
+  `[RPTR, fim)`. Um pacote que atravessa o fim é linearizado: o final `[RPTR, fim)` e o começo `[0, WPTR)` são
+  copiados, em ordem, para uma área de rascunho do tamanho do anel **dentro da memória do convidado** (alocada no
+  `VdInitializeRingBuffer`) e executados ali. Assim, endereços do convidado tirados do pacote (o microcódigo do
+  `IM_LOAD_IMMEDIATE`) continuam válidos durante a chamada; os pacotes seguintes copiados também rodam da cópia, e
+  o RPTR avança por tudo o que ela consumiu.
+- **Anel malformado**: um passo que não consome nada embora todos os dwords até o WPTR tenham sido entregues (sem
+  corte pela volta, ou na cópia linear) nunca vai progredir: `guest_fatal` com RPTR e WPTR na mensagem, nunca uma
+  espera silenciosa. Também são fatais um erro do `execute()` (opcode desconhecido, pacote malformado) e um WPTR
+  fora do anel. `stop()` chama `request_stop()`, então um `WAIT_REG_MEM` girando volta com `Cancelled`.
+- **Interrupções**: `VdSetGraphicsInterruptCallback(fn, dado)` registra `fn(fonte, dado)`; fonte 0 = vblank,
+  1 = interrupção do processador de comandos (pacote `INTERRUPT`, uma por bit da máscara de CPUs), a convenção do
+  Xenia (`graphics_system.cc`/`command_processor.cc`, conferida). O Xenia também escolhe a CPU que roda o callback
+  (CPU 2 no vblank); não modelamos CPUs e descartamos o índice (lacuna conhecida). Uma interrupção por vez no
+  worker, na ordem em que foram geradas; sem callback, são descartadas (como no Xenia).
+- **Ritmo do vblank** (spec, seção 11): com janela, `Realtime60Hz` (um vblank a cada 1/60 s do relógio; um vblank
+  ainda não entregue absorve o seguinte). Headless (`--headless`, `KernelConfig::vblank_paced_by_swap`),
+  `PacedBySwap`: um vblank por swap processado, nenhum descartado, mais um vblank de reserva quando passam 16 ms do
+  relógio desde o último vblank **e** desde a última chamada ao backend. Um renderizador lento recebe então cerca de
+  um vblank por quadro, e um jogo que espera vblanks antes do primeiro swap continua recebendo-os.
+- **VdSwap**: argumentos como no Xenia: `(buffer*, fetch_constant*, unk2, unk3, unk4, frontbuffer*, formato*,
+  espaço_de_cor*, largura*, altura*)`, os dois últimos na pilha do convidado. O D3D reserva 64 dwords no anel em
+  `buffer`; preenchemos com um pacote tipo 0 de 7 dwords (os 6 dwords da fetch constant em
+  `SHADER_CONSTANT_FETCH_00_0`, com o endereço base trocado pela página física do front buffer) e um `LR_SWAP`
+  tipo 3 de 57 dwords que cobre o resto (`kSwapMagic`, front buffer físico, largura, altura, zeros). Ponteiro
+  inválido ou front buffer fora das vistas físicas: a área fica intacta (o Xenia também só registra e volta).
+- **Demais importações e variáveis** (valores do Xenia e do experimento da seção 2 da spec):
+  `VdInitializeEngines` 1, `VdGetSystemCommandBuffer` escreve `0xBEEF0000`/`0xBEEF0001`, `VdPersistDisplay` 1
+  (e um bloco físico de 64 bytes no ponteiro opcional), `VdInitializeScalerCommandBuffer` enche o destino de NOPs
+  tipo 2; os outros `Vd*` (desligar, buffer de comandos do sistema, EDRAM, modo de vídeo, clock gating,
+  notificações) são stubs que devolvem 0. Variáveis: `VdGlobalDevice`/`VdGlobalXamDevice` 0, `VdGpuClockInMHz`
+  500, `VdHSIOCalibrationLock` como seção crítica (spin 10000), `KeCertMonitorData` ponteiro nulo.
+- **Impasse**: chamadas na fila do worker (as interrupções) contam como trabalho pendente
+  (`Timers::has_pending_work`).
+
+**Trace da GPU** (`--trace-gpu`, repassado por `legacyrecomp run -- --trace-gpu`): uma linha por pacote PM4
+(`pm4 type3 DRAW_INDX_2 dwords=3`, `pm4 type0 dwords=7`), por draw (`draw prim=4 count=3`), por resolve e por swap
+(`swap 1 fb=0x... 1280x720`), e uma vez por segundo `stats draws=N resolves=N textures=N swaps=N` (contagens daquele
+segundo). Destino: `--gpu-trace-file <caminho>` (sem ele, stderr); o `legacyrecomp run` sempre passa
+`<raiz>/work/logs/gpu-trace.log`, que sozinho não faz nada. Escrito pela thread da GPU e descarregado a cada passo,
+antes do write-back do RPTR (um jogo que viu o RPTR andar também vê as linhas no disco); limite de 64 MiB, com uma
+linha final `gpu trace capped at 64 MiB`.
 
 ## Diagnóstico
 

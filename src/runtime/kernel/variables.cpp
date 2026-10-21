@@ -93,6 +93,29 @@ const Registrar r_krnl_version("XboxKrnlVersion", 8, [](uint8_t* p, uint32_t) {
 // KeDebugMonitorData: a null pointer (Xenia's default, debug monitor off).
 const Registrar r_debug_monitor("KeDebugMonitorData", 4, nullptr);
 
+// KeCertMonitorData: a null pointer (Xenia's default; its comment: always zero and ignored). The real game needs
+// the import resolved (spec section 2).
+const Registrar r_cert_monitor("KeCertMonitorData", 4, nullptr);
+
+// --- GPU variables (spec section 5.1), per Xenia's xboxkrnl_video.cc. ---
+// VdGlobalDevice / VdGlobalXamDevice: 4-byte cells holding 0 (no D3D device created by the system or by XAM).
+const Registrar r_global_device("VdGlobalDevice", 4, nullptr);
+const Registrar r_global_xam_device("VdGlobalXamDevice", 4, nullptr);
+// VdGpuClockInMHz: 500.
+const Registrar r_gpu_clock("VdGpuClockInMHz", 4, [](uint8_t* p, uint32_t) { put_be32(p, 500); });
+// VdHSIOCalibrationLock: an X_RTL_CRITICAL_SECTION initialised as RtlInitializeCriticalSectionAndSpinCount(10000)
+// would (exports/critsec.cpp layout: synchronization event header, spin count / 256 rounded up in header.absolute,
+// self-linked wait list, lock_count -1).
+const Registrar r_hsio_lock("VdHSIOCalibrationLock", sizeof(X_RTL_CRITICAL_SECTION), [](uint8_t* p, uint32_t addr) {
+  auto* cs = reinterpret_cast<X_RTL_CRITICAL_SECTION*>(p);
+  cs->header.type = kSynchronizationEvent;
+  cs->header.absolute = (10000 + 255) / 256;
+  cs->header.size = sizeof(X_RTL_CRITICAL_SECTION) / 4;
+  cs->header.wait_list_flink = addr + 8;
+  cs->header.wait_list_blink = addr + 8;
+  cs->lock_count = -1;
+});
+
 // Object type descriptors (X_OBJECT_TYPE). Only their addresses matter for now: ObReferenceObjectByHandle (Task 15)
 // compares the type pointer it is given against them. The pool tags are our choice (informational, ASCII big-endian).
 template <uint32_t Tag>

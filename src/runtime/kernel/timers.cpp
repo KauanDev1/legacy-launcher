@@ -194,6 +194,14 @@ bool Timers::queue_dpc(uint32_t dpc, uint32_t arg1, uint32_t arg2) {
   return true;
 }
 
+void Timers::queue_call(std::function<void()> fn) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (stop_) return;
+  calls_.push_back(std::move(fn));
+  ensure_worker_locked();
+  cv_.notify_all();
+}
+
 void Timers::enable_time_stamp_bundle(uint32_t addr) {
   std::lock_guard<std::mutex> lock(mutex_);
   fill_time_stamp_bundle(kernel_.memory().base() + addr);
@@ -212,7 +220,7 @@ void Timers::fill_time_stamp_bundle(uint8_t* host) const {
 
 bool Timers::has_pending_work() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return !timers_.empty() || !dpcs_.empty() || dpc_running_;
+  return !timers_.empty() || !dpcs_.empty() || !calls_.empty() || dpc_running_;
 }
 
 void Timers::shutdown() {
@@ -295,6 +303,16 @@ void Timers::loop() {
       dpc_running_ = true;
       lock.unlock();
       (void)call_guest(routine, args);
+      lock.lock();
+      dpc_running_ = false;
+      continue;
+    }
+    if (!calls_.empty()) {
+      std::function<void()> fn = std::move(calls_.front());
+      calls_.pop_front();
+      dpc_running_ = true;  // "work running" for has_pending_work
+      lock.unlock();
+      fn();
       lock.lock();
       dpc_running_ = false;
       continue;

@@ -6,13 +6,16 @@
 
 #include <atomic>
 #include <cstdio>
+#include <functional>
 #include <optional>
 #include <string>
 
 #include "runtime/guest_thread.h"
+#include "runtime/gpu/gpu_system.h"
 #include "runtime/gpu/mmio.h"
 #include "runtime/gpu/pm4.h"
 #include "runtime/kernel/guest_structs.h"
+#include "runtime/kernel/glue.h"
 #include "runtime/kernel/registry.h"
 #include "runtime/kernel/trace.h"
 #include "runtime/memory_map.h"
@@ -35,9 +38,22 @@ Kernel::Kernel(runtime::GuestMemory& mem, KernelConfig cfg)
       dispatcher_(mem.base()),
       deadlock_(*this) {
   vfs_.mount_defaults(cfg_.game_dir, cfg_.user_dir);
+  gpu::GpuHooks hooks;
+  hooks.queue_interrupt = [this](uint32_t callback, uint32_t source, uint32_t user_data, std::function<void()> done) {
+    timers_.queue_call([callback, source, user_data, done = std::move(done)] {
+      const uint64_t args[] = {source, user_data};
+      (void)call_guest(callback, args);
+      done();
+    });
+  };
+  hooks.alloc_guest = [this](uint32_t bytes) { return pool_alloc(bytes, 0x47505520 /* "GPU " */); };
+  hooks.fatal = [](const std::string& what) { guest_fatal(what); };
+  gpu_ = std::make_unique<gpu::GpuSystem>(gpu_memory_access(), std::move(hooks));
+  gpu_->set_vblank_mode(cfg_.vblank_paced_by_swap ? gpu::VblankMode::PacedBySwap : gpu::VblankMode::Realtime60Hz);
 }
 
 Kernel::~Kernel() {
+  gpu_->stop();
   deadlock_.stop();
   timers_.shutdown();
 }
@@ -111,6 +127,8 @@ Result<void> init_kernel(runtime::GuestMemory& mem, KernelConfig cfg) {
   if (g_kernel.load(std::memory_order_acquire) != nullptr)
     return Error{ErrorCode::Internal, "init_kernel called twice", "the kernel is initialized once per process"};
   if (cfg.trace_imports) LR_TRY(enable_import_trace(cfg.trace_file));
+  const bool trace_gpu = cfg.trace_gpu;
+  const std::optional<std::filesystem::path> gpu_trace_file = cfg.gpu_trace_file;
   auto* k = new Kernel(mem, std::move(cfg));
   Kernel* expected = nullptr;
   if (!g_kernel.compare_exchange_strong(expected, k, std::memory_order_acq_rel)) {
@@ -121,6 +139,13 @@ Result<void> init_kernel(runtime::GuestMemory& mem, KernelConfig cfg) {
     g_kernel.store(nullptr, std::memory_order_release);
     delete k;
     return r;
+  }
+  if (trace_gpu) {
+    if (auto r = k->gpu().enable_trace(gpu_trace_file); !r) {
+      g_kernel.store(nullptr, std::memory_order_release);
+      delete k;
+      return r;
+    }
   }
   install_thread_hooks(*k);
   // Spec section 10: the TSC rate KeQueryPerformanceFrequency reports is measured at init (once per process).
@@ -138,7 +163,10 @@ Kernel& kernel() {
 void reset_kernel_for_tests() {
   wait_for_guest_threads_for_tests();
   // The worker may still be running guest DPC code, which needs kernel(): stop it before the instance goes away.
-  if (Kernel* k = g_kernel.load(std::memory_order_acquire)) k->timers().shutdown();
+  if (Kernel* k = g_kernel.load(std::memory_order_acquire)) {
+    k->gpu().stop();  // no new interrupts for the worker
+    k->timers().shutdown();
+  }
   delete g_kernel.exchange(nullptr, std::memory_order_acq_rel);
   disable_import_trace();
 }
