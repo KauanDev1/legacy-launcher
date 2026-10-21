@@ -36,8 +36,14 @@ bool import_trace_enabled();
 void trace_import_return(const char* name, const GuestCall& c);
 void trace_import_missing(const char* name, const GuestCall& c);
 
-// Writes the buffered lines. Not async-signal-safe.
+// Writes the buffered lines and first runs the flush hook (set_trace_flush_hook), even when the import trace is
+// off. Not async-signal-safe.
 void flush_import_trace();
+
+// Another trace to flush on every exit path that calls flush_import_trace (the GPU trace, --trace-gpu). nullptr
+// clears it. Not run by flush_import_trace_from_signal: the hook is not async-signal-safe, so a fault (exit 4)
+// loses that trace's unflushed lines.
+void set_trace_flush_hook(void (*hook)());
 // Async-signal-safe variant for the fault handler: skips the flush if the buffer is busy.
 void flush_import_trace_from_signal();
 

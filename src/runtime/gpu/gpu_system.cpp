@@ -287,11 +287,18 @@ void GpuSystem::stop() {
   if (trace_) trace_->flush();
 }
 
+void GpuSystem::flush_trace() {
+  if (trace_) trace_->flush();
+}
+
 uint64_t GpuSystem::interrupts_delivered(uint32_t source) const {
   return source < 2 ? delivered_[source].load(std::memory_order_acquire) : 0;
 }
 
 uint32_t GpuSystem::read_wptr() const {
+  // Safe without a fence on the guest side: the recompiled code stores the packets and then WPTR with plain stores,
+  // which x86 (TSO) keeps in program order as long as the compiler does not reorder them; this acquire load then
+  // sees every packet dword written before the WPTR value it reads.
   const uint32_t addr = mmio_register_address(CP_RB_WPTR);
   if (mem_.base == nullptr || uint64_t{addr} + 4 > mem_.size) return 0;
   const uint32_t raw =
@@ -299,16 +306,11 @@ uint32_t GpuSystem::read_wptr() const {
   return __builtin_bswap32(raw);
 }
 
-void GpuSystem::write_back(uint32_t rptr) {
+void GpuSystem::write_back(uint32_t rptr, uint32_t phys) {
   const uint32_t be = __builtin_bswap32(rptr);
-  const uint32_t mmio = mmio_register_address(kRegCpRbRptr);
+  const uint32_t mmio = mmio_register_address(CP_RB_RPTR);
   if (mem_.base != nullptr && uint64_t{mmio} + 4 <= mem_.size) {
     std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t*>(mem_.base + mmio)).store(be, std::memory_order_release);
-  }
-  uint32_t phys;
-  {
-    std::lock_guard<std::mutex> lock(ring_mutex_);
-    phys = writeback_phys_;
   }
   if (phys == 0) return;
   std::optional<uint32_t> guest = mem_.to_guest ? mem_.to_guest(phys & pm4::kPhysicalMask) : std::nullopt;
@@ -319,7 +321,8 @@ void GpuSystem::write_back(uint32_t rptr) {
   std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t*>(mem_.base + *guest)).store(be, std::memory_order_release);
 }
 
-bool GpuSystem::step(uint32_t ring_guest, uint32_t ring_dwords, uint32_t scratch, uint32_t wptr) {
+bool GpuSystem::step(uint32_t generation, uint32_t ring_guest, uint32_t ring_dwords, uint32_t scratch,
+                     uint32_t wptr) {
   const uint32_t rptr = rptr_.load(std::memory_order_acquire);
   const bool wraps = wptr < rptr;
   const uint32_t span = wraps ? ring_dwords - rptr + wptr : wptr - rptr;
@@ -354,23 +357,30 @@ bool GpuSystem::step(uint32_t ring_guest, uint32_t ring_dwords, uint32_t scratch
     }
   }
   const uint32_t next = (rptr + *consumed) % ring_dwords;
-  rptr_.store(next, std::memory_order_release);
+  uint32_t writeback_phys;
+  {
+    // VdInitializeRingBuffer ran meanwhile: this step belonged to the old ring, so its RPTR is dropped (the new
+    // ring starts at the RPTR 0 initialize_ring_buffer stored).
+    std::lock_guard<std::mutex> lock(ring_mutex_);
+    if (ring_generation_ != generation) return true;
+    rptr_.store(next, std::memory_order_release);
+    writeback_phys = writeback_phys_;
+  }
   if (trace_) trace_->flush();  // before the guest can see RPTR move
-  write_back(next);
+  write_back(next, writeback_phys);
   return true;
 }
 
 void GpuSystem::gpu_main() {
-  uint32_t generation = 0;
   uint32_t spins = 0;
   while (!stop_.load(std::memory_order_acquire)) {
     if (trace_) {
       trace_->maybe_stats(Clock::now(), proxy_->draws, proxy_->resolves, proxy_->textures_created(), swaps());
     }
-    uint32_t ring_guest, ring_dwords, scratch;
+    uint32_t generation, ring_guest, ring_dwords, scratch;
     {
       std::lock_guard<std::mutex> lock(ring_mutex_);
-      if (ring_generation_ != generation) generation = ring_generation_;  // rptr_ was reset to 0 with it
+      generation = ring_generation_;  // step() drops its result if the ring is re-initialised meanwhile
       ring_guest = ring_guest_;
       ring_dwords = ring_dwords_;
       scratch = scratch_;
@@ -384,7 +394,7 @@ void GpuSystem::gpu_main() {
         return;
       }
       if (wptr != rptr_.load(std::memory_order_acquire)) {
-        if (!step(ring_guest, ring_dwords, scratch, wptr)) return;
+        if (!step(generation, ring_guest, ring_dwords, scratch, wptr)) return;
         spins = 0;
         continue;
       }
@@ -447,7 +457,7 @@ void GpuSystem::vblank_main() {
     }
     last = now;
     lock.unlock();
-    raise_interrupt(kInterruptSourceVblank, false);
+    raise_interrupt(kInterruptSourceVblank, true);
     lock.lock();
   }
 }

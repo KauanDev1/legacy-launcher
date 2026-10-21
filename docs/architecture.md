@@ -531,14 +531,17 @@ adiantado, para os cabeçalhos do template do jogo continuarem pequenos.
 - **Ritmo do vblank** (spec, seção 11): com janela, `Realtime60Hz` (um vblank a cada 1/60 s do relógio; um vblank
   ainda não entregue absorve o seguinte). Headless (`--headless`, `KernelConfig::vblank_paced_by_swap`),
   `PacedBySwap`: um vblank por swap processado, nenhum descartado, mais um vblank de reserva quando passam 16 ms do
-  relógio desde o último vblank **e** desde a última chamada ao backend. Um renderizador lento recebe então cerca de
+  relógio desde o último vblank **e** desde a última chamada ao backend (esse vblank de reserva é absorvido por
+  outro ainda não entregue, como no modo de 60 Hz, para a fila não crescer sem limite). Um renderizador lento recebe então cerca de
   um vblank por quadro, e um jogo que espera vblanks antes do primeiro swap continua recebendo-os.
 - **VdSwap**: argumentos como no Xenia: `(buffer*, fetch_constant*, unk2, unk3, unk4, frontbuffer*, formato*,
   espaço_de_cor*, largura*, altura*)`, os dois últimos na pilha do convidado. O D3D reserva 64 dwords no anel em
-  `buffer`; preenchemos com um pacote tipo 0 de 7 dwords (os 6 dwords da fetch constant em
+  `buffer`; primeiro os enchemos de NOPs tipo 2 (`0x80000000`), depois escrevemos um pacote tipo 0 de 7 dwords (os 6 dwords da fetch constant em
   `SHADER_CONSTANT_FETCH_00_0`, com o endereço base trocado pela página física do front buffer) e um `LR_SWAP`
-  tipo 3 de 57 dwords que cobre o resto (`kSwapMagic`, front buffer físico, largura, altura, zeros). Ponteiro
-  inválido ou front buffer fora das vistas físicas: a área fica intacta (o Xenia também só registra e volta).
+  tipo 3 de 57 dwords que cobre o resto (`kSwapMagic`, front buffer físico, largura, altura e os NOPs como carga
+  ignorada). Ponteiro inválido ou front buffer fora das vistas físicas: `guest_fatal` (saída 5) com o valor (o Xenia
+  só registra, mas o quadro se perderia em silêncio). Endereço base da fetch constant diferente de `*frontbuffer`:
+  aviso em stderr, como o assert do Xenia.
 - **Demais importações e variáveis** (valores do Xenia e do experimento da seção 2 da spec):
   `VdInitializeEngines` 1, `VdGetSystemCommandBuffer` escreve `0xBEEF0000`/`0xBEEF0001`, `VdPersistDisplay` 1
   (e um bloco físico de 64 bytes no ponteiro opcional), `VdInitializeScalerCommandBuffer` enche o destino de NOPs
@@ -553,7 +556,9 @@ adiantado, para os cabeçalhos do template do jogo continuarem pequenos.
 (`swap 1 fb=0x... 1280x720`), e uma vez por segundo `stats draws=N resolves=N textures=N swaps=N` (contagens daquele
 segundo). Destino: `--gpu-trace-file <caminho>` (sem ele, stderr); o `legacyrecomp run` sempre passa
 `<raiz>/work/logs/gpu-trace.log`, que sozinho não faz nada. Escrito pela thread da GPU e descarregado a cada passo,
-antes do write-back do RPTR (um jogo que viu o RPTR andar também vê as linhas no disco); limite de 64 MiB, com uma
+antes do write-back do RPTR (um jogo que viu o RPTR andar também vê as linhas no disco) e em todo caminho de saída
+que descarrega o trace de importações (`set_trace_flush_hook`: saída normal, 3, 5 e 6; não no handler de falhas,
+saída 4, porque não é seguro em sinal); limite de 64 MiB, com uma
 linha final `gpu trace capped at 64 MiB`.
 
 ## Diagnóstico

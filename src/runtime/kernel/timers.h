@@ -90,6 +90,8 @@ class Timers {
 
   // Queues host code for the worker, which runs it at DISPATCH_LEVEL in FIFO order with the DPCs (the GPU's
   // graphics interrupts: `fn` calls the guest callback through call_guest). Dropped once shutdown() started.
+  // Callable from any thread, host threads included (the GPU and vblank threads): starting the worker
+  // (create_internal_guest_thread) only uses kernel state behind its own locks, never the caller's guest thread.
   void queue_call(std::function<void()> fn);
 
   // The game imports KeTimeStampBundle: writes the block at `addr` now and every 1 ms from the worker.

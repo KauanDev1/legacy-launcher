@@ -170,7 +170,7 @@ TEST_CASE("ring buffer commands execute and RPTR is written back", "[unit][gpu]"
   REQUIRE(wait_until([&] { return rd(f, wb.guest) == ring.wptr; }));
   CHECK(rd(f, fence.guest) == 0x11223344);
   CHECK(kernel().gpu().read_pointer() == ring.wptr);
-  CHECK(rd(f, lr::gpu::mmio_register_address(lr::gpu::kRegCpRbRptr)) == ring.wptr);
+  CHECK(rd(f, lr::gpu::mmio_register_address(lr::gpu::CP_RB_RPTR)) == ring.wptr);
 
   SECTION("a packet straddling the ring end runs from a linear copy with valid guest addresses") {
     // Type-2 NOPs up to 3 dwords before the end, then IM_LOAD_IMMEDIATE (header + 2 + 4 microcode dwords) and a
@@ -324,7 +324,7 @@ TEST_CASE("paced vblank follows swaps", "[unit][gpu]") {
     const Phys fb = phys_alloc(0x10000);
     const uint32_t args = f.alloc(0x40);
     const uint32_t fetch = args, fb_ptr = args + 0x20, width = args + 0x24, height = args + 0x28;
-    wr(f, fetch + 4, 0x00000ABC);  // dword 1: low 12 bits kept, base address replaced
+    wr(f, fetch + 4, (fb.guest & ~0xFFFu) | 0xABC);  // dword 1: low 12 bits kept, base address -> physical
     wr(f, fb_ptr, fb.guest);
     wr(f, width, 1280);
     wr(f, height, 720);
@@ -342,6 +342,7 @@ TEST_CASE("paced vblank follows swaps", "[unit][gpu]") {
         CHECK(rd(f, area + 36) == fb.phys);
         CHECK(rd(f, area + 40) == 1280);
         CHECK(rd(f, area + 44) == 720);
+        for (uint32_t i = 12; i < 64; ++i) CHECK(rd(f, area + 4 * i) == 0x80000000);  // NOP fill as payload
       }
       for (int i = 0; i < 64; ++i) ring.put(rd(f, area + 4 * static_cast<uint32_t>(i)));
       ring.submit();
@@ -377,4 +378,35 @@ TEST_CASE("Vd* query imports and GPU variables", "[unit][gpu]") {
   for (const char* v : {"VdGlobalDevice", "VdGlobalXamDevice", "VdGpuClockInMHz", "VdHSIOCalibrationLock",
                         "KeCertMonitorData"})
     CHECK(variable_state(v) == ImportState::Implemented);
+}
+
+// A front buffer outside the physical views has no physical address for the GPU: guest fatal (exit 5) naming it.
+TEST_CASE("VdSwap with a non-physical front buffer is guest fatal", "[unit][gpu]") {
+  int fds[2];
+  REQUIRE(::pipe(fds) == 0);
+  const pid_t pid = ::fork();
+  REQUIRE(pid >= 0);
+  if (pid == 0) {
+    ::dup2(fds[1], 2);
+    ::close(fds[0]);
+    {
+      KernelFixture f;
+      const uint32_t area = f.alloc(64 * 4), args = f.alloc(0x40);
+      wr(f, args + 0x20, 0x40000000);  // *frontbuffer: a virtual heap address
+      wr(f, args + 0x24, 1280);
+      wr(f, args + 0x28, 720);
+      f.call("VdSwap", area, args, 0u, 0u, 0u, args + 0x20, 0u, 0u, args + 0x24, args + 0x28);
+    }
+    ::_exit(99);
+  }
+  ::close(fds[1]);
+  std::string out;
+  char buf[256];
+  for (ssize_t n; (n = ::read(fds[0], buf, sizeof buf)) > 0;) out.append(buf, static_cast<size_t>(n));
+  ::close(fds[0]);
+  int status = 0;
+  REQUIRE(::waitpid(pid, &status, 0) == pid);
+  REQUIRE(WIFEXITED(status));
+  CHECK(WEXITSTATUS(status) == 5);
+  CHECK(out.find("Guest fatal: VdSwap: front buffer 0x40000000 is not in a physical view") != std::string::npos);
 }

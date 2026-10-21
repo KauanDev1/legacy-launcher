@@ -3,7 +3,9 @@
 // output. Values follow Xenia's xboxkrnl_video.cc / xam_video.cc / xam_module.cc (semantic reference only, no code
 // copied). The imports that create and drive the GPU follow (M3), backed by runtime/gpu/gpu_system.h.
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <string>
 
 #include "runtime/gpu/gpu_system.h"
 #include "runtime/gpu/pm4.h"
@@ -159,31 +161,49 @@ uint32_t VdPersistDisplay(GuestCall& c, uint32_t /*unk0*/, uint32_t out) {
 
 // VdSwap(buffer*, fetch_constant*, unk2, unk3, unk4, frontbuffer*, format*, color_space*, width*, height*):
 // argument layout per Xenia (width* and height* are the 9th and 10th arguments, on the guest stack). D3D reserved
-// kSwapAreaDwords dwords of its ring at buffer; we fill them with a type-0 write of the 6 fetch-constant dwords to
-// SHADER_CONSTANT_FETCH_00_0 (base address replaced by the front buffer's physical page), then one LR_SWAP type-3
-// packet covering the rest of the area: kSwapMagic, front buffer physical address, width, height, zero padding.
-// The command processor executes it in ring order. A front buffer outside the physical views, or a bad pointer,
-// leaves the area untouched (Xenia logs and returns too).
+// kSwapAreaDwords dwords of its ring at buffer. We first fill them with type-2 NOPs (0x80000000), so the ring stays
+// well formed whatever happens next, then write a type-0 write of the 6 fetch-constant dwords to
+// SHADER_CONSTANT_FETCH_00_0 (base address replaced by the front buffer's physical page) and one LR_SWAP type-3
+// packet covering the rest of the area: kSwapMagic, front buffer physical address, width, height, then the NOP fill
+// as ignored payload. The command processor executes it in ring order.
+// Errors: a bad buffer, fetch-constant, front-buffer, width or height pointer, or a front buffer outside the
+// physical views (no physical address for the GPU), is guest_fatal (exit 5) naming the value; Xenia only logs, but
+// the frame would be lost silently. A fetch-constant base address (bits 12-31 of dword 1, xenos.h) that differs from
+// *frontbuffer is a warning on stderr, as Xenia's assert.
 void VdSwap(GuestCall& c, uint32_t buffer, uint32_t fetch, uint32_t /*unk2*/, uint32_t /*unk3*/, uint32_t /*unk4*/,
             uint32_t frontbuffer_ptr, uint32_t /*format_ptr*/, uint32_t /*color_space_ptr*/, uint32_t width_ptr,
             uint32_t height_ptr) {
+  auto hex = [](uint32_t v) {
+    char b[16];
+    std::snprintf(b, sizeof b, "0x%08X", v);
+    return std::string(b);
+  };
+  if ((buffer & 3) != 0 || !GuestPtr<uint8_t>{buffer}.valid_range(kSwapAreaDwords * 4))
+    guest_fatal("VdSwap: bad ring buffer pointer " + hex(buffer));
+  auto* out = reinterpret_cast<be<uint32_t>*>(c.base + buffer);
+  for (uint32_t i = 0; i < kSwapAreaDwords; ++i) out[i] = 0x80000000u;
+
   be<uint32_t>* const fb = word(c, frontbuffer_ptr);
   be<uint32_t>* const w = word(c, width_ptr);
   be<uint32_t>* const h = word(c, height_ptr);
-  if (fb == nullptr || w == nullptr || h == nullptr || (buffer & 3) != 0 || (fetch & 3) != 0 ||
-      !GuestPtr<uint8_t>{buffer}.valid_range(kSwapAreaDwords * 4) ||
-      !GuestPtr<uint8_t>{fetch}.valid_range(kFetchDwords * 4))
-    return;
+  if ((fetch & 3) != 0 || !GuestPtr<uint8_t>{fetch}.valid_range(kFetchDwords * 4))
+    guest_fatal("VdSwap: bad fetch constant pointer " + hex(fetch));
+  if (fb == nullptr) guest_fatal("VdSwap: bad front buffer pointer " + hex(frontbuffer_ptr));
+  if (w == nullptr) guest_fatal("VdSwap: bad width pointer " + hex(width_ptr));
+  if (h == nullptr) guest_fatal("VdSwap: bad height pointer " + hex(height_ptr));
   const uint32_t frontbuffer = *fb;
-  if (frontbuffer < runtime::kPhysicalViewA0) return;  // not a physical allocation: no physical address
+  if (frontbuffer < runtime::kPhysicalViewA0)
+    guest_fatal("VdSwap: front buffer " + hex(frontbuffer) + " is not in a physical view (no physical address)");
   const uint32_t phys = runtime::PhysicalHeap::physical_address(frontbuffer);
   uint32_t fetch_words[kFetchDwords];
   const auto* in = reinterpret_cast<const be<uint32_t>*>(c.base + fetch);
   for (uint32_t i = 0; i < kFetchDwords; ++i) fetch_words[i] = in[i];
+  if ((fetch_words[1] & ~0xFFFu) != (frontbuffer & ~0xFFFu)) {
+    std::fprintf(stderr, "warning: VdSwap: fetch constant base address %s differs from the front buffer %s\n",
+                 hex(fetch_words[1] & ~0xFFFu).c_str(), hex(frontbuffer).c_str());
+  }
   fetch_words[1] = (fetch_words[1] & 0xFFFu) | (phys & ~0xFFFu);  // base_address: bits 12-31 of dword 1
 
-  auto* out = reinterpret_cast<be<uint32_t>*>(c.base + buffer);
-  for (uint32_t i = 0; i < kSwapAreaDwords; ++i) out[i] = 0u;
   out[0] = ((kFetchDwords - 1) << 16) | gpu::SHADER_CONSTANT_FETCH_00_0;  // type 0
   for (uint32_t i = 0; i < kFetchDwords; ++i) out[1 + i] = fetch_words[i];
   constexpr uint32_t kSwapPayload = kSwapAreaDwords - 1 - kFetchDwords - 1;  // dwords after the LR_SWAP header

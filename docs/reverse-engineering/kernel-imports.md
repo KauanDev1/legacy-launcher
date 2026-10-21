@@ -179,8 +179,8 @@ como referência.
   vblank, 1 = pacote `INTERRUPT`; roda no worker do kernel), `VdInitializeRingBuffer` (anel de 2^(log2 + 3) bytes no
   endereço físico; inicia a thread da GPU), `VdEnableRingBufferRPtrWriteBack` (RPTR em dwords, big-endian, no
   endereço físico), `VdSwap` (10 argumentos, os dois últimos na pilha: buffer, fetch constant, 3 desconhecidos,
-  ponteiro do front buffer, formato, espaço de cor, largura, altura; preenche os 64 dwords reservados com a fetch
-  constant tipo 0 e um `LR_SWAP`), `MmMapIoSpace` (devolve o próprio endereço, como o Xenia).
+  ponteiro do front buffer, formato, espaço de cor, largura, altura; enche os 64 dwords reservados de NOPs e
+  escreve a fetch constant tipo 0 e um `LR_SWAP`; ponteiro inválido ou front buffer não físico é `guest_fatal`), `MmMapIoSpace` (devolve o próprio endereço, como o Xenia).
 - **stub**: `VdGetSystemCommandBuffer` (`0xBEEF0000`/`0xBEEF0001`), `VdPersistDisplay` (1, e um bloco físico de 64
   bytes no ponteiro opcional), `VdInitializeScalerCommandBuffer` (destino cheio de NOPs tipo 2, devolve a contagem),
   e com 0: `VdShutdownEngines`, `VdSetSystemCommandBuffer`, `VdQuerySystemCommandBuffer`,

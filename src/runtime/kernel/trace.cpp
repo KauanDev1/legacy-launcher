@@ -28,6 +28,7 @@ char g_buf[kBufferSize];
 size_t g_len = 0;
 
 std::atomic<bool> g_enabled{false};
+std::atomic<void (*)()> g_flush_hook{nullptr};
 
 struct SpinLock {
   SpinLock() {
@@ -127,7 +128,10 @@ void trace_import_missing(const char* name, const GuestCall& c) {
   log_line(name, c, "missing");
 }
 
+void set_trace_flush_hook(void (*hook)()) { g_flush_hook.store(hook, std::memory_order_release); }
+
 void flush_import_trace() {
+  if (auto* hook = g_flush_hook.load(std::memory_order_acquire)) hook();
   if (!g_enabled.load(std::memory_order_acquire)) return;
   SpinLock lock;
   write_all_locked();

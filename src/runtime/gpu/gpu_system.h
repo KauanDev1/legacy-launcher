@@ -34,13 +34,15 @@
 // Vblank pacing (spec section 11). Realtime60Hz (window): a vblank every 1/60 s of wall time; one already waiting
 // for delivery absorbs the next (a missed vblank, as on hardware). PacedBySwap (headless default): one vblank per
 // processed swap, none dropped, plus a fallback vblank once paced_interval (16 ms) of wall time has passed since the
-// last vblank and since the backend last worked. A slow backend (software rendering) therefore gets about one vblank
+// last vblank and since the backend last worked (coalesced like the realtime ones, so a slow callback cannot
+// make the queue grow). A slow backend (software rendering) therefore gets about one vblank
 // per frame instead of a stream of them, and a game waiting for vblanks before its first swap still gets them.
 //
 // --trace-gpu (enable_trace): one line per PM4 packet ("pm4 type3 DRAW_INDX_2 dwords=3"), per draw
 // ("draw prim=4 count=3"), per resolve and per swap ("swap 1 fb=0x... 1280x720"), and once per second
 // "stats draws=N resolves=N textures=N swaps=N" (counts of that second). Written by the GPU thread, flushed after
-// every step before RPTR is written back (so a guest that saw RPTR advance also sees the lines on disk) and on stop;
+// every step before RPTR is written back (so a guest that saw RPTR advance also sees the lines on disk), on stop and on
+// the kernel's exit paths (flush_trace through kernel/trace.h's flush hook);
 // capped at 64 MiB (a final "gpu trace capped at 64 MiB" line).
 #pragma once
 
@@ -68,9 +70,6 @@ enum class VblankMode { Realtime60Hz, PacedBySwap };
 
 inline constexpr uint32_t kInterruptSourceVblank = 0;
 inline constexpr uint32_t kInterruptSourceCommand = 1;
-
-// CP_RB_RPTR: the AMD R5xx map (radeon_reg.h RADEON_CP_RB_RPTR 0x0710 / 4); mirrored into the MMIO window.
-inline constexpr uint32_t kRegCpRbRptr = 0x01C4;
 
 inline constexpr uint64_t kGpuTraceCapBytes = 64ull << 20;
 
@@ -114,6 +113,8 @@ class GpuSystem {
   void set_paced_interval(std::chrono::nanoseconds interval);
   // --trace-gpu: to `file` (truncated, parent directories created) or stderr with nullopt. Before start().
   Result<void> enable_trace(const std::optional<std::filesystem::path>& file);
+  // Writes the buffered trace lines (no-op without a trace). Any thread; the kernel calls it on its exit paths.
+  void flush_trace();
 
   // Swaps the backend processed (LR_SWAP packets executed).
   uint64_t swaps() const { return swaps_.load(std::memory_order_acquire); }
@@ -130,8 +131,10 @@ class GpuSystem {
   void gpu_main();
   void vblank_main();
   // One step over [rptr, wptr): false when the thread must stop (fatal or stop request).
-  bool step(uint32_t ring_guest, uint32_t ring_dwords, uint32_t scratch, uint32_t wptr);
-  void write_back(uint32_t rptr);
+  // `generation` is ring_generation_ at the snapshot: a re-initialised ring drops this step's RPTR.
+  bool step(uint32_t generation, uint32_t ring_guest, uint32_t ring_dwords, uint32_t scratch, uint32_t wptr);
+  // RPTR to CP_RB_RPTR in the MMIO window and to physical `phys` (0: no write-back).
+  void write_back(uint32_t rptr, uint32_t phys);
   void fail(const std::string& what);
   void raise_interrupt(uint32_t source, bool coalesce);
   void on_interrupt_done(uint32_t source);

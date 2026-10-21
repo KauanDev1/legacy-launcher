@@ -25,7 +25,7 @@ inline constexpr uint32_t kShaderConstantLoopCount = 32;
 // Named registers: X(name, index). Sources per group:
 //  - CP ring buffer: AMD R5xx/Xenos register map; second source: the Linux kernel's radeon_reg.h byte offsets / 4
 //    (RADEON_CP_RB_BASE 0x0700 / 4 = 0x1C0, CP_RB_CNTL 0x0704 / 4 = 0x1C1, CP_RB_RPTR_ADDR 0x070C / 4 = 0x1C3,
-//    CP_RB_WPTR 0x0714 / 4 = 0x1C5). Not present in Xenia's register_table.inc.
+//    CP_RB_RPTR 0x0710 / 4 = 0x1C4, CP_RB_WPTR 0x0714 / 4 = 0x1C5). Not present in Xenia's register_table.inc.
 //  - CP scratch registers: AMD R5xx/Xenos map (radeon_reg.h SCRATCH_REG0 0x15E0 / 4 = 0x578, SCRATCH_UMSK
 //    0x0770 / 4, SCRATCH_ADDR 0x0774 / 4); cross-checked against Xenia register_table.inc, which names
 //    SCRATCH_REG4/5 (0x57C/0x57D) CALLBACK_ADDRESS/CALLBACK_CONTEXT after how the Xbox 360 kernel uses them.
@@ -35,7 +35,8 @@ inline constexpr uint32_t kShaderConstantLoopCount = 32;
 // The lookup table in registers.cpp sorts them at compile time, so the order here is free.
 #define LR_GPU_REGISTERS(X)                                                                                  \
   /* Command processor */                                                                                    \
-  X(CP_RB_BASE, 0x01C0) X(CP_RB_CNTL, 0x01C1) X(CP_RB_RPTR_ADDR, 0x01C3) X(CP_RB_WPTR, 0x01C5)               \
+  X(CP_RB_BASE, 0x01C0) X(CP_RB_CNTL, 0x01C1) X(CP_RB_RPTR_ADDR, 0x01C3) X(CP_RB_RPTR, 0x01C4)                \
+  X(CP_RB_WPTR, 0x01C5)                                                                                      \
   X(SCRATCH_UMSK, 0x01DC) X(SCRATCH_ADDR, 0x01DD)                                                            \
   X(SCRATCH_REG0, 0x0578) X(SCRATCH_REG1, 0x0579) X(SCRATCH_REG2, 0x057A) X(SCRATCH_REG3, 0x057B)            \
   X(SCRATCH_REG4, 0x057C) X(SCRATCH_REG5, 0x057D) X(SCRATCH_REG6, 0x057E) X(SCRATCH_REG7, 0x057F)            \

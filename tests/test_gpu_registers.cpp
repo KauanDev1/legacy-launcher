@@ -10,6 +10,7 @@ using namespace lr::gpu;
 
 TEST_CASE("named registers have the documented indices", "[unit][gpu]") {
   CHECK(CP_RB_BASE == 0x01C0);
+  CHECK(CP_RB_RPTR == 0x01C4);
   CHECK(CP_RB_WPTR == 0x01C5);
   CHECK(SCRATCH_REG0 == 0x0578);
   CHECK(SCRATCH_REG7 == 0x057F);

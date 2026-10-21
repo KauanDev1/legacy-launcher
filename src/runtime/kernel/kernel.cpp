@@ -25,6 +25,11 @@ namespace lr::kernel {
 namespace {
 // Set once by init_kernel and never deleted (only reset_kernel_for_tests deletes it): see init_kernel.
 std::atomic<Kernel*> g_kernel{nullptr};
+
+// Flush hook for the GPU trace (set_trace_flush_hook): every exit path that flushes the import trace flushes it too.
+void flush_gpu_trace() {
+  if (Kernel* k = g_kernel.load(std::memory_order_acquire)) k->gpu().flush_trace();
+}
 }  // namespace
 
 Kernel::Kernel(runtime::GuestMemory& mem, KernelConfig cfg)
@@ -146,6 +151,7 @@ Result<void> init_kernel(runtime::GuestMemory& mem, KernelConfig cfg) {
       delete k;
       return r;
     }
+    set_trace_flush_hook(&flush_gpu_trace);
   }
   install_thread_hooks(*k);
   // Spec section 10: the TSC rate KeQueryPerformanceFrequency reports is measured at init (once per process).
@@ -167,6 +173,7 @@ void reset_kernel_for_tests() {
     k->gpu().stop();  // no new interrupts for the worker
     k->timers().shutdown();
   }
+  set_trace_flush_hook(nullptr);
   delete g_kernel.exchange(nullptr, std::memory_order_acq_rel);
   disable_import_trace();
 }

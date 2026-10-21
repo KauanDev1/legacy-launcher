@@ -432,7 +432,7 @@ PPC_FUNC(sub_82000400) {
   ctx.lr = 0x82000424;
   __imp__VdEnableRingBufferRPtrWriteBack(ctx, base);
 
-  PPC_STORE_U32(d + kFetch + 4, 0);
+  PPC_STORE_U32(d + kFetch + 4, d + kFrontBuffer);  // fetch constant base address = the front buffer (no warning)
   PPC_STORE_U32(d + kFrontPtr, d + kFrontBuffer);
   PPC_STORE_U32(d + kWidth, 1280);
   PPC_STORE_U32(d + kHeight, 720);
