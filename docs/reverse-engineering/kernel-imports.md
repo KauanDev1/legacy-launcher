@@ -160,6 +160,10 @@ Registradas pela Task 26 (`src/runtime/kernel/exports/xam.cpp`, `video.cpp`, `ne
   `XamUserReadProfileSettings`, `XamContentGetDeviceState` (sem dispositivo: `ERROR_DEVICE_NOT_CONNECTED`),
   `XamContentCreateDeviceEnumerator` (vazio), `XamContentGetLicenseMask` (licença completa),
   `XamShowDirtyDiscErrorUI` (`guest_fatal("dirty disc")`, saída 5).
+- **M3**: `XamShowMessageBoxUI` (imprime `[game] message box: ...` no stderr, resultado 0, completa o overlapped; ordem dos argumentos:
+  user, título, texto, nº de botões, botões, foco, flags, resultado*, overlapped*), `XamLoaderLaunchTitle` (`guest_fatal`, saída 5),
+  `XAudioRegisterRenderDriverClient` (handle `0x41550000`, sem callback), `XAudioUnregisterRenderDriverClient`,
+  `XAudioSubmitRenderDriverFrame`, `XAudioGetVoiceCategoryVolume` (1.0f): áudio silencioso até o M4.
 - **stub**: `XNotifyPositionUI`, `XamIsUIActive` (0), `XamInputGetCapabilities` (`ERROR_DEVICE_NOT_CONNECTED`),
   `XAudioGetSpeakerConfig` (estéreo `0x00010001`), `XGetVideoMode`, `VdQueryVideoMode`,
   `VdGetCurrentDisplayInformation`, `VdGetCurrentDisplayGamma`, `VdQueryVideoFlags` (3), `XGetAVPack` (6),

@@ -425,7 +425,7 @@ que nomeia, e os saves ficam todos num lugar só. As importações de arquivo (`
   importa, o resto (e a busca por nome) dá `0xC0000263`. `XexLoadImage` só "carrega" módulos já presentes
   (executável, `xboxkrnl.exe`, `xam.xex`: devolve o handle, como o Xenia; outro nome → `*saída = 0`,
   `STATUS_NO_SUCH_FILE`, carregar XEX do disco é M5); `XexUnloadImage` nunca descarrega (sucesso para módulos
-  conhecidos). `XamLoaderLaunchTitle` continua faltando (M5). `XamLoaderGetLaunchData[Size]` → `ERROR_NOT_FOUND`;
+  conhecidos). `XamLoaderLaunchTitle` encerra com `guest_fatal("the game asked to relaunch itself (XamLoaderLaunchTitle)")` (saída 5, M3). `XamLoaderGetLaunchData[Size]` → `ERROR_NOT_FOUND`;
   `XamLoaderTerminateTitle` sai com 0.
 - **Valores fixos** (os padrões do Xenia): título `0x584111F7`; região do jogo (`XGetGameRegion`) `0xFFFF`
   (sem região); versão do dashboard (`XamGetSystemVersion`) 0; `ExGetXConfigSetting`: região AV
@@ -497,6 +497,11 @@ estrutura, são registradas como `stub` (`LR_KERNEL_STUB` ou `LR_KERNEL_STUB_FN`
   `NetDll_XNetGetEthernetLinkStatus` 0 (sem link). `XamIsUIActive` 0, `XNotifyPositionUI` no-op,
   `XamInputGetCapabilities` `ERROR_DEVICE_NOT_CONNECTED`, `XAudioGetSpeakerConfig` estéreo (`0x00010001`) e
   `XamShowDirtyDiscErrorUI` encerra com `guest_fatal("dirty disc")` (saída 5).
+- **M3 (áudio silencioso e UI)**: `exports/audio.cpp` — `XAudioRegisterRenderDriverClient` escreve o handle `0x41550000` e nunca chama o
+  callback, `XAudioUnregisterRenderDriverClient`/`XAudioSubmitRenderDriverFrame` → 0 (quadro descartado),
+  `XAudioGetVoiceCategoryVolume` escreve `1.0f`; `exports/xam_ui.cpp` — `XamShowMessageBoxUI` imprime
+  `[game] message box: <título> — <texto> [<botões>]` no stderr, escreve resultado 0 (primeiro botão) e completa o overlapped
+  (`ERROR_IO_PENDING`; sem overlapped, `ERROR_SUCCESS`).
 
 ## GPU emulada: ring buffer, write-back e interrupções (M3)
 
