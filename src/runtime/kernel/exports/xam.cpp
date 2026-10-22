@@ -531,6 +531,9 @@ LR_KERNEL_STUB(XamVoiceHeadsetPresent, 0);   // no headset on any controller por
 LR_KERNEL_STUB(XamIsUIActive, 0);  // no system UI (guide, dialogs) ever opens in M2
 LR_KERNEL(XamShowDirtyDiscErrorUI);
 LR_KERNEL_STUB(XamInputGetCapabilities, ERROR_DEVICE_NOT_CONNECTED);  // no controller until input lands (M4)
+LR_KERNEL_STUB(XamInputGetState, ERROR_DEVICE_NOT_CONNECTED);         // same: nothing to read
+LR_KERNEL_STUB(XamInputSetState, ERROR_DEVICE_NOT_CONNECTED);         // same: no motor to drive
+LR_KERNEL_STUB(XamInputGetKeystrokeEx, ERROR_DEVICE_NOT_CONNECTED);   // same: no keystroke ever
 LR_KERNEL_STUB_FN(XAudioGetSpeakerConfig);  // fixed stereo answer, no audio device until M4
 
 }  // namespace lr::kernel

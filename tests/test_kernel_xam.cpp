@@ -404,6 +404,15 @@ TEST_CASE("XamUserGetDeviceContext gives the local profile a zero context", "[un
   CHECK(*f.mem.translate<be<uint32_t>>(out) == 0u);
 }
 
+TEST_CASE("input reports no controller connected", "[unit][kernel][xam]") {
+  KernelFixture f;
+  const uint32_t user = f.alloc(4), buf = f.alloc(0x40);
+  *f.mem.translate<be<uint32_t>>(user) = 0xFF;
+  CHECK(f.call("XamInputGetKeystrokeEx", user, 0x400000FFu, buf) == ERROR_DEVICE_NOT_CONNECTED);
+  CHECK(f.call("XamInputGetState", 0u, 0u, buf) == ERROR_DEVICE_NOT_CONNECTED);
+  CHECK(f.call("XamInputSetState", 0u, 0u, buf) == ERROR_DEVICE_NOT_CONNECTED);
+}
+
 TEST_CASE("XMsg requests to the XAM app (0xFE) complete at once", "[unit][kernel][xam]") {
   KernelFixture f;
   constexpr uint32_t kXamApp = 0xFE, kXFail = 0x80004005, kXNotFound = 0x80070490;
