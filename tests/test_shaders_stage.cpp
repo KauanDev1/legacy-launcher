@@ -48,7 +48,9 @@ struct Fixture {
   Sink sink;
   ShadersStageConfig cfg;
 
-  explicit Fixture(const std::string& summary = "translated 3 of 3", int exit_code = 0) {
+  explicit Fixture(const std::string& summary = "translated 3 of 3", int exit_code = 0,
+                   const std::string& cache_text = "extern const size_t lr_shader_blob_uncompressed_size = 5;",
+                   const std::string& extra_lines = "") {
     opts.root = root;
     cfg.xenosrecomp_commit = "aaaa+patches:1111";
     cfg.dxc_version = [](const fs::path&) { return std::string("dxc 1.8"); };
@@ -58,8 +60,11 @@ struct Fixture {
     write(tool, "#!/bin/sh\n"
                 "{ for a in \"$@\"; do echo \"$a\"; done; pwd; } > \"" + (tmp.path / "argv.txt").string() + "\"\n"
                 "echo \"container 0x1 microcode 0x2 pixel literal-loops 0\"\n"
+                "echo \"container 0x3 microcode 0x4 vertex literal-loops 2\"\n" +
+                extra_lines +
                 "echo \"" + summary + "\"\n"
-                "echo cache > \"$2\"\n"
+                "echo \"container 0x5 microcode 0x6 pixel literal-loops 1\"\n"
+                "printf '%s\\n' \"" + cache_text + "\" > \"$2\"\n"
                 "exit " + std::to_string(exit_code) + "\n");
     ::chmod(tool.c_str(), 0755);
   }
@@ -76,7 +81,7 @@ TEST_CASE("shaders stage runs the tool and records the count", "[unit]") {
   auto r = stage->execute(ctx);
   REQUIRE(r);
 
-  const fs::path gen = ctx.paths.generated / "shader_cache.cpp";
+  const fs::path gen = ctx.paths.work / "shaders" / "shader_cache.cpp";
   CHECK(fs::exists(gen));
   CHECK(stage->outputs(ctx) == std::vector<fs::path>{gen});
   CHECK(slurp(ctx.paths.work / "shaders" / "in" / "default_tu1.xex") == "image-bytes");
@@ -104,7 +109,7 @@ TEST_CASE("fewer translated than found fails the stage", "[unit]") {
     CHECK(r.error().code == ErrorCode::ToolFailed);
     CHECK(r.error().message.find("2 of 3") != std::string::npos);
     CHECK(r.error().hint.find("shaders.log") != std::string::npos);
-    CHECK_FALSE(fs::exists(ctx.paths.generated / "shader_cache.cpp"));
+    CHECK_FALSE(fs::exists(ctx.paths.work / "shaders" / "shader_cache.cpp"));
   }
   SECTION("tool exits non-zero") {
     Fixture f("translated 2 of 3", 1);
@@ -181,4 +186,46 @@ TEST_CASE("parse_translated_line reads the tool summary", "[unit]") {
   CHECK_FALSE(parse_translated_line("translated 1 of").has_value());
   CHECK_FALSE(parse_translated_line("translated x of 2").has_value());
   CHECK_FALSE(parse_translated_line("container 0x1 translated 1 of 2").has_value());
+}
+
+TEST_CASE("a truncated or empty cache file fails the stage", "[unit]") {
+  for (const char* text : {"", "extern const uint8_t lr_shader_blob[] = {1,2,3,"}) {
+    Fixture f("translated 3 of 3", 0, text);
+    auto ctx = f.ctx();
+    auto r = make_shaders_stage(f.cfg)->execute(ctx);
+    REQUIRE_FALSE(r);
+    CHECK(r.error().code == ErrorCode::ToolFailed);
+    CHECK(r.error().message.find("truncated") != std::string::npos);
+    CHECK_FALSE(fs::exists(ctx.paths.work / "shaders" / "shader_cache.cpp"));
+  }
+}
+
+TEST_CASE("literal-loops lines around the summary do not confuse the stage", "[unit]") {
+  Fixture f("translated 3 of 3", 0, "extern const size_t lr_shader_blob_uncompressed_size = 5;",
+            "echo \"container 0x7 microcode 0x8 vertex literal-loops 12\"\n");
+  auto ctx = f.ctx();
+  REQUIRE(make_shaders_stage(f.cfg)->execute(ctx));
+  CHECK(f.sink.messages.size() == 1);
+  CHECK(f.sink.messages.back() == "translated 3 of 3");
+  const std::string log = slurp(ctx.paths.logs / "shaders.log");
+  CHECK(log.find("literal-loops 12") != std::string::npos);
+  CHECK(log.find("literal-loops 1\n") != std::string::npos);
+}
+
+TEST_CASE("query_dxc_version reads stdout or stderr", "[unit]") {
+  lr::testing::TempDir tmp{"lr_fake_dxc"};
+  const fs::path err = tmp.path / "dxc_err", out = tmp.path / "dxc_out", bad = tmp.path / "dxc_bad";
+  write(err, "#!/bin/sh\necho \"dxcompiler.so: 1.8 (stderr)\" >&2\nexit 0\n");
+  write(out, "#!/bin/sh\necho \"1.7 (stdout)\"\nexit 0\n");
+  write(bad, "#!/bin/sh\nexit 3\n");
+  for (const auto& p : {err, out, bad}) ::chmod(p.c_str(), 0755);
+  CHECK(query_dxc_version(err) == "dxcompiler.so: 1.8 (stderr)");
+  CHECK(query_dxc_version(out) == "1.7 (stdout)");
+  CHECK(query_dxc_version(bad) == "unknown");
+  CHECK(query_dxc_version(tmp.path / "missing") == "unknown");
+}
+
+TEST_CASE("shaders stage is independent of the stages before it", "[unit]") {
+  Fixture f;
+  CHECK(make_shaders_stage(f.cfg)->independent());
 }

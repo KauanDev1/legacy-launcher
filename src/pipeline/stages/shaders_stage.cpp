@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include "pipeline/stages/shaders_stage.h"
 
+#include <algorithm>
 #include <charconv>
+#include <fstream>
 #include <system_error>
 #include <vector>
 
@@ -25,6 +27,19 @@ bool parse_uint(std::string_view s, unsigned& out) {
   return ec == std::errc() && ptr == s.data() + s.size();
 }
 
+// The tool ends the file with the lr_shader_blob_uncompressed_size definition: a partial write lacks it.
+bool cache_is_complete(const fs::path& p) {
+  std::error_code ec;
+  const auto size = fs::file_size(p, ec);
+  if (ec || size == 0) return false;
+  std::ifstream f(p, std::ios::binary);
+  const auto tail = static_cast<std::streamoff>(std::min<uintmax_t>(size, 512));
+  std::string buf(static_cast<size_t>(tail), char{});
+  f.seekg(-tail, std::ios::end);
+  f.read(buf.data(), tail);
+  return f && buf.find("lr_shader_blob_uncompressed_size") != std::string::npos;
+}
+
 class ShadersStage : public Stage {
  public:
   explicit ShadersStage(ShadersStageConfig cfg) : cfg_(std::move(cfg)) {
@@ -32,6 +47,8 @@ class ShadersStage : public Stage {
   }
 
   StageId id() const override { return StageId::Shaders; }
+  // Only the image, the tool and DXC matter: a recompile does not invalidate the cache.
+  bool independent() const override { return true; }
 
   Result<std::string> fingerprint(StageContext& ctx) override {
     LR_TRY_ASSIGN(img, sha256_file(ctx.paths.image / "default_tu1.xex"));
@@ -39,7 +56,7 @@ class ShadersStage : public Stage {
     return shaders_fingerprint(img, cfg_.xenosrecomp_commit, dxc);
   }
 
-  std::vector<fs::path> outputs(StageContext& ctx) const override { return {ctx.paths.generated / kCacheFile}; }
+  std::vector<fs::path> outputs(StageContext& ctx) const override { return {shader_cache_path(ctx.paths)}; }
 
   Result<void> execute(StageContext& ctx) override {
     const fs::path tool = ctx.resources / "tools" / "XenosRecomp";
@@ -53,14 +70,11 @@ class ShadersStage : public Stage {
 
     const fs::path dir = (fs::absolute(ctx.paths.work, ec) / "shaders").lexically_normal();
     const fs::path in = dir / "in";
-    const fs::path cache = fs::absolute(ctx.paths.generated, ec).lexically_normal() / kCacheFile;
+    const fs::path cache = dir / kCacheFile;
     fs::remove_all(dir, ec);
     if (ec) return Error{ErrorCode::IoError, "cannot clear " + dir.string() + ": " + ec.message(), ""};
     fs::create_directories(in, ec);
     if (ec) return Error{ErrorCode::IoError, "cannot create " + in.string() + ": " + ec.message(), ""};
-    fs::create_directories(ctx.paths.generated, ec);
-    if (ec)
-      return Error{ErrorCode::IoError, "cannot create " + ctx.paths.generated.string() + ": " + ec.message(), ""};
     fs::copy_file(ctx.paths.image / "default_tu1.xex", in / "default_tu1.xex",
                   fs::copy_options::overwrite_existing, ec);
     if (ec) return Error{ErrorCode::IoError, "cannot copy the image to " + in.string() + ": " + ec.message(), ""};
@@ -94,6 +108,11 @@ class ShadersStage : public Stage {
     if (!fs::exists(cache, ec))
       return Error{ErrorCode::ToolFailed, "XenosRecomp did not produce " + cache.string(),
                    "see " + inv.log_file.string()};
+    if (!cache_is_complete(cache)) {
+      fs::remove(cache, ec);
+      return Error{ErrorCode::ToolFailed, "XenosRecomp wrote an empty or truncated " + cache.string(),
+                   "see " + inv.log_file.string() + "; check the free disk space"};
+    }
     return {};
   }
 
@@ -127,13 +146,20 @@ std::string shaders_fingerprint(std::string_view image_sha256, std::string_view 
 }
 
 std::string query_dxc_version(const fs::path& dxc) {
-  auto out = capture_output(dxc, {"--version"});
-  if (!out) return "unknown";
-  std::string_view s = out.value();
-  s = s.substr(0, s.find('\n'));
-  while (!s.empty() && (s.back() == '\r' || s.back() == ' ')) s.remove_suffix(1);
-  return s.empty() ? "unknown" : std::string(s);
+  // run_tool merges stdout and stderr: DXC prints its version on either, depending on the build.
+  std::string first;
+  ToolInvocation inv;
+  inv.program = dxc;
+  inv.args = {"--version"};
+  inv.on_line = [&](std::string_view line) {
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.remove_suffix(1);
+    if (first.empty() && !line.empty()) first = std::string(line);
+  };
+  if (!run_tool(inv) || first.empty()) return "unknown";
+  return first;
 }
+
+fs::path shader_cache_path(const DataPaths& paths) { return paths.work / "shaders" / "shader_cache.cpp"; }
 
 std::unique_ptr<Stage> make_shaders_stage(ShadersStageConfig config) {
   return std::make_unique<ShadersStage>(std::move(config));

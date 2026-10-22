@@ -4,11 +4,13 @@
 #   cmake -S <resources>/runtime/template -B <root>/work/build -G Ninja -DCMAKE_BUILD_TYPE=Release
 #         -DCMAKE_CXX_COMPILER=<clang++> -DCMAKE_MAKE_PROGRAM=<ninja> [-DCMAKE_PREFIX_PATH=<SDL2 prefix>]
 #         -DLR_RESOURCES=<resources> -DLR_GENERATED=<root>/work/generated
+#         -DLR_SHADER_CACHE=<root>/work/shaders/shader_cache.cpp
 # Compiler, ninja and SDL2 come from lr::pipeline::resolve_toolchain: the system clang++ and SDL2, or, in the
 # AppImage, <resources>/toolchain (zig c++ targeting glibc 2.31 and a static SDL2, see docs/packaging.md).
 # Inputs: LR_GENERATED holds ppc_config.h, ppc_context.h (copied there by XenonRecomp), ppc_recomp_shared.h,
-# ppc_recomp.*.cpp, ppc_func_mapping.cpp, shader_cache.cpp (the shaders stage: a data table, zstd blob included, so
-# nothing to link until the runtime decompresses it) and import_stubs.cpp (the import thunks, written by the build stage).
+# ppc_recomp.*.cpp, ppc_func_mapping.cpp and import_stubs.cpp (the import thunks, written by the build stage).
+# LR_SHADER_CACHE is the shaders stage output (work/shaders/shader_cache.cpp, outside LR_GENERATED so a recompile does
+# not wipe it): a data table with the zstd blob, nothing to link until the runtime decompresses it.
 cmake_minimum_required(VERSION 3.25)
 project(LegacyRecompGame LANGUAGES CXX)
 
@@ -34,8 +36,8 @@ find_package(Threads REQUIRED)
 
 set(_rt "${LR_RESOURCES}/runtime")
 file(GLOB _lr_recomp_sources CONFIGURE_DEPENDS "${LR_GENERATED}/ppc_recomp.*.cpp")
-if(NOT EXISTS "${LR_GENERATED}/shader_cache.cpp")
-  message(FATAL_ERROR "no shader_cache.cpp in ${LR_GENERATED}: run the shaders stage first")
+if(NOT LR_SHADER_CACHE OR NOT EXISTS "${LR_SHADER_CACHE}")
+  message(FATAL_ERROR "LR_SHADER_CACHE must name the generated shader cache (got '${LR_SHADER_CACHE}'): run the shaders stage first")
 endif()
 if(NOT _lr_recomp_sources)
   message(FATAL_ERROR "no ppc_recomp.*.cpp in ${LR_GENERATED}: run the recompile stage first")
@@ -45,7 +47,7 @@ add_executable(legacyrecomp-game
   "${_rt}/src/main.cpp"
   ${_lr_recomp_sources}
   "${LR_GENERATED}/ppc_func_mapping.cpp"
-  "${LR_GENERATED}/shader_cache.cpp"
+  "${LR_SHADER_CACHE}"
   "${LR_GENERATED}/import_stubs.cpp")
 # Generated dir first: ppc_config.h / ppc_context.h must be the game's own.
 target_include_directories(legacyrecomp-game PRIVATE "${LR_GENERATED}" "${_rt}/include" "${_rt}/include/simde")

@@ -29,6 +29,10 @@ struct Stage {
   virtual Result<std::string> fingerprint(StageContext& ctx) = 0;
   virtual std::vector<fs::path> outputs(StageContext& ctx) const = 0;
   virtual Result<void> execute(StageContext& ctx) = 0;
+  // An independent stage does not depend on the stages before it (only on its own fingerprint inputs): the runner
+  // skips it when complete, fingerprint-equal and with its outputs present even after an earlier stage ran, and
+  // it does not mark the following stages dirty. --force still re-runs it.
+  virtual bool independent() const { return false; }
 };
 
 }  // namespace lr::pipeline

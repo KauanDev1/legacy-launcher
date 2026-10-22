@@ -17,7 +17,8 @@ StageText stage_text(pipeline::StageId id) {
     case pipeline::StageId::Patch: return {"Aplicar a atualização", "Aplica a atualização do título ao executável"};
     case pipeline::StageId::Analyse: return {"Analisar o executável", "Localiza funções e tabelas de salto"};
     case pipeline::StageId::Recompile: return {"Gerar o código C++", "Recompila o código PowerPC para C++"};
-    case pipeline::StageId::Shaders: return {"Traduzir os shaders", "Converte os shaders gráficos do jogo para o formato do Vulkan"};
+    case pipeline::StageId::Shaders:
+      return {"Traduzir os shaders", "Converte os shaders gráficos do jogo para o formato do Vulkan"};
     case pipeline::StageId::Build: return {"Compilar o jogo", "Compila o executável nativo para Linux"};
   }
   return {"?", ""};

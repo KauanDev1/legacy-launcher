@@ -38,6 +38,7 @@ struct RecSink : ProgressSink {
 struct FakeStage : Stage {
   FakeStage(StageId i, fs::path out) : id_(i), out_(std::move(out)) {}
   StageId id() const override { return id_; }
+  bool independent() const override { return indep; }
   Result<std::string> fingerprint(StageContext&) override { return fp; }
   std::vector<fs::path> outputs(StageContext&) const override { return {out_}; }
   Result<void> execute(StageContext&) override {
@@ -50,6 +51,7 @@ struct FakeStage : Stage {
   fs::path out_;
   std::string fp = "a";
   bool fail = false;
+  bool indep = false;
   int runs = 0;
 };
 
@@ -176,4 +178,30 @@ TEST_CASE("state survives reload", "[unit]") {
   auto bad = StateStore::load(p);
   REQUIRE_FALSE(bad);
   CHECK(bad.error().code == ErrorCode::InvalidFormat);
+}
+
+TEST_CASE("an independent stage survives a forced earlier stage but not its own change or force", "[unit]") {
+  Fixture f;
+  f.s2.indep = true;
+  REQUIRE(f.run());
+  CHECK(f.runs() == std::array<int, 3>{1, 1, 1});
+
+  f.opts.force = {StageId::Doctor};  // like `build` forcing recompile
+  REQUIRE(f.run());
+  CHECK(f.runs() == std::array<int, 3>{2, 1, 2});  // s2 cached, the dependent s3 re-ran
+  CHECK(f.sink.count("cached") == 1);
+
+  f.opts.force = {};
+  f.s2.fp = "changed image";
+  REQUIRE(f.run());
+  CHECK(f.runs() == std::array<int, 3>{2, 2, 2});  // s2 re-ran; s3 stays cached (its own inputs did not change)
+
+  f.opts.force = {StageId::Extract};
+  REQUIRE(f.run());
+  CHECK(f.runs() == std::array<int, 3>{2, 3, 3});
+
+  fs::remove(f.dir / "o2");  // a missing output re-runs it too
+  f.opts.force = {};
+  REQUIRE(f.run());
+  CHECK(f.runs() == std::array<int, 3>{2, 4, 3});
 }

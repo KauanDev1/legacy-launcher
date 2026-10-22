@@ -14,8 +14,8 @@ fica em `work/state.toml`. Tudo roda na máquina do usuário e nada do jogo sai 
 | 4 | `patch` | Aplica o `.xexp` ao XEX (XenonUtils `XexPatcher`), gerando um XEX2 sem criptografia e sem compressão | `work/image/default_tu1.xex` |
 | 5 | `analyse` | Roda o XenonAnalyse e a varredura de `switch` própria (jump tables) | `work/analysis/switch_tables.toml`, `work/analysis/functions.toml` |
 | 6 | `recompile` | Roda o XenonRecomp com `config/minecraft-tu1/recomp.toml`; falha se houver qualquer linha `ERROR:` (o XenonRecomp sai com 0 mesmo gerando código errado) | `work/generated/ppc_recomp_shared.h`, `ppc_func_mapping.cpp`, `ppc_config.h` (mais ~215 `ppc_recomp.*.cpp`) |
-| 7 | `shaders` | Copia `work/image/default_tu1.xex` para `work/shaders/in/` e roda o XenosRecomp (patcheado, `tools/XenosRecomp`, com o DXC do sistema) sobre ele, passando o prelúdio HLSL `tools/xenos_shader_common.h`; o `translated N of M` impresso pela ferramenta precisa ter N == M ≥ 1, senão a etapa falha com `ToolFailed` e nenhum arquivo é deixado. Fingerprint: sha256 da imagem, commit do XenosRecomp (com o hash dos patches) e versão do DXC. O cache é lido em tempo de execução pelo hash do microcódigo (ver `docs/architecture.md`, "Contrato dos shaders traduzidos") | `work/generated/shader_cache.cpp` (tabela `lr_shader_cache`, SPIR-V comprimido com zstd; derivado do jogo, nunca vai para o git); `work/shaders/hlsl/` (HLSL de depuração) |
-| 8 | `build` | Gera os thunks de importação (`import_stubs.cpp`, ver `docs/architecture.md`, "Kernel"), compila o C++ gerado com o `main.cpp` e as bibliotecas do runtime (template CMake/Ninja) e instala o binário. Usa o clang++/cmake/ninja do sistema ou, no AppImage, o toolchain embutido (ver "Toolchain") | `bin/legacyrecomp-game` |
+| 7 | `shaders` | Copia `work/image/default_tu1.xex` para `work/shaders/in/` e roda o XenosRecomp (patcheado, `tools/XenosRecomp`, com o DXC do sistema) sobre ele, passando o prelúdio HLSL `tools/xenos_shader_common.h`; o `translated N of M` impresso pela ferramenta precisa ter N == M ≥ 1, senão (ou se o arquivo gerado estiver vazio ou truncado) a etapa falha com `ToolFailed` e nenhum arquivo é deixado. Fingerprint: sha256 da imagem, commit do XenosRecomp (com o hash dos patches) e versão do DXC. É uma etapa *independente*: uma etapa anterior re-executada (por exemplo `recompile`, que `legacyrecomp build` força) não a suja; só uma mudança no próprio fingerprint, uma saída ausente ou `--force shaders` a re-executam O cache é lido em tempo de execução pelo hash do microcódigo (ver `docs/architecture.md`, "Contrato dos shaders traduzidos") | `work/shaders/shader_cache.cpp` (fora de `work/generated/`, que o `recompile` apaga; derivado do jogo, nunca vai para o git; exporta `lr_shader_cache` e `lr_shader_cache_count`, `lr_shader_vertex_inputs` e `lr_shader_vertex_input_count`, e o blob SPIR-V comprimido com zstd `lr_shader_blob` com `lr_shader_blob_size` e `lr_shader_blob_uncompressed_size`); `work/shaders/hlsl/` (HLSL de depuração) |
+| 8 | `build` | Gera os thunks de importação (`import_stubs.cpp`, ver `docs/architecture.md`, "Kernel"), compila o C++ gerado e o `shader_cache.cpp` (passado ao template por `-DLR_SHADER_CACHE=<root>/work/shaders/shader_cache.cpp`; o fingerprint do `build` inclui o hash dele, então um cache novo recompila o jogo) com o `main.cpp` e as bibliotecas do runtime (template CMake/Ninja) e instala o binário. Usa o clang++/cmake/ninja do sistema ou, no AppImage, o toolchain embutido (ver "Toolchain") | `bin/legacyrecomp-game` |
 
 O código gerado tem cerca de 160 MB, o `recompile` + `shaders` + `build` levam alguns minutos e usam bastante RAM por
 job (use `--jobs <n>` para limitar).
@@ -74,8 +74,8 @@ Precedência: `--root` > variável `LEGACYRECOMP_ROOT` > `$XDG_DATA_HOME/legacyr
     input/               package.xex, tu.xexp
     image/               default_tu1.xex (imagem final)
     analysis/            switch_tables.toml, functions.toml
-    generated/           C++ gerado pelo XenonRecomp e shader_cache.cpp (etapa shaders)
-    shaders/             entrada (in/) e HLSL (hlsl/) do XenosRecomp
+    generated/           C++ gerado pelo XenonRecomp
+    shaders/             entrada (in/), HLSL (hlsl/) e shader_cache.cpp do XenosRecomp
     build/               árvore de build do jogo
 ```
 

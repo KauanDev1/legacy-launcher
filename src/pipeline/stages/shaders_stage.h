@@ -20,6 +20,9 @@ std::optional<std::pair<unsigned, unsigned>> parse_translated_line(std::string_v
 std::string shaders_fingerprint(std::string_view image_sha256, std::string_view xenosrecomp_commit,
                                 std::string_view dxc_version);
 
+// work/shaders/shader_cache.cpp: the generated cache the build stage compiles into the game.
+fs::path shader_cache_path(const DataPaths& paths);
+
 // First line of `<dxc> --version` (or "unknown" when it cannot be run). Never fails.
 std::string query_dxc_version(const fs::path& dxc);
 

@@ -17,6 +17,7 @@
 #include "common/sha256.h"
 #include "pipeline/import_stubs.h"
 #include "pipeline/process.h"
+#include "pipeline/stages/shaders_stage.h"
 #include "pipeline/toolchain.h"
 
 namespace lr::pipeline {
@@ -51,7 +52,8 @@ std::optional<float> parse_ninja_progress(std::string_view line) {
   return static_cast<float>(std::min(done, total)) / static_cast<float>(total);
 }
 
-Result<std::string> build_fingerprint(const fs::path& generated, const fs::path& runtime_dir) {
+Result<std::string> build_fingerprint(const fs::path& generated, const fs::path& runtime_dir,
+                                      const fs::path& shader_cache) {
   std::error_code ec;
   if (!fs::is_directory(generated, ec))
     return Error{ErrorCode::NotFound, "generated sources not found: " + generated.string(), "run the recompile stage"};
@@ -75,6 +77,12 @@ Result<std::string> build_fingerprint(const fs::path& generated, const fs::path&
   std::sort(runtime_files.begin(), runtime_files.end());
 
   std::string text;
+  if (!shader_cache.empty()) {
+    if (!fs::is_regular_file(shader_cache, ec))
+      return Error{ErrorCode::NotFound, "shader cache not found: " + shader_cache.string(), "run the shaders stage"};
+    LR_TRY_ASSIGN(cache_hash, sha256_file(shader_cache));
+    text += "shader_cache.cpp " + cache_hash + "\n--\n";
+  }
   for (const auto& [name, size] : listing) text += name + " " + std::to_string(size) + "\n";
   text += "--\n";
   for (const auto& f : runtime_files) {
@@ -134,7 +142,7 @@ class BuildStage : public Stage {
   StageId id() const override { return StageId::Build; }
 
   Result<std::string> fingerprint(StageContext& ctx) override {
-    return build_fingerprint(ctx.paths.generated, ctx.resources / "runtime");
+    return build_fingerprint(ctx.paths.generated, ctx.resources / "runtime", shader_cache_path(ctx.paths));
   }
 
   std::vector<fs::path> outputs(StageContext& ctx) const override { return {ctx.paths.bin / kGameBinary}; }
@@ -175,7 +183,8 @@ class BuildStage : public Stage {
     configure.args = {"-S", template_dir.string(), "-B", p.build.string(), "-G", "Ninja",
                       "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_CXX_COMPILER=" + tc.cxx.string(),
                       "-DCMAKE_MAKE_PROGRAM=" + tc.ninja.string(),
-                      "-DLR_RESOURCES=" + resources.string(), "-DLR_GENERATED=" + p.generated.string()};
+                      "-DLR_RESOURCES=" + resources.string(), "-DLR_GENERATED=" + p.generated.string(),
+                      "-DLR_SHADER_CACHE=" + shader_cache_path(p).string()};
     if (tc.sdl2_prefix) configure.args.push_back("-DCMAKE_PREFIX_PATH=" + tc.sdl2_prefix->string());
     configure.log_file = log;
     configure.cancelled = [&] { return ctx.sink.cancelled(); };
