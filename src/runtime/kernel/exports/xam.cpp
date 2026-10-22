@@ -456,6 +456,9 @@ uint32_t XamContentGetDeviceState(uint32_t /*device_id*/, uint32_t overlapped) {
   return finish(overlapped, ERROR_DEVICE_NOT_CONNECTED);
 }
 
+// XamContentGetDeviceData(device_id, X_CONTENT_DEVICE_DATA*): same, no device to describe; the data is untouched.
+uint32_t XamContentGetDeviceData(uint32_t /*device_id*/, uint32_t /*data*/) { return ERROR_DEVICE_NOT_CONNECTED; }
+
 // XamContentCreateDeviceEnumerator(content_type, content_flags, max_count, buffer_size*, handle*): an empty
 // enumerator of X_CONTENT_DEVICE_DATA (0x50 bytes) items.
 uint32_t XamContentCreateDeviceEnumerator(GuestCall& c, uint32_t /*content_type*/, uint32_t /*content_flags*/,
@@ -501,6 +504,7 @@ LR_KERNEL(XamUserGetName);
 LR_KERNEL(XamUserGetSigninInfo);
 LR_KERNEL(XamUserReadProfileSettings);
 LR_KERNEL(XamContentGetDeviceState);
+LR_KERNEL(XamContentGetDeviceData);
 LR_KERNEL(XamContentCreateDeviceEnumerator);
 LR_KERNEL(XamContentGetLicenseMask);
 LR_KERNEL_STUB(XamIsUIActive, 0);  // no system UI (guide, dialogs) ever opens in M2

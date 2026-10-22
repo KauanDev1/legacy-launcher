@@ -141,6 +141,10 @@ TEST_CASE("enumerator returns items then no more files", "[unit][kernel][xam]") 
     const uint32_t ov = f.alloc(sizeof(XAM_OVERLAPPED));
     CHECK(f.call("XamContentGetDeviceState", 1u, ov) == ERROR_IO_PENDING);
     CHECK(rd(f, ov) == ERROR_DEVICE_NOT_CONNECTED);
+    const uint32_t dev = f.alloc(0x50);
+    wr(f, dev, 0xABABABAB);
+    CHECK(f.call("XamContentGetDeviceData", 1u, dev) == ERROR_DEVICE_NOT_CONNECTED);  // no storage device either
+    CHECK(rd(f, dev) == 0xABABABABu);
     const uint32_t mask = f.alloc(4);
     CHECK(f.call("XamContentGetLicenseMask", mask, 0u) == ERROR_SUCCESS);
     CHECK(rd(f, mask) == 0xFFFFFFFFu);
