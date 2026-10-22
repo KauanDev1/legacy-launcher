@@ -507,6 +507,8 @@ LR_KERNEL(XamContentGetDeviceState);
 LR_KERNEL(XamContentGetDeviceData);
 LR_KERNEL(XamContentCreateDeviceEnumerator);
 LR_KERNEL(XamContentGetLicenseMask);
+LR_KERNEL_STUB(XamVoiceIsActiveProcess, 0);  // voice chat is not active in this process (offline, no voice)
+LR_KERNEL_STUB(XamVoiceHeadsetPresent, 0);   // no headset on any controller port
 LR_KERNEL_STUB(XamIsUIActive, 0);  // no system UI (guide, dialogs) ever opens in M2
 LR_KERNEL(XamShowDirtyDiscErrorUI);
 LR_KERNEL_STUB(XamInputGetCapabilities, ERROR_DEVICE_NOT_CONNECTED);  // no controller until input lands (M4)

@@ -377,6 +377,12 @@ TEST_CASE("XNetGet*XnAddr report no network address (offline)", "[unit][kernel][
   CHECK(f.mem.translate<uint8_t>(addr)[35] == 0);
 }
 
+TEST_CASE("voice chat: inactive, no headset", "[unit][kernel][xam]") {
+  KernelFixture f;
+  CHECK(f.call("XamVoiceIsActiveProcess") == 0);
+  CHECK(f.call("XamVoiceHeadsetPresent", 0u) == 0);
+}
+
 TEST_CASE("XMsg requests to the XAM app (0xFE) complete at once", "[unit][kernel][xam]") {
   KernelFixture f;
   constexpr uint32_t kXamApp = 0xFE, kXFail = 0x80004005, kXNotFound = 0x80070490;
