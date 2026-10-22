@@ -7,14 +7,17 @@
 //      (translator_export.cpp), the register array;
 //   2. main's entry block: the buffer pointers (load_contract_pointers), the register array and export variables set
 //      to zero, the stage prologue (VS r0.x = vertex index; PS r0..r15 from the interpolators, param_gen);
-//   3. emit_control_flow(): the CF program, which runs exec clauses through emit_alu()/emit_fetch();
+//   3. emit_control_flow() (translator_cf.cpp): the CF state in the entry block (p0, the loop/call stacks, pc), then
+//      the CF program (straight-line blocks or the pc-switch loop), which runs exec clauses through
+//      emit_alu()/emit_fetch(); the current block afterwards is the one the program leaves through;
 //   4. the stage epilogue (translator_export.cpp): exports to outputs, position transform, alpha test, final kill.
-// Values that must dominate every later block (buffer pointers) are made in step 2, so the CF of Task 15.5 can put
+// Values that must dominate every later block (buffer pointers, CF state) are made in step 2/3, so the CF can put
 // the clauses in any blocks.
 //
-// Where later tasks plug in: emit_control_flow/emit_exec_clause (15.5, translator_cf.cpp), emit_vector_op and the
-// scalar unit in emit_alu (15.6/15.7, translator_alu.cpp), emit_fetch (15.8/15.9, translator_fetch.cpp). They report
-// what they cannot translate with unsupported().
+// Where later tasks plug in: emit_vector_op and the scalar unit in emit_alu (15.6/15.7, translator_alu.cpp; the
+// scalar PRED_SET*s are in translator_cf.cpp until then), emit_fetch (15.8/15.9, translator_fetch.cpp; a predicated
+// fetch evaluates unconditionally and merges with OpSelect on pred_matches()). They report what they cannot translate
+// with unsupported().
 #pragma once
 
 #include <array>
@@ -58,7 +61,7 @@ class Translator {
 
   // --- types, constants, globals (translator.cpp) ---
   struct Types {
-    Id void_ = 0, bool_ = 0, f32 = 0, u32 = 0, i32 = 0, vec2 = 0, vec4 = 0, bvec4 = 0, uvec2 = 0;
+    Id void_ = 0, bool_ = 0, f32 = 0, u32 = 0, i32 = 0, vec2 = 0, vec4 = 0, bvec4 = 0, uvec2 = 0, uvec4 = 0, ivec4 = 0;
   };
   Id const_f(float v) { return b_.constant_f32(v); }
   Id const_u(uint32_t v) { return b_.constant_u32(v); }
@@ -75,6 +78,8 @@ class Translator {
   void load_contract_pointers();             // main's entry block
   Id load_float_constant(Id index);          // this stage's c<index> (index: a u32 value)
   Id load_shared(uint32_t contract_offset);  // a scalar or float4 member of the shared block, by its offset
+  // Element `index` (a constant < 32) of a uint array member of the shared block (bools, loops, index tables).
+  Id load_shared_u32(uint32_t contract_offset, uint32_t index);
 
   // --- registers (translator.cpp) ---
   Id reg_ptr(Id index);  // index: a u32 value < reg_count_
@@ -82,18 +87,43 @@ class Translator {
   // `value` where bit i of `mask` is set, `old_value` elsewhere.
   Id merge_masked(Id old_value, Id value, uint32_t mask);
   void store_reg_masked(uint32_t index, Id value, uint32_t mask);
+  void store_reg_masked_at(Id index, Id value, uint32_t mask);  // index: a u32 value < reg_count_
+  // r<reg> or, with `relative`, r[aL + reg]: the u32 register index (relative ones clamped to 0..kMaxTemps-1).
+  Id temp_index(uint32_t reg, bool relative);
 
   // --- kill (PS) ---
   // ORs `condition` into the killed flag; main ends with OpKill when it is set (never a mid-shader OpKill, so later
   // fetches keep their derivatives).
   void kill_if(Id condition);
 
-  // --- control flow (translator.cpp; Task 15.5 replaces it in translator_cf.cpp) ---
+  // --- control flow (translator_cf.cpp) ---
+  // The CF state (p0, the loop and call stacks, pc) in main's entry block, then the program: straight-line structured
+  // blocks without jumps, calls or loops, otherwise the pc-switch loop. The epilogue follows in the current block.
   Result<void> emit_control_flow();
   Result<void> emit_exec_clause(uint32_t cf_index, const CfInstr& c);
+  // `body` inside `if (cond) { ... }` (a selection construct); the current block is the merge block afterwards.
+  template <class Body>
+  Result<void> emit_if(Id cond, Body&& body) {
+    const Id then_block = b_.new_block();
+    const Id merge = b_.new_block();
+    b_.selection_merge(merge);
+    b_.branch_conditional(cond, then_block, merge);
+    b_.set_block(then_block);
+    LR_TRY(body());
+    b_.branch(merge);
+    b_.set_block(merge);
+    return {};
+  }
+  Id pred_matches(bool condition);  // p0 == condition (for predicated instructions; fetches merge with OpSelect)
+  Id bool_matches(uint32_t bool_index, bool condition);  // bool constant == condition
+  Id current_al();                                       // aL (i32)
+  // A scalar PRED_SET{EQ,NE,GT,GE}s: the scalar result, and the new p0 (stored by the caller once the instruction's
+  // writes are done). The rest of the scalar unit is Task 15.7.
+  Result<std::pair<Id, Id>> emit_scalar_pred_set(uint32_t slot, const AluInstr& a);
 
   // --- ALU (translator.cpp; Tasks 15.6/15.7 move it to translator_alu.cpp) ---
-  Result<void> emit_alu(uint32_t slot, const AluInstr& a);
+  Result<void> emit_alu(uint32_t slot, const AluInstr& a);  // predicated instructions run under an emit_if
+  Result<void> emit_alu_unpredicated(uint32_t slot, const AluInstr& a);
   Result<Id> emit_vector_op(uint32_t slot, const AluInstr& a);
   Result<Id> load_source(uint32_t slot, const AluInstr& a, uint32_t i);
 
@@ -137,6 +167,16 @@ class Translator {
   Id depth_out_ = 0, frag_coord_in_ = 0, front_facing_in_ = 0, point_coord_in_ = 0;
   Id killed_ = 0;      // PS: Function bool, 0 when nothing can kill
   Id spec_alpha_ = 0;  // PS: spec constant 0
+
+  // control flow state (Function variables, set in main's entry block; see translator_cf.cpp)
+  Id p0_ = 0;           // bool predicate
+  Id al_stack_ = 0;     // ivec4: x = aL, yzw = the saved aL of the enclosing loops (0 without loops or relative temps)
+  Id loop_counts_ = 0;  // uvec4: x = iterations left in the innermost loop, yzw = the enclosing loops
+  Id call_stack_ = 0;   // uvec4: x = the latest return address (a CF index)
+  Id call_depth_ = 0;   // u32: 0..4
+  Id pc_ = 0;           // u32: the next CF index, kPcEnd when the shader is done
+  Id backward_ = 0;     // u32: backward branches taken (kCfBackwardBranchCap)
+  Id ended_ = 0;        // straight-line form only: a conditional exec_end ended the shader
   std::optional<Error> internal_error_;  // see record_internal()
 };
 

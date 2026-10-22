@@ -696,13 +696,38 @@ modificadores no M3. `TranslateOptions` tem exatamente esses campos decodificado
 **Kill e derivadas**: um `kill` liga uma flag local; o `main` termina com `OpKill` só se ela estiver ligada (o alpha
 test usa a mesma flag). Nunca há `OpKill` no meio do shader, então fetches posteriores mantêm as derivadas do quad.
 
+**Controle de fluxo** (`translator_cf.cpp`): um programa sem saltos, chamadas ou laços
+(`!has_jumps_calls_or_loops`) vira blocos estruturados em linha reta: cada cláusula condicional fica dentro de um
+`if`, e um `exec_end` condicional liga uma flag `ended` que protege as cláusulas seguintes. Os demais viram um laço
+estruturado em volta de um `OpSwitch` sobre um `pc` local, com um caso por índice de CF que é 0, alvo de desvio ou
+vem logo depois de um desvio; o caso executa as instruções até o próximo caso ou até um desvio, que escreve o `pc`.
+`exec_end`, `return` com profundidade de chamada 0 e um `pc` além do fim terminam o laço; o epílogo (exportações e o
+`OpKill` final) fica no bloco de saída. Estado local:
+- o predicado `p0` começa falso e persiste entre cláusulas; `cond_exec_pred*`, `cond_jmp`/`cond_call` predicados, a
+  saída predicada do `loop_end` e as instruções predicadas comparam `p0` com a condição. Uma instrução da ALU
+  predicada é pulada com um desvio; um fetch predicado será avaliado sempre e mesclado com `OpSelect` (Tarefa 15.8);
+- `cond_exec` e `cond_exec_pred_clean` testam o booleano `b` (bit `b % 32` da palavra `b / 32`);
+- pilhas de profundidade 4 (vetores deslocados, nunca indexados): contagem do laço, `aL` e endereço de retorno. Um
+  empilhamento além de 4 descarta a entrada mais externa. `loop_start` com contagem 0 salta para o alvo; senão
+  empilha a contagem e o `aL` inicial (bits 8..15 da constante, ou o `aL` atual com `is_repeat`). `loop_end`
+  decrementa a contagem e soma o passo com sinal (bits 16..23) ao `aL`, e sai quando a contagem chega a 0 ou, com
+  `is_predicated_break`, quando `p0 == pred_break_condition`. Sair desempilha, o que restaura o `aL` do laço externo;
+  um `cond_jmp` de dentro do corpo para fora desempilha uma vez por laço que deixa (corpos casados estaticamente), de
+  modo que o `aL` é restaurado em toda saída (o Xenia não restaura nesse caso);
+- temporários relativos `r[aL+n]` (fontes e destinos) usam o array de 64 registradores, com o índice limitado a
+  0..63;
+- **limite de iterações** (`kCfBackwardBranchCap` = 2^20 por invocação): só desvios para trás contam (volta do
+  `loop_end`, `jmp`/`call` para trás, `return` para um índice anterior). Ao atingir o limite, o desvio não é seguido e
+  o shader termina com as saídas escritas até ali, então microcódigo do convidado nunca trava a GPU. Três laços
+  aninhados de 255 iterações (255^3 ≈ 1,66·10^7) já passam do limite, e quatro (255^4) também.
+
 **Limites conhecidos do M3** (falham alto, salvo onde indicado): exportação de memória; o tamanho de ponto exportado
 é descartado (informado em `ShaderInfo`); fetches com LOD implícito dentro de um caso do `switch` de pc alcançado por
 um `cond_jmp` que depende de predicado podem perder as derivadas; o z do `param_gen` vale 0 para linhas, onde o Xenia
-põe -0,0 (o bit de sinal marca linha), porque a chave não tem flag de linha (silencioso). Na Tarefa 15.4 o tradutor só aceita `exec` e
-`exec_end` em linha reta e as operações vetoriais `MAX`, `ADD` e `MUL`; o resto (controle de fluxo, demais operações
-da ALU, unidade escalar, fetch, endereçamento relativo, predicados) é um erro `is not supported` até as Tarefas
-15.5 a 15.9.
+põe -0,0 (o bit de sinal marca linha), porque a chave não tem flag de linha (silencioso); laços que passam de 2^20
+desvios para trás terminam cedo (silencioso). Até a Tarefa 15.5 o tradutor aceita todo o controle de fluxo, as
+operações vetoriais `MAX`, `ADD` e `MUL` e, da unidade escalar, só `PRED_SETE/NE/GT/GTEs`; o resto (demais operações
+da ALU e escalares, fetch, constantes relativas) é um erro `is not supported` até as Tarefas 15.6 a 15.9.
 
 ## Diagnóstico
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-// The translator's driver: module setup, the runtime contract (contract.h), the register array, and for now the
-// straight-line control flow and the first vector ops (Task 15.4). Xenos semantics per Xenia's shader translators
-// (reference only, nothing copied).
+// The translator's driver: module setup, the runtime contract (contract.h), the register array (aL-relative temps
+// included), and for now the first vector ops (Task 15.4). Control flow is translator_cf.cpp. Xenos semantics per
+// Xenia's shader translators (reference only, nothing copied).
 #include "runtime/gpu/shader/translator.h"
 
 #include <spirv/unified1/GLSL.std.450.h>
@@ -189,6 +189,20 @@ Id Translator::load_shared(uint32_t contract_offset) {
   return const_u(0);
 }
 
+Id Translator::load_shared_u32(uint32_t contract_offset, uint32_t index) {
+  for (uint32_t m = 0; m < shared_members_.size(); ++m) {
+    if (shared_members_[m].first != contract_offset) continue;
+    const uint32_t length = contract_offset == kSharedBools ? 8 : 32;
+    if (index >= length) break;
+    const Id ptr = b_.op(spv::OpAccessChain, b_.type_pointer(spv::StorageClassPhysicalStorageBuffer, t_.u32),
+                         {shared_, const_u(m), const_u(index)});
+    return b_.op(spv::OpLoad, t_.u32, {ptr, spv::MemoryAccessAlignedMask, 4});
+  }
+  record_internal("load_shared_u32: " + std::to_string(contract_offset) + "[" + std::to_string(index) +
+                  "] is not a shared-block array element");
+  return const_u(0);
+}
+
 // --- registers ----------------------------------------------------------------------------------------------------
 
 Id Translator::reg_ptr(Id index) {
@@ -205,9 +219,23 @@ Id Translator::merge_masked(Id old_value, Id value, uint32_t mask) {
 }
 
 void Translator::store_reg_masked(uint32_t index, Id value, uint32_t mask) {
-  const Id ptr = reg_ptr(const_u(index));
+  store_reg_masked_at(const_u(index), value, mask);
+}
+
+void Translator::store_reg_masked_at(Id index, Id value, uint32_t mask) {
+  const Id ptr = reg_ptr(index);
   if ((mask & 0xF) != 0xF) value = merge_masked(b_.op(spv::OpLoad, t_.vec4, {ptr}), value, mask);
   b_.op_void(spv::OpStore, {ptr, value});
+}
+
+Id Translator::temp_index(uint32_t reg, bool relative) {
+  if (!relative) return const_u(reg);
+  // r[aL + reg]: the register array has kMaxTemps entries whenever a temporary is relative, and the index is
+  // clamped into it (planner's call; the hardware register file size is not keyed).
+  const Id sum = b_.op(spv::OpIAdd, t_.i32, {current_al(), b_.constant_i32(static_cast<int32_t>(reg))});
+  const Id clamped =
+      glsl(t_.i32, GLSLstd450SClamp, {sum, b_.constant_i32(0), b_.constant_i32(static_cast<int32_t>(kMaxTemps - 1))});
+  return b_.op(spv::OpBitcast, t_.u32, {clamped});
 }
 
 void Translator::kill_if(Id condition) {
@@ -215,50 +243,16 @@ void Translator::kill_if(Id condition) {
   b_.op_void(spv::OpStore, {killed_, b_.op(spv::OpLogicalOr, t_.bool_, {k, condition})});
 }
 
-// --- control flow: straight-line exec clauses (Task 15.5 replaces this) --------------------------------------------
-
-Result<void> Translator::emit_control_flow() {
-  for (uint32_t i = 0; i < program_.cf.size(); ++i) {
-    const CfInstr& c = program_.cf[i];
-    switch (c.op) {
-      case CfOp::Nop:
-      case CfOp::Alloc:
-      case CfOp::MarkVsFetchDone:
-        break;
-      case CfOp::Exec:
-      case CfOp::ExecEnd:
-        LR_TRY(emit_exec_clause(i, c));
-        if (c.op == CfOp::ExecEnd) return {};
-        break;
-      default:
-        return unsupported(i, "cf " + std::string(cf_op_name(c.op)), cf_op_name(c.op));
-    }
-  }
-  return {};
-}
-
-Result<void> Translator::emit_exec_clause(uint32_t, const CfInstr& c) {
-  for (uint32_t k = 0; k < c.count; ++k) {
-    const uint32_t slot = c.address + k;
-    if (slot >= program_.slots.size()) return internal("exec clause slot past the decoded slots");
-    const auto& s = program_.slots[slot];
-    if (const auto* a = std::get_if<AluInstr>(&s))
-      LR_TRY(emit_alu(slot, *a));
-    else
-      LR_TRY(emit_fetch(slot, std::get<FetchInstr>(s)));
-  }
-  return {};
-}
-
-// --- ALU: MAX (mov), ADD, MUL; no scalar unit yet (Tasks 15.6/15.7) ------------------------------------------------
+// --- ALU: MAX (mov), ADD, MUL; of the scalar unit only PRED_SET*s (Tasks 15.6/15.7) ----------------------------------
 
 Result<Id> Translator::load_source(uint32_t slot, const AluInstr& a, uint32_t i) {
   const AluSource& s = a.src[i];
   Id v = 0;
   if (s.is_temp) {
-    if (a.is_src_temp_relative[i]) return unsupported(slot, "alu", "an aL-relative temporary source");
-    if (s.reg >= reg_count_) return internal("source register past the register array");
-    v = load_reg(s.reg);
+    const bool relative = a.is_src_temp_relative[i];
+    if (relative ? reg_count_ != kMaxTemps : s.reg >= reg_count_)
+      return internal("source register past the register array");
+    v = b_.op(spv::OpLoad, t_.vec4, {reg_ptr(temp_index(s.reg, relative))});
   } else {
     if (s.const_relative) return unsupported(slot, "alu", "relative constant addressing");
     v = load_float_constant(const_u(s.reg));
@@ -309,22 +303,48 @@ Result<Id> Translator::emit_vector_op(uint32_t slot, const AluInstr& a) {
 }
 
 Result<void> Translator::emit_alu(uint32_t slot, const AluInstr& a) {
-  if (a.predicated) return unsupported(slot, "alu", "predicated execution");
+  // A predicated instruction runs when p0 == pred_condition: a branch around it (only fetches must avoid the branch,
+  // for their derivatives; Task 15.8 evaluates them unconditionally and merges with OpSelect).
+  if (!a.predicated) return emit_alu_unpredicated(slot, a);
+  return emit_if(pred_matches(a.pred_condition), [&] { return emit_alu_unpredicated(slot, a); });
+}
+
+Result<void> Translator::emit_alu_unpredicated(uint32_t slot, const AluInstr& a) {
   const uint32_t vector_mask = a.export_data ? a.export_vector_mask : a.vector_write_mask;
   const uint32_t scalar_mask = a.export_data ? a.export_scalar_mask : a.scalar_write_mask;
-  if (scalar_mask != 0 || scalar_op_has_side_effect(a.scalar_op))
+  const bool scalar_issued = scalar_mask != 0 || scalar_op_has_side_effect(a.scalar_op);
+  if (scalar_issued && !(a.scalar_op >= ScalarOp::PredSetEq && a.scalar_op <= ScalarOp::PredSetGe))
     return unsupported(slot, "alu", "scalar op " + std::string(scalar_op_name(a.scalar_op)));
+  // Both units read their sources before either writes.
   Id vector_result = 0;
   if (vector_mask != 0 || vector_op_has_side_effect(a.vector_op)) {
     LR_TRY_ASSIGN(v, emit_vector_op(slot, a));
     vector_result = v;
   }
-  if (a.export_data) return emit_export(slot, a, vector_result, 0);
-  if (a.vector_write_mask != 0) {
-    if (a.vector_dest_rel) return unsupported(slot, "alu", "an aL-relative destination");
-    if (a.vector_dest >= reg_count_) return internal("destination register past the register array");
-    store_reg_masked(a.vector_dest, vector_result, a.vector_write_mask);
+  Id scalar_result = 0;
+  Id new_p0 = 0;
+  if (scalar_issued) {
+    LR_TRY_ASSIGN(s, emit_scalar_pred_set(slot, a));
+    scalar_result = s.first;
+    new_p0 = s.second;
   }
+  if (a.export_data) {
+    LR_TRY(emit_export(slot, a, vector_result, scalar_result));
+  } else {
+    const auto store = [&](uint32_t reg, bool relative, Id value, uint32_t mask) -> Result<void> {
+      if (relative ? reg_count_ != kMaxTemps : reg >= reg_count_)
+        return internal("destination register past the register array");
+      store_reg_masked_at(temp_index(reg, relative), value, mask);
+      return {};
+    };
+    if (a.vector_write_mask != 0) LR_TRY(store(a.vector_dest, a.vector_dest_rel, vector_result, a.vector_write_mask));
+    if (a.scalar_write_mask != 0) {
+      const Id s = scalar_result;
+      const Id splat = b_.op(spv::OpCompositeConstruct, t_.vec4, {s, s, s, s});
+      LR_TRY(store(a.scalar_dest, a.scalar_dest_rel, splat, a.scalar_write_mask));
+    }
+  }
+  if (new_p0) b_.op_void(spv::OpStore, {p0_, new_p0});
   return {};
 }
 
@@ -353,6 +373,8 @@ Result<TranslatedShader> Translator::run() {
   t_.vec4 = b_.type_vector(t_.f32, 4);
   t_.bvec4 = b_.type_vector(t_.bool_, 4);
   t_.uvec2 = b_.type_vector(t_.u32, 2);
+  t_.uvec4 = b_.type_vector(t_.u32, 4);
+  t_.ivec4 = b_.type_vector(t_.i32, 4);
 
   declare_contract();
   declare_stage_interface();
