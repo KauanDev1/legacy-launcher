@@ -132,6 +132,14 @@ TEST_CASE("enumerator returns items then no more files", "[unit][kernel][xam]") 
     CHECK(f.call("XamEnumerate", handle, 0u, buf, 16u, count, 0u) == ERROR_NO_MORE_FILES);
     CHECK(f.call("NtClose", handle) == STATUS_SUCCESS);
   }
+  SECTION("XamUserCreateAchievementEnumerator: no achievements") {
+    const uint32_t size = f.alloc(4), out = f.alloc(4);
+    // (title_id, user_index, xuid, flags, offset, count, buffer_size*, handle*)
+    REQUIRE(f.call("XamUserCreateAchievementEnumerator", 0u, 0u, 0ull, 0x20u, 0u, 2u, size, out) == ERROR_SUCCESS);
+    CHECK(rd(f, size) == 2 * 0x24u);
+    CHECK(f.call("XamEnumerate", rd(f, out), 0u, buf, 0x48u, count, 0u) == ERROR_NO_MORE_FILES);
+    CHECK(f.call("XamUserCreateAchievementEnumerator", 0u, 4u, 0ull, 0x20u, 0u, 2u, size, out) == ERROR_INVALID_PARAMETER);
+  }
   SECTION("XamContentCreateDeviceEnumerator: no storage devices") {
     const uint32_t size = f.alloc(4), out = f.alloc(4);
     REQUIRE(f.call("XamContentCreateDeviceEnumerator", 1u, 0u, 4u, size, out) == ERROR_SUCCESS);
