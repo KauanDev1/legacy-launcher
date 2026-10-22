@@ -40,7 +40,7 @@ Le jeu n'est pas encore jouable. Rien ne s'affiche à l'écran.
 |---|---|---|
 | M1 | Pipeline du disque à l'exécutable natif, squelette du runtime | Terminé |
 | M2 | Émulation du noyau : mémoire, threads, fichiers, synchronisation | Terminé |
-| M3 | Graphismes : rendu Vulkan, shaders traduits avec XenosRecomp | Prochaine étape |
+| M3 | Graphismes : rendu Vulkan, shaders traduits à l'exécution | Prochaine étape |
 | M4 | Audio, manettes, sauvegardes | Prévu |
 | M5 | Jouable : menu principal et mondes | Prévu |
 
@@ -166,7 +166,7 @@ Vous devez posséder Minecraft: Xbox 360 Edition et réaliser vous-même l'image
 
 ## Remerciements
 
-- [hedge-dev](https://github.com/hedge-dev), pour XenonRecomp et XenosRecomp, ainsi que pour UnleashedRecomp, qui nous sert de référence sur l'organisation d'un jeu recompilé.
+- [hedge-dev](https://github.com/hedge-dev), pour XenonRecomp, ainsi que pour UnleashedRecomp, qui nous sert de référence sur l'organisation d'un jeu recompilé.
 - L'équipe de [Xenia](https://github.com/xenia-project/xenia), dont l'émulateur est la meilleure documentation publique sur le fonctionnement interne de la Xbox 360.
 - Le wiki [free60](https://free60.org), pour ses notes sur les formats de fichiers de la console.
 - [Dear ImGui](https://github.com/ocornut/imgui), [SDL](https://www.libsdl.org), [Catch2](https://github.com/catchorg/Catch2) et [toml++](https://github.com/marzer/tomlplusplus).

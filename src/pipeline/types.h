@@ -11,7 +11,7 @@ namespace lr::pipeline {
 
 namespace fs = std::filesystem;
 
-enum class StageId { Doctor, Extract, Verify, Patch, Analyse, Recompile, Shaders, Build };
+enum class StageId { Doctor, Extract, Verify, Patch, Analyse, Recompile, Build };
 
 std::string_view stage_name(StageId id);
 std::optional<StageId> parse_stage(std::string_view name);

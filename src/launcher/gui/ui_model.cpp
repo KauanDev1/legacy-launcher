@@ -17,8 +17,6 @@ StageText stage_text(pipeline::StageId id) {
     case pipeline::StageId::Patch: return {"Aplicar a atualização", "Aplica a atualização do título ao executável"};
     case pipeline::StageId::Analyse: return {"Analisar o executável", "Localiza funções e tabelas de salto"};
     case pipeline::StageId::Recompile: return {"Gerar o código C++", "Recompila o código PowerPC para C++"};
-    case pipeline::StageId::Shaders:
-      return {"Traduzir os shaders", "Converte os shaders gráficos do jogo para o formato do Vulkan"};
     case pipeline::StageId::Build: return {"Compilar o jogo", "Compila o executável nativo para Linux"};
   }
   return {"?", ""};
@@ -64,18 +62,6 @@ std::string stage_message(pipeline::StageId id, std::string_view raw) {
         const std::string_view pct = raw.substr(pos + kPrefix.size());
         if (!pct.empty() && pct.back() == '%' && pct.find(' ') == std::string_view::npos)
           return "Recompilando funções… " + std::string(pct);
-      }
-      break;
-    }
-    case StageId::Shaders: {
-      constexpr std::string_view kPrefix = "translated ";
-      constexpr std::string_view kOf = " of ";
-      if (raw.starts_with(kPrefix)) {
-        const std::string_view rest = raw.substr(kPrefix.size());
-        const auto of = rest.find(kOf);
-        if (of != std::string_view::npos && all_digits(rest.substr(0, of)) && all_digits(rest.substr(of + kOf.size())))
-          return std::string(rest.substr(0, of)) + " de " + std::string(rest.substr(of + kOf.size())) +
-                 " shaders traduzidos";
       }
       break;
     }

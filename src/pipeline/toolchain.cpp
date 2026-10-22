@@ -18,11 +18,6 @@ constexpr std::string_view kInstallHint =
     "sudo apt install clang cmake ninja-build libsdl2-dev pkg-config\n"
     "sudo dnf install clang cmake ninja-build SDL2-devel pkgconf";
 
-constexpr std::string_view kDxcHint =
-    "sudo pacman -S --needed directx-shader-compiler\n"
-    "other distributions: install the DirectX Shader Compiler (a package named directx-shader-compiler where it exists, "
-    "else the Linux release from github.com/microsoft/DirectXShaderCompiler) so that `dxc` is on PATH";
-
 constexpr const char* kCorruptedHint =
     "the toolchain bundled with LegacyRecomp is incomplete: the AppImage looks corrupted or truncated; download it "
     "again (or rebuild it with packaging/appimage/build.sh)";
@@ -39,24 +34,6 @@ bool is_executable_file(const fs::path& p) {
 }  // namespace
 
 std::string_view system_toolchain_hint() { return kInstallHint; }
-
-std::string_view system_dxc_hint() { return kDxcHint; }
-
-Result<void> check_bundled_dxc(const fs::path& resources) {
-  const fs::path base = resources / "toolchain" / "dxc";
-  const fs::path dxc = base / "bin" / "dxc";
-  const fs::path lib = base / "lib" / "libdxcompiler.so";
-  std::error_code ec;
-  for (const fs::path& p : {dxc, lib}) {
-    const bool ok = (p == dxc) ? is_executable_file(p) : fs::is_regular_file(p, ec);
-    if (!ok)
-      return Error{ErrorCode::ToolMissing, "bundled DXC file missing: " + p.string(),
-                   "the DirectX Shader Compiler is not bundled in this build (the AppImage does not ship it yet, "
-                   "docs/adr/0005-m3-plan-deviations.md); install the directx-shader-compiler package and use a "
-                   "source install, or rebuild the AppImage when it does"};
-  }
-  return {};
-}
 
 bool has_bundled_toolchain(const fs::path& resources) {
   std::error_code ec;

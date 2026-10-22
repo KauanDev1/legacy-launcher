@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
-# Tests cmake/LrSubmodulePatches.cmake (lr_apply_submodule_patches) for both patched submodules, XenonRecomp and
-# XenosRecomp: against the real submodule and its real patch dir (missing or empty dir = no patches), and against a
+# Tests cmake/LrSubmodulePatches.cmake (lr_apply_submodule_patches) for the patched submodule, XenonRecomp,
+# against the real submodule and its real patch dir (missing or empty dir = no patches), and against a
 # synthetic submodule: a good patch, re-configure detection (changed patch and source, a patched file deleted from the
 # copy), a patch that does not apply, and a patch that git applies with exit 0 but does not report as "Applied patch
 # <file> cleanly." (the guard against an unpatched build).
@@ -63,7 +63,7 @@ rename to c.txt
   return()
 endif()
 
-foreach(name XenonRecomp XenosRecomp)
+foreach(name XenonRecomp)
   string(TOUPPER "${name}" up)
   string(TOLOWER "${name}" low)
   set(hash_var LR_${up}_PATCH_HASH)

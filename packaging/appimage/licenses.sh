@@ -62,7 +62,6 @@ Vulkan-Headers (1.4.309)           Apache-2.0                                not
 toml++                             MIT                                       launchers, XenonRecomp
 {fmt}                              MIT                                       launchers, tools
 xxHash (library)                   BSD-2-Clause                              XenonRecomp; runtime (inline XXH3)
-Zstandard (decompression only)     BSD-3-Clause                              runtime/lib/liblr_zstd.a (game)
 SIMD Everywhere (simde)            MIT                                       runtime/include/simde (headers)
 libmspack (lzxd.c only)            LGPL-2.1                                  launchers, tools (static), see note 2
 tiny-AES-c                         Unlicense                                 launchers, tools (in XenonUtils)
@@ -131,7 +130,6 @@ section "Vulkan-Headers (Apache-2.0)" "$repo/thirdparty/Vulkan-Headers/LICENSES/
 section "toml++ (MIT)" "$tp/tomlplusplus/LICENSE"
 section "{fmt} (MIT)" "$tp/fmt/LICENSE"
 section "xxHash library (BSD-2-Clause)" "$tp/xxHash/LICENSE"
-section "Zstandard (BSD-3-Clause), decompression in the game runtime" "$repo/thirdparty/XenosRecomp/thirdparty/zstd/LICENSE"
 section "SIMD Everywhere (MIT)" "$tp/simde/COPYING"
 section "tiny-AES-c (Unlicense)" "$tp/tiny-AES-c/unlicense.txt"
 printf '\n\nTinySHA1 (ISC-style)\n====================\n\n--- notice from thirdparty/XenonRecomp/thirdparty/TinySHA1/TinySHA1.hpp ---\n\n'

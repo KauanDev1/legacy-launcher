@@ -17,8 +17,7 @@ constexpr uint64_t kGiB = 1024ull * 1024 * 1024;
 struct FakeProbe : DoctorProbe {
   std::map<std::string, std::string> tools{{"clang++", "clang version 18.1.8"},
                                            {"cmake", "cmake version 3.28.3"},
-                                           {"ninja", "1.11.1"},
-                                           {"dxc", "dxcompiler.so: 1.10"}};
+                                           {"ninja", "1.11.1"}};
   uint64_t free = 100 * kGiB, ram = 16 * kGiB;
   bool sdl2 = true;
   fs::path asked;
@@ -73,15 +72,12 @@ TEST_CASE("doctor rejects old clang and cmake", "[unit]") {
   CHECK(r.error().message.find("3.25") != std::string::npos);
 }
 
-TEST_CASE("doctor reports missing dxc with the install hint", "[unit]") {
+TEST_CASE("doctor does not require dxc", "[unit]") {
   FakeProbe p;
-  p.tools.erase("dxc");
+  REQUIRE(p.tools.count("dxc") == 0);  // plan B: nothing compiles shaders at install time (ADR 0005 M8)
   auto r = run_doctor(p, "/tmp");
-  REQUIRE_FALSE(r);
-  CHECK(r.error().code == ErrorCode::ToolMissing);
-  CHECK(r.error().message.find("dxc") != std::string::npos);
-  CHECK(r.error().hint.find("directx-shader-compiler") != std::string::npos);
-  CHECK(r.error().hint.find("pacman -S --needed directx-shader-compiler") != std::string::npos);
+  REQUIRE(r);
+  CHECK(r.value().warnings.empty());
 }
 
 TEST_CASE("doctor requires ninja and sdl2", "[unit]") {

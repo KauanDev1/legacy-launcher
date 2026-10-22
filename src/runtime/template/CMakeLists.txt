@@ -4,14 +4,10 @@
 #   cmake -S <resources>/runtime/template -B <root>/work/build -G Ninja -DCMAKE_BUILD_TYPE=Release
 #         -DCMAKE_CXX_COMPILER=<clang++> -DCMAKE_MAKE_PROGRAM=<ninja> [-DCMAKE_PREFIX_PATH=<SDL2 prefix>]
 #         -DLR_RESOURCES=<resources> -DLR_GENERATED=<root>/work/generated
-#         -DLR_SHADER_CACHE=<root>/work/shaders/shader_cache.cpp
 # Compiler, ninja and SDL2 come from lr::pipeline::resolve_toolchain: the system clang++ and SDL2, or, in the
 # AppImage, <resources>/toolchain (zig c++ targeting glibc 2.31 and a static SDL2, see docs/packaging.md).
 # Inputs: LR_GENERATED holds ppc_config.h, ppc_context.h (copied there by XenonRecomp), ppc_recomp_shared.h,
 # ppc_recomp.*.cpp, ppc_func_mapping.cpp and import_stubs.cpp (the import thunks, written by the build stage).
-# LR_SHADER_CACHE is the shaders stage output (work/shaders/shader_cache.cpp, outside LR_GENERATED so a recompile does
-# not wipe it): a data table with the zstd blob, which main.cpp registers with the runtime's ShaderCache
-# (liblr_zstd.a decompresses it).
 cmake_minimum_required(VERSION 3.25)
 project(LegacyRecompGame LANGUAGES CXX)
 
@@ -37,9 +33,6 @@ find_package(Threads REQUIRED)
 
 set(_rt "${LR_RESOURCES}/runtime")
 file(GLOB _lr_recomp_sources CONFIGURE_DEPENDS "${LR_GENERATED}/ppc_recomp.*.cpp")
-if(NOT LR_SHADER_CACHE OR NOT EXISTS "${LR_SHADER_CACHE}")
-  message(FATAL_ERROR "LR_SHADER_CACHE must name the generated shader cache (got '${LR_SHADER_CACHE}'): run the shaders stage first")
-endif()
 if(NOT _lr_recomp_sources)
   message(FATAL_ERROR "no ppc_recomp.*.cpp in ${LR_GENERATED}: run the recompile stage first")
 endif()
@@ -48,7 +41,6 @@ add_executable(legacyrecomp-game
   "${_rt}/src/main.cpp"
   ${_lr_recomp_sources}
   "${LR_GENERATED}/ppc_func_mapping.cpp"
-  "${LR_SHADER_CACHE}"
   "${LR_GENERATED}/import_stubs.cpp")
 # Generated dir first: ppc_config.h / ppc_context.h must be the game's own.
 target_include_directories(legacyrecomp-game PRIVATE "${LR_GENERATED}" "${_rt}/include" "${_rt}/include/simde")
@@ -80,7 +72,7 @@ target_compile_options(legacyrecomp-game PRIVATE
 # deliberately not linked: the game never references it (ADR 0002, tripwire test no_gpl_disassembler_in_binaries).
 target_link_libraries(legacyrecomp-game PRIVATE
   "-Wl,--whole-archive" "${_rt}/lib/liblr_runtime_core.a" "-Wl,--no-whole-archive"
-  "${_rt}/lib/libXenonUtils.a" "${_rt}/lib/liblr_zstd.a"
+  "${_rt}/lib/libXenonUtils.a"
   SDL2::SDL2 Threads::Threads)
 set_target_properties(legacyrecomp-game PROPERTIES LINK_DEPENDS
-  "${_rt}/lib/liblr_runtime_core.a;${_rt}/lib/libXenonUtils.a;${_rt}/lib/liblr_zstd.a")
+  "${_rt}/lib/liblr_runtime_core.a;${_rt}/lib/libXenonUtils.a")

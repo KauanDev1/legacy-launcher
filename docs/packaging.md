@@ -93,32 +93,13 @@ O que o `build.sh` faz:
 O binário oficial do Ninja não serve: ele depende da `libstdc++.so.6` do sistema. Compilado com o zig, ele só
 depende da glibc.
 
-### DXC (compilador de shaders): fora do AppImage por enquanto
+### Compilador de shaders: nenhum
 
-O `XenosRecomp` (tradutor de microcódigo de shader do Xenos para HLSL e SPIR-V, ADR 0005) precisa do DXC
-(`dxc` e `libdxcompiler.so`). O release oficial da Microsoft (`linux_dxc_*.tar.gz`) **não serve** para o
-AppImage. Medido em 2026-10-19 dentro do contêiner de desenvolvimento, com `readelf -V --wide <arquivo> |
-grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1` (maior versão de símbolo da glibc exigida), igual para `dxc`
-e para `libdxcompiler.so`:
-
-| Release | Arquivo | Piso de glibc |
-|---|---|---|
-| v1.9.2609 | `linux_dxc_2026_09_28.x86_x64.tar.gz` | 2.38 |
-| v1.9.2602.24 | `linux_dxc_2026_05_26.x86_64.tar.gz` | 2.38 |
-| v1.10.2605.37 | `linux_dxc_2026_08_11.x86_64.tar.gz` | 2.38 |
-| v1.8.2505.1 | `linux_dxc_2025_07_14.x86_64.tar.gz` | 2.34 |
-| v1.8.2502 | `linux_dxc_2025_02_20.x86_64.tar.gz` | 2.34 |
-
-O piso do AppImage é 2.31. Além disso os dois arquivos dependem de `libstdc++.so.6`, `libgcc_s.so.1` e
-`libz.so.1`, que a verificação final do `build.sh` rejeita (só libc, libm, libdl, libpthread e librt). Por isso:
-
-- No desenvolvimento e nas instalações a partir do fonte usa-se o DXC do sistema (pacote
-  `directx-shader-compiler`; o `doctor` exige `dxc` no PATH). O `XenosRecomp` só é compilado quando o CMake
-  encontra `dxcapi.h` e `libdxcompiler.so`.
-- O AppImage ainda não leva o DXC: o `build.sh` compila com `-DLR_BUILD_XENOSRECOMP=OFF`, e o `doctor` em modo
-  embutido procura `toolchain/dxc/bin/dxc` e `toolchain/dxc/lib/libdxcompiler.so` e avisa que faltam.
-- Na Tarefa 24 do M3 o DXC será compilado de uma tag fixada do fonte (`microsoft/DirectXShaderCompiler`), com o
-  zig mirando glibc 2.31 e libc++ estática, e entrará em `toolchain.lock` e no layout acima.
+O AppImage não leva compilador de shaders e o `doctor` não exige um. O DXC saiu do projeto com o plano B (ADR 0005, M8):
+o runtime traduz o microcódigo do jogo para SPIR-V com código próprio, e os shaders internos do renderizador são
+compilados pelo `glslangValidator` do sistema na compilação do launcher (o `build.sh` conferirá a ferramenta e
+registrará a versão). O release oficial do DXC exigia glibc 2.34 a 2.38 e `libstdc++.so.6`, incompatível com o piso
+2.31 do AppImage; essa medição (2026-10-19) está no histórico do git, em `docs/packaging.md`.
 
 ## Layout do toolchain embutido
 

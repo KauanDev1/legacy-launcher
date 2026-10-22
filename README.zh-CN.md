@@ -40,7 +40,7 @@ LegacyRecomp 是自由软件，采用 MIT 许可证。欢迎任何形式的贡�
 |---|---|---|
 | M1 | 从光盘到原生可执行文件的完整流程，运行时骨架 | 已完成 |
 | M2 | 内核模拟：内存、线程、文件、同步 | 已完成 |
-| M3 | 图形：Vulkan 渲染器，用 XenosRecomp 翻译着色器 | 下一步 |
+| M3 | 图形：Vulkan 渲染器，运行时翻译着色器 | 下一步 |
 | M4 | 音频、手柄输入、存档 | 计划中 |
 | M5 | 可游玩：主菜单和世界 | 计划中 |
 
@@ -166,7 +166,7 @@ LegacyRecomp 与 Mojang Studios、Microsoft 和 4J Studios 没有任何关联，
 
 ## 致谢
 
-- [hedge-dev](https://github.com/hedge-dev)：XenonRecomp 和 XenosRecomp，以及 UnleashedRecomp。我们把 UnleashedRecomp 作为重编译游戏如何组织的参考。
+- [hedge-dev](https://github.com/hedge-dev)：XenonRecomp，以及 UnleashedRecomp。我们把 UnleashedRecomp 作为重编译游戏如何组织的参考。
 - [Xenia](https://github.com/xenia-project/xenia) 团队：他们的模拟器是关于 Xbox 360 内部机制最好的公开资料。
 - [free60](https://free60.org) wiki：关于主机文件格式的资料。
 - [Dear ImGui](https://github.com/ocornut/imgui)、[SDL](https://www.libsdl.org)、[Catch2](https://github.com/catchorg/Catch2) 和 [toml++](https://github.com/marzer/tomlplusplus)。

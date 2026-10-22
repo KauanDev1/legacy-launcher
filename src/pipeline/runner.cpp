@@ -12,7 +12,7 @@ Result<void> run_stages(std::span<Stage* const> stages, StageContext& ctx, State
     if (forced) dirty = true;
 
     LR_TRY_ASSIGN(fp, stage->fingerprint(ctx));
-    bool skip = (!forced && (!dirty || stage->independent())) && state.is_complete(id, fp);
+    bool skip = !forced && !dirty && state.is_complete(id, fp);
     if (skip) {
       std::error_code ec;
       for (const auto& out : stage->outputs(ctx)) {
@@ -27,7 +27,7 @@ Result<void> run_stages(std::span<Stage* const> stages, StageContext& ctx, State
       continue;
     }
 
-    if (!stage->independent() || forced) dirty = true;
+    dirty = true;
     state.mark_started(id);
     LR_TRY(state.save());
     ctx.sink.on_progress({id, 0.0f, "start"});

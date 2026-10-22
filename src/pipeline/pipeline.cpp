@@ -30,7 +30,6 @@ std::vector<std::unique_ptr<Stage>> default_stages(DoctorProbe& probe) {
   s.push_back(make_patch_stage());
   s.push_back(make_analyse_stage());
   s.push_back(make_recompile_stage());
-  s.push_back(make_shaders_stage());
   s.push_back(make_build_stage());
   return s;
 }

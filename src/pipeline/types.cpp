@@ -6,14 +6,13 @@
 namespace lr::pipeline {
 
 namespace {
-constexpr std::array<std::pair<StageId, std::string_view>, 8> kNames{{
+constexpr std::array<std::pair<StageId, std::string_view>, 7> kNames{{
     {StageId::Doctor, "doctor"},
     {StageId::Extract, "extract"},
     {StageId::Verify, "verify"},
     {StageId::Patch, "patch"},
     {StageId::Analyse, "analyse"},
     {StageId::Recompile, "recompile"},
-    {StageId::Shaders, "shaders"},
     {StageId::Build, "build"},
 }};
 }  // namespace

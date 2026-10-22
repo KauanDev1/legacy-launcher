@@ -130,11 +130,15 @@ TEST_CASE("reset_stale_build_dir wipes a build dir configured from another templ
   CHECK_FALSE(fs::exists(build));
 }
 
-TEST_CASE("default_stages lists every stage in order", "[unit]") {
+TEST_CASE("stage order has no shaders stage", "[unit]") {
   SystemDoctorProbe probe;
   auto stages = default_stages(probe);
-  REQUIRE(stages.size() == 8);
-  for (size_t i = 0; i < stages.size(); ++i) CHECK(static_cast<size_t>(stages[i]->id()) == i);
+  const std::vector<std::string> want = {"doctor", "extract", "verify", "patch", "analyse", "recompile", "build"};
+  REQUIRE(stages.size() == want.size());
+  for (size_t i = 0; i < stages.size(); ++i) {
+    CHECK(static_cast<size_t>(stages[i]->id()) == i);
+    CHECK(stage_name(stages[i]->id()) == want[i]);
+  }
 }
 
 TEST_CASE("launch reports a missing game build", "[unit]") {
@@ -217,24 +221,4 @@ TEST_CASE("launch fails with IoError when user/ cannot be created", "[unit][vfs]
   CHECK(r.error().code == lr::ErrorCode::IoError);
   CHECK(r.error().message.find((t.path / "user").string()) != std::string::npos);
   CHECK_FALSE(r.error().hint.empty());
-}
-
-TEST_CASE("build_fingerprint hashes the shader cache so a changed cache rebuilds the game", "[unit]") {
-  TempDir t;
-  const fs::path gen = t.path / "generated", rt = t.path / "runtime", cache = t.path / "shaders" / "shader_cache.cpp";
-  write(gen / "ppc_recomp.0.cpp", "int a;");
-  write(rt / "src" / "main.cpp", "int main() {}");
-
-  auto missing = build_fingerprint(gen, rt, cache);
-  REQUIRE_FALSE(missing);
-  CHECK(missing.error().code == ErrorCode::NotFound);
-
-  write(cache, "cache-v1");
-  auto base = build_fingerprint(gen, rt, cache);
-  REQUIRE(base);
-  CHECK(build_fingerprint(gen, rt, cache).value() == base.value());
-  CHECK(base.value() != build_fingerprint(gen, rt).value());
-
-  write(cache, "cache-v2");  // same size, new contents
-  CHECK(build_fingerprint(gen, rt, cache).value() != base.value());
 }

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Submodules with the LegacyRecomp patches applied (thirdparty/XenonRecomp, thirdparty/XenosRecomp;
+# Submodules with the LegacyRecomp patches applied (thirdparty/XenonRecomp;
 # docs/adr/0004-m2-plan-deviations.md, docs/development.md).
 #
 # Each submodule stays pinned to its upstream; our changes live as `git format-patch` files in

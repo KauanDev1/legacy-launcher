@@ -31,9 +31,6 @@ void write_exe(const fs::path& p) {
 void make_bundled_tree(const fs::path& resources) {
   const fs::path tc = resources / "toolchain";
   for (const char* f : {"bin/cc", "bin/c++", "bin/ninja", "cmake/bin/cmake", "zig/zig"}) write_exe(tc / f);
-  write_exe(tc / "dxc" / "bin" / "dxc");
-  fs::create_directories(tc / "dxc" / "lib");
-  std::ofstream(tc / "dxc" / "lib" / "libdxcompiler.so") << "fake";
   fs::create_directories(tc / "sdl2" / "lib" / "cmake" / "SDL2");
   std::ofstream(tc / "sdl2" / "lib" / "cmake" / "SDL2" / "SDL2Config.cmake") << "# fake\n";
 }
@@ -143,38 +140,12 @@ TEST_CASE("doctor in bundled mode still refuses a CPU without AVX", "[unit]") {
   CHECK(r.error().code == ErrorCode::InsufficientResources);
 }
 
-TEST_CASE("doctor in bundled mode: dxc is optional until XenosRecomp is staged", "[unit]") {
+TEST_CASE("doctor in bundled mode does not require dxc", "[unit]") {
   TempDir t;
   make_bundled_tree(t.path);
   HealthyProbe probe;
-  // No XenosRecomp in tools/: a missing dxc is only a note.
-  fs::remove_all(t.path / "toolchain" / "dxc");
   auto ok = run_doctor(probe, t.path / "root", t.path);
   REQUIRE(ok);
-  REQUIRE(ok.value().warnings.size() == 1);
-  CHECK(ok.value().warnings[0].find("DXC") != std::string::npos);
-  CHECK(ok.value().warnings[0].find("not bundled") != std::string::npos);
-}
-
-TEST_CASE("doctor in bundled mode reports a missing bundled dxc, not the system one", "[unit]") {
-  TempDir t;
-  make_bundled_tree(t.path);
-  write_exe(t.path / "tools" / "XenosRecomp");  // the host tool is staged: dxc is now required
-  HealthyProbe probe;
-  auto fine = run_doctor(probe, t.path / "root", t.path);
-  REQUIRE(fine);
-  CHECK(fine.value().warnings.empty());
-
-  fs::remove(t.path / "toolchain" / "dxc" / "bin" / "dxc");
-  auto r = run_doctor(probe, t.path / "root", t.path);
-  REQUIRE_FALSE(r);
-  CHECK(r.error().code == ErrorCode::ToolMissing);
-  CHECK(r.error().message.find("dxc") != std::string::npos);
-  CHECK(r.error().hint.find("directx-shader-compiler") != std::string::npos);
-
-  write_exe(t.path / "toolchain" / "dxc" / "bin" / "dxc");
-  fs::remove(t.path / "toolchain" / "dxc" / "lib" / "libdxcompiler.so");
-  r = run_doctor(probe, t.path / "root", t.path);
-  REQUIRE_FALSE(r);
-  CHECK(r.error().message.find("libdxcompiler.so") != std::string::npos);
+  CHECK(ok.value().warnings.empty());
+  CHECK_FALSE(fs::exists(t.path / "toolchain" / "dxc"));
 }

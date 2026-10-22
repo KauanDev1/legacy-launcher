@@ -31,7 +31,7 @@ tools/dev/container.sh run [-- argumentos do jogo]
 ## Onde ficam as coisas
 
 - Imagem `legacyrecomp-dev` (Arch Linux com clang, cmake, ninja, SDL2, pkgconf, git, python, binutils, rsync e Vulkan: `mesa`, `vulkan-swrast` (lavapipe, o driver
-  por software usado nos testes `[vulkan]`), `vulkan-icd-loader`, `vulkan-validation-layers` e `vulkan-tools`, mais `directx-shader-compiler`: `dxc`, `libdxcompiler.so` e `/usr/include/dxc/dxcapi.h`). É reconstruída pelo Docker apenas quando o `Dockerfile` muda.
+  por software usado nos testes `[vulkan]`), `vulkan-icd-loader`, `vulkan-validation-layers` e `vulkan-tools`). É reconstruída pelo Docker apenas quando o `Dockerfile` muda.
 - O repositório é montado somente leitura em `/src`. Os arquivos **rastreados pelo git** (incluindo
   submódulos) são sincronizados com `rsync --delete` para o volume `lr-build`, montado em `/work`;
   também entram os arquivos novos ainda não rastreados (que não estejam no `.gitignore`); arquivos rastreados mas apagados na árvore de trabalho não são copiados e saem do volume. O build fica em `/work/build/<preset>` e sobrevive
@@ -40,35 +40,16 @@ tools/dev/container.sh run [-- argumentos do jogo]
 - Os dados (cache de instalação, jogo extraído, executável gerado) ficam no volume `lr-data`, em `/data`.
 - Para limpar tudo: `docker volume rm lr-build lr-data`.
 
-## Submódulos, XenosRecomp e DXC
+## Submódulos
 
-Para clonar, use `tools/dev/init-submodules.sh` em vez de `git submodule update --init --recursive`: o
-`thirdparty/XenosRecomp` (fixado em `990d03b`, `main` do upstream hedge-dev) tem submódulos aninhados que não usamos
-(`dxc-bin`, binários prontos do DXC de todas as plataformas; `fmt` e `xxHash`, de que usamos as cópias do XenonRecomp,
-mesmos commits). O script inicializa só `smol-v` e `zstd` dentro dele. O `container.sh` sincroniza o que está
-inicializado na árvore de trabalho.
+Para clonar, use `tools/dev/init-submodules.sh` em vez de `git submodule update --init --recursive`: ele inicializa
+os submódulos e, só dentro do `thirdparty/XenonRecomp`, os aninhados que usamos. O `container.sh` sincroniza o que
+está inicializado na árvore de trabalho.
 
-O `XenosRecomp` (microcódigo de shader do Xenos para HLSL e SPIR-V) precisa do DXC do sistema (`dxc`,
-`libdxcompiler.so`, `dxcapi.h`; no Arch, o pacote `directx-shader-compiler`, ADR 0005). O CMake define o alvo
-`Microsoft::DirectXShaderCompiler` antes de adicionar o submódulo (use `-DLR_DXC_ROOT=<prefixo>` para um DXC fora dos
-caminhos do sistema) e o `lr_resources` copia o executável para `share/legacyrecomp/tools/XenosRecomp`. Sem o DXC o
-configure só avisa e não compila o XenosRecomp; `-DLR_BUILD_XENOSRECOMP=OFF` o desliga de propósito (o AppImage ainda
-não leva o DXC, `docs/packaging.md`). O `lr_resources` também copia o prelúdio HLSL dos shaders traduzidos
-(`XenosRecomp/shader_common.h` já com os patches) para `share/legacyrecomp/tools/xenos_shader_common.h`, o terceiro
-argumento da ferramenta.
-
-Os patches do XenosRecomp ficam em `thirdparty/patches/xenosrecomp/` (gerados da branch local `legacyrecomp`,
-`990d03b` + patches) e valem as mesmas regras do XenonRecomp abaixo (troque `ddd128b` por `990d03b` e
-`xenonrecomp` por `xenosrecomp`), com `-DLR_XENOSRECOMP_APPLY_PATCHES=OFF` para editar o submódulo direto. Tudo o que
-eles acrescentam fica atrás de `#ifdef LR_LEGACYRECOMP`, que o CMake define ao compilar a ferramenta (o contrato com a
-GPU emulada, em `docs/architecture.md`, "Contrato dos shaders traduzidos"); sem o define o XenosRecomp se comporta como
-o upstream. Uma alternativa a trocar a branch do submódulo é um `git worktree` dele fora do repositório
-(`git -C thirdparty/XenosRecomp worktree add <pasta> legacyrecomp`): o checkout do submódulo fica em `990d03b` e os
-patches regenerados (`git format-patch --no-signature -o <repo>/thirdparty/patches/xenosrecomp 990d03b..legacyrecomp`)
-são aplicados normalmente no build. O harness `tests/shaders` (contêineres sintéticos de
-`tests/support/xenos_shader_builder.h`, traduzidos no build; `ctest --preset dev -L shaders`) cobre o modo
-LegacyRecomp. O teste `submodule_patches_mechanism` cobre o
-mecanismo (`cmake/LrSubmodulePatches.cmake`) para os dois submódulos.
+Não há compilador de shaders no projeto: o XenosRecomp, o DXC e a `lr_zstd` saíram no plano B (ADR 0005, M8), e o
+runtime traduz o microcódigo para SPIR-V ele mesmo (Tarefas 15.2 em diante). Os shaders do renderizador (blit,
+limpeza, untile, resolve) serão GLSL compilado pelo `glslangValidator` do sistema na compilação do launcher
+(Tarefa 15.x). O histórico do git guarda o fork do XenosRecomp (commits `0523eda`..`3b15c74`).
 
 ## ISO do jogo
 
@@ -85,7 +66,7 @@ LEGACYRECOMP_ISO=<caminho no host>/jogo.iso tools/dev/container.sh test -L integ
 O submódulo `thirdparty/XenonRecomp` fica fixado no `main` do upstream (hedge-dev, `ddd128b`). As nossas
 mudanças no recompilador (instruções novas, correções) ficam como arquivos `git format-patch` em
 `thirdparty/patches/xenonrecomp/NNNN-*.patch` (ADR 0004, M7). No configure, `cmake/LrSubmodulePatches.cmake`
-(`lr_apply_submodule_patches`, a mesma função serve ao XenosRecomp) copia o submódulo para `build/<preset>/_deps/XenonRecomp-patched`, aplica os patches nessa cópia (com
+(`lr_apply_submodule_patches`) copia o submódulo para `build/<preset>/_deps/XenonRecomp-patched`, aplica os patches nessa cópia (com
 `git apply`) e compila a cópia; o checkout do submódulo nunca é alterado. Os patches são reaplicados quando
 um deles muda ou quando muda o original de um arquivo que eles tocam. O hash dos patches entra na impressão
 digital das etapas `analyse` e `recompile` (`LR_XENONRECOMP_COMMIT`), então um patch novo invalida o cache

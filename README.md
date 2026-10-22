@@ -40,7 +40,7 @@ The game is not playable yet. Nothing is drawn on screen.
 |---|---|---|
 | M1 | Pipeline from disc to native executable, runtime skeleton | Done |
 | M2 | Kernel emulation: memory, threads, files, synchronization | Done |
-| M3 | Graphics: Vulkan renderer, shaders translated with XenosRecomp | Next |
+| M3 | Graphics: Vulkan renderer, shaders translated at run time | Next |
 | M4 | Audio, input, saves | Planned |
 | M5 | Playable: main menu and worlds | Planned |
 
@@ -146,7 +146,7 @@ config/            recompiler settings and expected file hashes for the supporte
 tests/             unit tests and integration tests that use a real disc
 tools/             reverse-engineering helper scripts
 assets/fonts/      launcher fonts
-thirdparty/        git submodules: XenonRecomp, XenosRecomp, Dear ImGui, Catch2, volk, VMA, Vulkan-Headers
+thirdparty/        git submodules: XenonRecomp, Dear ImGui, Catch2, volk, VMA, Vulkan-Headers
 docs/              format notes, reverse-engineering notes, decision records, specs and plans
 ```
 
@@ -166,7 +166,7 @@ You must own Minecraft: Xbox 360 Edition and make the disc image yourself. This 
 
 ## Credits
 
-- [hedge-dev](https://github.com/hedge-dev) for XenonRecomp and XenosRecomp, and for UnleashedRecomp, which we use as a reference for how a recompiled game fits together.
+- [hedge-dev](https://github.com/hedge-dev) for XenonRecomp, and for UnleashedRecomp, which we use as a reference for how a recompiled game fits together.
 - The [Xenia](https://github.com/xenia-project/xenia) team, whose emulator is the best public documentation of the Xbox 360 internals.
 - The [free60](https://free60.org) wiki, for its notes on the console's file formats.
 - [Dear ImGui](https://github.com/ocornut/imgui), [SDL](https://www.libsdl.org), [Catch2](https://github.com/catchorg/Catch2) and [toml++](https://github.com/marzer/tomlplusplus).

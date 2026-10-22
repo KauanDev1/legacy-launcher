@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-// The runtime shader cache (runtime/gpu/shader_cache.h) and the shader loads GpuSystem hashes against it. The
-// cross-check with the hashes the XenosRecomp fork emits lives in tests/shaders ("hash of loaded microcode matches
-// the fork's hash"), which has a generated cache; these tests build their tables by hand.
+// The microcode hash and the shader loads GpuSystem hashes, records and traces (runtime/gpu/shader_cache.h,
+// gpu_system.h). The microcode is built by hand with the test builder (tests/support/xenos_shader_builder.h).
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -33,7 +33,6 @@
 #include "support/xenos_shader_builder.h"
 
 using lr::gpu::GpuSystem;
-using lr::gpu::ShaderCache;
 using lr::gpu::ShaderStage;
 using lr::runtime::be;
 using lr::testing::KernelFixture;
@@ -44,19 +43,6 @@ namespace {
 
 namespace pm4 = lr::gpu::pm4;
 namespace x = lr::testing::xenos;
-
-// A one-frame zstd stream holding `data` (< 256 bytes) in one raw block: single segment, 1-byte content size, no
-// checksum (RFC 8878 section 3.1.1).
-std::vector<uint8_t> zstd_raw_frame(const std::vector<uint8_t>& data) {
-  REQUIRE(data.size() < 256);
-  std::vector<uint8_t> out = {0x28, 0xB5, 0x2F, 0xFD, 0x20, uint8_t(data.size())};
-  const uint32_t block = 1u | (uint32_t(data.size()) << 3);  // last block, raw
-  out.push_back(uint8_t(block));
-  out.push_back(uint8_t(block >> 8));
-  out.push_back(uint8_t(block >> 16));
-  out.insert(out.end(), data.begin(), data.end());
-  return out;
-}
 
 std::vector<uint8_t> words_le(const std::vector<uint32_t>& words) {
   std::vector<uint8_t> out(words.size() * 4);
@@ -70,24 +56,21 @@ std::string hex64(uint64_t v) {
   return b;
 }
 
-// The microcode of a synthetic vertex shader (Task 13 builder), as big-endian bytes and as dwords.
-x::ShaderDesc vertex_shader() {
-  x::ShaderDesc d;
-  d.vertex = true;
-  x::emit(d.microcode, x::cf_pair(x::cf_exec(true, 1, 1, 0), x::cf_nop()));
+// The microcode of a synthetic vertex shader (Task 13 builder), as dwords.
+std::vector<uint32_t> vertex_shader() {
+  std::vector<uint32_t> code;
+  x::emit(code, x::cf_pair(x::cf_exec(true, 1, 1, 0), x::cf_nop()));
   x::Alu pos;
   pos.export_data = true;
   pos.vector_dest = x::kExportVsPosition;
   pos.src1 = {0, false};
   pos.src2 = {0, false};
-  x::emit(d.microcode, x::alu(pos));
-  return d;
+  x::emit(code, x::alu(pos));
+  return code;
 }
 
 uint64_t hash_of(const std::vector<uint32_t>& microcode) {
-  x::ShaderDesc d;
-  d.microcode = microcode;
-  const std::vector<uint8_t> bytes = x::microcode_bytes(d);
+  const std::vector<uint8_t> bytes = x::microcode_bytes(microcode);
   return lr::gpu::microcode_hash(bytes.data(), uint32_t(microcode.size()));
 }
 
@@ -167,129 +150,63 @@ Pm4Builder& im_load_immediate(Pm4Builder& b, ShaderStage stage, const std::vecto
 
 }  // namespace
 
-TEST_CASE("shader cache registers the generated tables and returns SPIR-V", "[unit][gpu]") {
-  const std::vector<uint32_t> a = {0x07230203, 1, 2, 3, 4, 5}, b = {0x07230203, 9, 8, 7, 6, 5, 4};
-  std::vector<uint32_t> all = a;
-  all.insert(all.end(), b.begin(), b.end());
-  const std::vector<uint8_t> blob = zstd_raw_frame(words_le(all));
-  // Out of hash order on purpose: the cache sorts.
-  const lr_shader_cache_entry entries[] = {{0x20, 1, uint32_t(a.size() * 4), uint32_t(b.size() * 4), 0x1E},
-                                           {0x10, 0, 0, uint32_t(a.size() * 4), 0}};
-  ShaderCache cache;
-  REQUIRE(cache.register_entries(entries, blob, all.size() * 4));
-  CHECK(cache.size() == 2);
-  const lr::gpu::ShaderEntry* e = cache.find(0x20);
-  REQUIRE(e != nullptr);
-  CHECK(e->stage == ShaderStage::Pixel);
-  CHECK(e->spec_mask == 0x1E);
-  auto words = cache.spirv(*e);
-  REQUIRE(words);
-  CHECK(words.value() == b);
-  REQUIRE(cache.find(0x10) != nullptr);
-  CHECK(cache.find(0x10)->stage == ShaderStage::Vertex);
-  CHECK(cache.spirv(*cache.find(0x10)).value() == a);
-
-  SECTION("a corrupt table is refused and leaves the cache as it was") {
-    const lr_shader_cache_entry bad_stage[] = {{0x30, 2, 0, 4, 0}};
-    const lr_shader_cache_entry outside[] = {{0x30, 0, 0, uint32_t(all.size() * 4 + 4), 0}};
-    const lr_shader_cache_entry unaligned[] = {{0x30, 0, 2, 4, 0}};
-    const lr_shader_cache_entry twice[] = {{0x30, 0, 0, 4, 0}, {0x30, 1, 4, 4, 0}};
-    for (auto table : {std::span<const lr_shader_cache_entry>(bad_stage), std::span<const lr_shader_cache_entry>(outside),
-                       std::span<const lr_shader_cache_entry>(unaligned), std::span<const lr_shader_cache_entry>(twice)}) {
-      auto r = cache.register_entries(table, blob, all.size() * 4);
-      REQUIRE_FALSE(r);
-      CHECK(r.error().code == lr::ErrorCode::InvalidFormat);
-      CHECK(r.error().message.find("0x0000000000000030") != std::string::npos);
-    }
-    std::vector<uint8_t> corrupt = blob;
-    corrupt[0] = 0;  // bad magic
-    CHECK_FALSE(cache.register_entries(entries, corrupt, all.size() * 4));
-    CHECK_FALSE(cache.register_entries(entries, blob, all.size() * 4 + 4));  // size mismatch
-    CHECK(cache.size() == 2);
-    CHECK(cache.find(0x20) != nullptr);
-  }
-  SECTION("an empty cache (no shaders) registers") {
-    CHECK(cache.register_entries({}, {}, 0));
-    CHECK(cache.size() == 0);
-    CHECK(cache.find(0x20) == nullptr);
-  }
-}
-
 TEST_CASE("microcode hash is XXH3-64 of the big-endian bytes", "[unit][gpu]") {
   // XXH3-64 reference values (seed 0): the empty input, and the hash depends on byte order.
   CHECK(lr::gpu::microcode_hash(nullptr, 0) == 0x2D06800538D394C2ull);
-  const std::vector<uint32_t> code = vertex_shader().microcode;
+  const std::vector<uint32_t> code = vertex_shader();
   std::vector<uint8_t> le = words_le(code);
   CHECK(hash_of(code) != lr::gpu::microcode_hash(le.data(), uint32_t(code.size())));
 }
 
-TEST_CASE("unknown hash is reported", "[unit][gpu]") {
+TEST_CASE("shader loads are traced by hash", "[unit][gpu]") {
   KernelFixture f;
   lr::testing::TempDir td("lr_shader_trace");
-  const std::vector<uint32_t> known = vertex_shader().microcode;
-  const std::vector<uint32_t> unknown = {0xC0FFEE01, 0x00000002, 0x00000003};
-  const uint64_t known_hash = hash_of(known), unknown_hash = hash_of(unknown);
-  const std::vector<uint32_t> spirv = {0x07230203, 0, 0, 0, 0};
-  const std::vector<uint8_t> blob = zstd_raw_frame(words_le(spirv));
-  const lr_shader_cache_entry entries[] = {{known_hash, 0, 0, uint32_t(spirv.size() * 4), 0}};
+  const std::vector<uint32_t> vs = vertex_shader();
+  const std::vector<uint32_t> ps = {0xC0FFEE01, 0x00000002, 0x00000003};
+  const uint64_t vs_hash = hash_of(vs), ps_hash = hash_of(ps);
 
-  SECTION("a backend that renders nothing only reports it (the shader gate)") {
+  {
+    const bool binds = GENERATE(false, true);  // no shader is refused at load time: the backend translates it
     Gpu g(f);
-    REQUIRE(g.gpu->shader_cache().register_entries(entries, blob, spirv.size() * 4));
-    auto backend = std::make_unique<CountingBackend>(false);
+    auto backend = std::make_unique<CountingBackend>(binds);
     CountingBackend* counting = backend.get();
     g.gpu->set_backend(std::move(backend));
-    const std::filesystem::path trace = td.path / "gpu-trace.log";
+    const std::filesystem::path trace = td.path / (binds ? "binds.log" : "null.log");
     REQUIRE(g.gpu->enable_trace(trace));
-    // The known shader through IM_LOAD from physical memory (the size covers the microcode only, no container
-    // header), the unknown one twice through IM_LOAD_IMMEDIATE (one distinct sighting).
+    // The first shader through IM_LOAD from physical memory (the size covers the microcode only), the second one
+    // twice through IM_LOAD_IMMEDIATE (one distinct sighting).
     const Phys code = phys_alloc(0x10000);
-    for (size_t i = 0; i < known.size(); ++i) *f.mem.translate<be<uint32_t>>(code.guest + 4 * uint32_t(i)) = known[i];
+    for (size_t i = 0; i < vs.size(); ++i) *f.mem.translate<be<uint32_t>>(code.guest + 4 * uint32_t(i)) = vs[i];
     Pm4Builder b;
-    b.type3(pm4::IM_LOAD, {code.phys | 0 /* vertex */, uint32_t(known.size())});
-    im_load_immediate(b, ShaderStage::Pixel, unknown);
-    im_load_immediate(b, ShaderStage::Pixel, unknown);
+    b.type3(pm4::IM_LOAD, {code.phys | 0 /* vertex */, uint32_t(vs.size())});
+    im_load_immediate(b, ShaderStage::Pixel, ps);
+    im_load_immediate(b, ShaderStage::Pixel, ps);
     g.submit(b);
     g.gpu->start();
     REQUIRE(wait_until([&] { return g.drained(); }));
     g.gpu->stop();
     CHECK(g.fatal().empty());
-    CHECK(counting->loads == 3);  // every load still reaches the backend
+    CHECK(counting->loads == 3);  // every load reaches the backend
 
     const lr::gpu::ShaderLoadStats stats = g.gpu->shader_stats();
     CHECK(stats.loads == 3);
     REQUIRE(stats.distinct.size() == 2);
-    CHECK(stats.distinct[0].hash == known_hash);
+    CHECK(stats.distinct[0].hash == vs_hash);
     CHECK(stats.distinct[0].stage == ShaderStage::Vertex);
-    CHECK(stats.distinct[0].cached);
-    CHECK(stats.distinct[1].hash == unknown_hash);
+    CHECK(stats.distinct[0].dwords == vs.size());
+    CHECK(stats.distinct[1].hash == ps_hash);
     CHECK(stats.distinct[1].stage == ShaderStage::Pixel);
-    CHECK_FALSE(stats.distinct[1].cached);
+    CHECK(stats.distinct[1].dwords == 3);
 
     std::ifstream in(trace);
     std::stringstream ss;
     ss << in.rdbuf();
     const std::string text = ss.str();
-    CHECK(text.find("shader vertex " + hex64(known_hash) + " dwords=" + std::to_string(known.size()) + " cached\n") !=
+    CHECK(text.find("shader vertex " + hex64(vs_hash) + " dwords=" + std::to_string(vs.size()) + "\n") !=
           std::string::npos);
-    const std::string missing = "shader pixel " + hex64(unknown_hash) + " dwords=3 missing\n";
-    REQUIRE(text.find(missing) != std::string::npos);
-    CHECK(text.find(missing, text.find(missing) + 1) == std::string::npos);  // once per distinct shader
-  }
-  SECTION("a backend that binds shaders gets a fatal naming the hash") {
-    Gpu g(f);
-    REQUIRE(g.gpu->shader_cache().register_entries(entries, blob, spirv.size() * 4));
-    auto backend = std::make_unique<CountingBackend>(true);
-    CountingBackend* counting = backend.get();
-    g.gpu->set_backend(std::move(backend));
-    Pm4Builder b;
-    im_load_immediate(b, ShaderStage::Vertex, known);
-    im_load_immediate(b, ShaderStage::Pixel, unknown);
-    g.submit(b);
-    g.gpu->start();
-    REQUIRE(wait_until([&] { return !g.fatal().empty(); }));
-    CHECK(g.fatal() == "shader microcode " + hex64(unknown_hash) + " (pixel, 3 dwords) is not in the shader cache");
-    g.gpu->stop();
-    CHECK(counting->loads == 1);  // the missing shader never reaches the backend
+    const std::string pixel = "shader pixel " + hex64(ps_hash) + " dwords=3\n";
+    REQUIRE(text.find(pixel) != std::string::npos);
+    CHECK(text.find(pixel, text.find(pixel) + 1) == std::string::npos);  // once per distinct shader
+    CHECK(text.find("missing") == std::string::npos);
   }
 }

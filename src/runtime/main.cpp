@@ -35,7 +35,6 @@
 #include "runtime/fault.h"
 #include "runtime/func_table.h"
 #include "runtime/gpu/gpu_system.h"
-#include "runtime/gpu/shader_cache.h"
 #include "runtime/guest_memory.h"
 #include "runtime/guest_thread.h"
 #include "runtime/kernel/glue.h"
@@ -50,14 +49,6 @@
 // Emitted by lr::pipeline::render_import_thunks.
 extern const char* const lr_import_names[];
 extern const size_t lr_import_count;
-
-// Emitted by the shaders stage (XenosRecomp, work/shaders/shader_cache.cpp; docs/architecture.md, "Contrato dos
-// shaders traduzidos"). lr_shader_cache_entry comes from runtime/gpu/shader_cache.h.
-extern "C" const lr_shader_cache_entry lr_shader_cache[];
-extern "C" const size_t lr_shader_cache_count;
-extern "C" const uint8_t lr_shader_blob[];
-extern "C" const size_t lr_shader_blob_size;
-extern "C" const size_t lr_shader_blob_uncompressed_size;
 
 namespace {
 
@@ -309,14 +300,6 @@ int main(int argc, char** argv) {
   cfg.exit_after_swaps = opt.exit_after_swaps;
   cfg.deadlock_seconds = deadlock_seconds();
   if (auto r = lr::kernel::init_kernel(mem.value(), std::move(cfg)); !r) {
-    std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
-    return kExitUsage;
-  }
-  // The translated shaders, before any guest code (and so the GPU thread) runs.
-  if (auto r = lr::kernel::kernel().gpu().shader_cache().register_entries(
-          std::span(lr_shader_cache, lr_shader_cache_count), std::span(lr_shader_blob, lr_shader_blob_size),
-          lr_shader_blob_uncompressed_size);
-      !r) {
     std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
     return kExitUsage;
   }

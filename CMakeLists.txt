@@ -23,38 +23,6 @@ lr_apply_submodule_patches(XenonRecomp "${CMAKE_SOURCE_DIR}/thirdparty/XenonReco
   "${CMAKE_SOURCE_DIR}/thirdparty/patches/xenonrecomp" LR_XENONRECOMP_DIR)
 add_subdirectory(${LR_XENONRECOMP_DIR} ${CMAKE_BINARY_DIR}/thirdparty/XenonRecomp)
 
-# XenosRecomp (Xenos shader microcode -> HLSL -> SPIR-V, host tool run at install time): upstream submodule +
-# thirdparty/patches/xenosrecomp. It needs DXC (dxcapi.h and libdxcompiler.so) from the system (the
-# directx-shader-compiler package; ADR 0005): we define Microsoft::DirectXShaderCompiler ourselves, so upstream's
-# dxc-bin submodule (prebuilt binaries) is never initialised. fmt::fmt and xxHash::xxhash come from XenonRecomp's
-# bundled copies (same commits as XenosRecomp's own submodules), so only smol-v and zstd are nested submodules we
-# need. Added EXCLUDE_FROM_ALL: it builds only as a dependency of lr_resources, and none of its install rules
-# (zstd's headers and libraries) reach `cmake --install`.
-lr_apply_submodule_patches(XenosRecomp "${CMAKE_SOURCE_DIR}/thirdparty/XenosRecomp"
-  "${CMAKE_SOURCE_DIR}/thirdparty/patches/xenosrecomp" LR_XENOSRECOMP_DIR)
-option(LR_BUILD_XENOSRECOMP "Build the XenosRecomp shader translator (needs the system DXC)" ON)
-set(LR_DXC_ROOT "" CACHE PATH "Prefix of a DXC install (include/dxc, lib/libdxcompiler.so); empty = system paths")
-find_path(LR_DXC_INCLUDE_DIR dxcapi.h HINTS "${LR_DXC_ROOT}/include" PATH_SUFFIXES dxc)
-find_library(LR_DXC_LIBRARY dxcompiler HINTS "${LR_DXC_ROOT}/lib")
-if(LR_BUILD_XENOSRECOMP AND LR_DXC_INCLUDE_DIR AND LR_DXC_LIBRARY)
-  add_library(Microsoft::DirectXShaderCompiler SHARED IMPORTED GLOBAL)
-  set_target_properties(Microsoft::DirectXShaderCompiler PROPERTIES
-    IMPORTED_LOCATION "${LR_DXC_LIBRARY}" INTERFACE_INCLUDE_DIRECTORIES "${LR_DXC_INCLUDE_DIR}")
-  set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
-  set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
-  add_subdirectory(${LR_XENOSRECOMP_DIR} ${CMAKE_BINARY_DIR}/thirdparty/XenosRecomp EXCLUDE_FROM_ALL)
-  # LegacyRecomp mode of the fork (thirdparty/patches/xenosrecomp): the emulated-GPU shader contract, microcode
-  # hashes and the shader cache format of docs/architecture.md; the Unleashed Recompiled paths are compiled out.
-  target_compile_definitions(XenosRecomp PRIVATE LR_LEGACYRECOMP)
-  set(LR_HAVE_XENOSRECOMP ON)
-else()
-  set(LR_HAVE_XENOSRECOMP OFF)
-  if(LR_BUILD_XENOSRECOMP)
-    message(WARNING "DXC (dxcapi.h, libdxcompiler.so) not found: XenosRecomp is not built. Install the "
-                  "directx-shader-compiler package or pass -DLR_DXC_ROOT=<prefix>.")
-  endif()
-endif()
 add_subdirectory(thirdparty/Catch2)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/Catch2/extras")
 

@@ -40,7 +40,7 @@ Spielbar ist das Spiel noch nicht. Auf dem Bildschirm erscheint nichts.
 |---|---|---|
 | M1 | Pipeline von der Disc bis zur nativen Programmdatei, Grundgerüst der Laufzeitumgebung | Fertig |
 | M2 | Kernel-Emulation: Speicher, Threads, Dateien, Synchronisation | Fertig |
-| M3 | Grafik: Vulkan-Renderer, mit XenosRecomp übersetzte Shader | Als Nächstes |
+| M3 | Grafik: Vulkan-Renderer, zur Laufzeit übersetzte Shader | Als Nächstes |
 | M4 | Audio, Controller, Spielstände | Geplant |
 | M5 | Spielbar: Hauptmenü und Welten | Geplant |
 
@@ -166,7 +166,7 @@ Du musst Minecraft: Xbox 360 Edition besitzen und das Abbild der Disc selbst ers
 
 ## Danksagungen
 
-- [hedge-dev](https://github.com/hedge-dev) für XenonRecomp und XenosRecomp sowie für UnleashedRecomp, das uns als Referenz dafür dient, wie ein rekompiliertes Spiel aufgebaut ist.
+- [hedge-dev](https://github.com/hedge-dev) für XenonRecomp sowie für UnleashedRecomp, das uns als Referenz dafür dient, wie ein rekompiliertes Spiel aufgebaut ist.
 - Das [Xenia](https://github.com/xenia-project/xenia)-Team, dessen Emulator die beste öffentliche Dokumentation des Innenlebens der Xbox 360 ist.
 - Das [free60](https://free60.org)-Wiki für seine Notizen zu den Dateiformaten der Konsole.
 - [Dear ImGui](https://github.com/ocornut/imgui), [SDL](https://www.libsdl.org), [Catch2](https://github.com/catchorg/Catch2) und [toml++](https://github.com/marzer/tomlplusplus).

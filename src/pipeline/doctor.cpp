@@ -114,22 +114,11 @@ Result<DoctorReport> run_doctor(DoctorProbe& probe, const fs::path& root, const 
   if (has_bundled_toolchain(resources)) {
     // AppImage: the bundled zig/cmake/ninja/SDL2 are pinned versions; only check that they are all there.
     LR_TRY(resolve_toolchain(resources));
-    // DXC is mandatory only when the XenosRecomp host tool is staged (it links libdxcompiler.so). No AppImage ships
-    // either yet (ADR 0005, Task 24), so otherwise this is a note, not a failure.
-    std::error_code tool_ec;
-    if (fs::exists(resources / "tools" / "XenosRecomp", tool_ec))
-      LR_TRY(check_bundled_dxc(resources));
-    else
-      notes.push_back("DXC (shader compiler) is not bundled yet; the shader translator is unavailable in this build");
   } else {
     LR_TRY(check_tool(probe, "clang++", 18, 0));
     LR_TRY(check_tool(probe, "cmake", 3, 25));
     LR_TRY(check_tool(probe, "ninja", 0, 0));
     if (!probe.pkg_config_exists("sdl2")) return missing("SDL2 development files (pkg-config sdl2)");
-    // Only the `dxc` executable is looked up on PATH; its libdxcompiler.so (the library XenosRecomp links) is not
-    // checked separately.
-    if (!probe.find("dxc"))
-      return Error{ErrorCode::ToolMissing, "dxc (DirectX Shader Compiler) not found", std::string(system_dxc_hint())};
   }
 
   std::error_code ec;

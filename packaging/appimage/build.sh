@@ -254,8 +254,7 @@ rm -rf "$tc/sdl2/bin" "$tc/sdl2/lib/pkgconfig" "$tc/sdl2/share/aclocal"
 # --- LegacyRecomp ------------------------------------------------------------------------------------------------
 # The release preset, with zig instead of the system clang and Release (no debug info) instead of RelWithDebInfo.
 # -include cstdlib: XenonRecomp's bundled {fmt} relies on <cstdlib> arriving through other libstdc++ headers,
-# which libc++ does not do. -DLR_BUILD_XENOSRECOMP=OFF: the system DXC needs glibc 2.38 and libstdc++, so
-# XenosRecomp stays out of the AppImage until Task 24 of M3 builds DXC from source (ADR 0005).
+# which libc++ does not do.
 # -idirafter /usr/include: imgui's SDL2 backend includes SDL_syswm.h, which includes the X11 headers.
 # --strip-debug: zig's cached libc++ carries debug info (about 20 MB per launcher).
 
@@ -263,7 +262,7 @@ lr_build=$cache/build/legacyrecomp
 log "building LegacyRecomp"
 (cd "$repo" && "$cmake" --preset release -B "$lr_build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_MAKE_PROGRAM="$ninja" \
   "${zig_cmake_args[@]}" -DCMAKE_CXX_FLAGS="-include cstdlib -idirafter /usr/include" \
-  -DCMAKE_PREFIX_PATH="$tc/sdl2" -DSDL2_DIR="$tc/sdl2/lib/cmake/SDL2" -DCMAKE_EXE_LINKER_FLAGS=-Wl,--strip-debug -DLR_BUILD_XENOSRECOMP=OFF \
+  -DCMAKE_PREFIX_PATH="$tc/sdl2" -DSDL2_DIR="$tc/sdl2/lib/cmake/SDL2" -DCMAKE_EXE_LINKER_FLAGS=-Wl,--strip-debug \
   -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$lr_build/bin") > "$cache/build/legacyrecomp.log" 2>&1 ||
   die "LegacyRecomp configure failed, see $cache/build/legacyrecomp.log"
 "$cmake" --build "$lr_build" -j "$jobs" --target legacyrecomp legacyrecomp-gui lr_resources \

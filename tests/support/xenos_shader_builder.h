@@ -1,16 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Test helper: synthetic Xenos shader containers (the D3D-for-Xbox-360 layout that XenosRecomp scans for) built
-// from hand-assembled microcode. Never game data: every byte here is written by the tests.
-//
-// Container layout (all big-endian), as XenosRecomp reads it (thirdparty/XenosRecomp/XenosRecomp/shader.h):
-//   0x00 header: flags (0x102A11xx, bit 0 = vertex shader), virtualSize, physicalSize, fieldC,
-//        constantTableOffset, definitionTableOffset, shaderOffset, field1C (0), field20 (0)
-//   constant table: u32 size, D3DXSHADER_CONSTANTTABLE (7 u32), D3DXSHADER_CONSTANTINFO[] (20 bytes each), names
-//   definition table (optional): 5 u32 header, float4 defs, 0, int4 defs, 0
-//   shader: physicalOffset, size, field8, fieldC (PS: svPos register in bits 8..15), field10,
-//           interpolatorInfo (count in bits 5..9), then VS: field18, vertexElementCount, field20, vertex elements,
-//           interpolators; PS: field18, outputs, interpolators
-//   physical part (at virtualSize): float definition values, then the microcode at shader.physicalOffset
+// Test helper: hand-assembled Xenos microcode (the dwords a game loads with IM_LOAD / IM_LOAD_IMMEDIATE). Never game
+// data: every word here is written by the tests.
 //
 // Microcode encodings follow the public Xenos ucode layout (control flow: 48-bit instructions packed two per three
 // dwords; ALU and fetch: three dwords each). Written from the field tables, no code copied.
@@ -149,131 +139,11 @@ inline std::array<uint32_t, 3> tfetch(uint32_t dst, uint32_t src, uint32_t const
   return {w0, w1, w2};
 }
 
-// --- container ----------------------------------------------------------------------------------------------------
-
-enum RegisterSet : uint16_t { kBool = 0, kInt4 = 1, kFloat4 = 2, kSampler = 3 };
-enum DeclUsage : uint32_t { kPosition = 0, kTexCoord = 5, kColor = 10 };
-
-struct Constant {
-  std::string name;
-  RegisterSet set = kFloat4;
-  uint16_t index = 0;
-  uint16_t count = 1;
-};
-
-struct VertexElement {
-  uint32_t address = 0;  // instruction slot of the vfetch that reads it
-  uint32_t usage = kPosition;
-  uint32_t usage_index = 0;
-};
-
-struct Interpolator {
-  uint32_t usage = kTexCoord;
-  uint32_t usage_index = 0;
-  uint32_t reg = 0;
-};
-
-struct ShaderDesc {
-  bool vertex = true;
-  std::vector<Constant> constants;
-  std::vector<VertexElement> vertex_elements;  // VS only
-  std::vector<Interpolator> interpolators;
-  uint32_t ps_outputs = 1;                     // PS only: bit 0 = COLOR0 ... bit 4 = depth
-  std::vector<uint32_t> microcode;             // host-order dwords
-  uint32_t shader_offset_override = 0;         // != 0: a broken container whose shader header is out of range
-};
-
-namespace detail {
-inline void put32(std::vector<uint8_t>& out, uint32_t v) {
-  for (int s = 24; s >= 0; s -= 8) out.push_back(uint8_t(v >> s));
-}
-inline void put16(std::vector<uint8_t>& out, uint16_t v) {
-  out.push_back(uint8_t(v >> 8));
-  out.push_back(uint8_t(v));
-}
-inline void set32(std::vector<uint8_t>& out, size_t at, uint32_t v) {
-  for (int i = 0; i < 4; ++i) out[at + i] = uint8_t(v >> (24 - 8 * i));
-}
-inline void align4(std::vector<uint8_t>& out) {
-  while (out.size() % 4) out.push_back(0);
-}
-}  // namespace detail
-
-// The microcode exactly as it sits in the container (big-endian bytes): what the microcode hash covers.
-inline std::vector<uint8_t> microcode_bytes(const ShaderDesc& d) {
+// The microcode as the big-endian bytes it has in guest memory: what the microcode hash covers.
+inline std::vector<uint8_t> microcode_bytes(const std::vector<uint32_t>& microcode) {
   std::vector<uint8_t> out;
-  for (uint32_t w : d.microcode) detail::put32(out, w);
-  return out;
-}
-
-inline std::vector<uint8_t> build_container(const ShaderDesc& d) {
-  using namespace detail;
-  std::vector<uint8_t> out(36, 0);
-  set32(out, 0, 0x102A1100u | (d.vertex ? 1u : 0u));
-
-  // Constant table: u32 size, then D3DXSHADER_CONSTANTTABLE; offsets inside it are relative to its start.
-  const size_t ct_container = out.size();
-  set32(out, 16, uint32_t(ct_container));
-  put32(out, 0);  // container size, patched below
-  const size_t ct = out.size();
-  const uint32_t info_offset = 28;
-  put32(out, 28);                                   // size
-  put32(out, 0);                                    // creator
-  put32(out, 0xFFFE0300u);                          // version
-  put32(out, uint32_t(d.constants.size()));         // constants
-  put32(out, info_offset);                          // constantInfo
-  put32(out, 0);                                    // flags
-  put32(out, 0);                                    // target
-  uint32_t name_at = info_offset + uint32_t(d.constants.size()) * 20;
-  for (const auto& c : d.constants) {
-    put32(out, name_at);
-    put16(out, c.set);
-    put16(out, c.index);
-    put16(out, c.count);
-    put16(out, 0);
-    put32(out, 0);  // typeInfo
-    put32(out, 0);  // defaultValue
-    name_at += uint32_t(c.name.size()) + 1;
-  }
-  for (const auto& c : d.constants) {
-    out.insert(out.end(), c.name.begin(), c.name.end());
-    out.push_back(0);
-  }
-  align4(out);
-  set32(out, ct_container, uint32_t(out.size() - ct));
-
-  // No definition table (offset 0).
-  // Shader header.
-  const size_t shader = out.size();
-  set32(out, 24, d.shader_offset_override ? d.shader_offset_override : uint32_t(shader));
-  const uint32_t microcode_size = uint32_t(d.microcode.size() * 4);
-  put32(out, 0);                                                   // physicalOffset
-  put32(out, microcode_size);                                      // size
-  put32(out, 0);                                                   // field8
-  put32(out, d.vertex ? 0u : 0xFF00u);                             // fieldC: PS svPos register 0xFF (none)
-  put32(out, 0);                                                   // field10
-  put32(out, uint32_t(d.interpolators.size()) << 5);               // interpolatorInfo
-  auto interp_word = [](const Interpolator& i) {
-    return (i.usage_index & 0xF) | ((i.usage & 0xF) << 4) | ((i.reg & 0xF) << 8);
-  };
-  if (d.vertex) {
-    put32(out, 0);                                                 // field18: words before the vertex elements
-    put32(out, uint32_t(d.vertex_elements.size()));
-    put32(out, 0);                                                 // field20
-    for (const auto& e : d.vertex_elements)
-      put32(out, (e.address & 0xFFF) | ((e.usage & 0xF) << 12) | ((e.usage_index & 0xF) << 16));
-    for (const auto& i : d.interpolators) put32(out, interp_word(i));
-  } else {
-    put32(out, 0);                                                 // field18
-    put32(out, d.ps_outputs);
-    for (const auto& i : d.interpolators) put32(out, interp_word(i));
-  }
-  align4(out);
-
-  const uint32_t virtual_size = uint32_t(out.size());
-  set32(out, 4, virtual_size);
-  set32(out, 8, microcode_size);
-  for (uint32_t w : d.microcode) put32(out, w);
+  for (uint32_t w : microcode)
+    for (int s = 24; s >= 0; s -= 8) out.push_back(uint8_t(w >> s));
   return out;
 }
 

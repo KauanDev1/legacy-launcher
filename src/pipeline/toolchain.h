@@ -29,15 +29,6 @@ Result<Toolchain> resolve_toolchain(const std::filesystem::path& resources);
 
 bool has_bundled_toolchain(const std::filesystem::path& resources);
 
-// DXC (HLSL -> SPIR-V, used by XenosRecomp at install time). Bundled mode: <resources>/toolchain/dxc/bin/dxc and
-// <resources>/toolchain/dxc/lib/libdxcompiler.so must exist (the AppImage does not ship them yet, ADR 0005); a
-// missing file is ToolMissing with a hint that says so. System mode uses `dxc` on PATH (see run_doctor).
-Result<void> check_bundled_dxc(const std::filesystem::path& resources);
-
-// Install hint for the system DXC (the directx-shader-compiler package).
-std::string_view system_dxc_hint();
-
-// Package manager commands that install the system toolchain (pacman, apt, dnf).
 std::string_view system_toolchain_hint();
 
 }  // namespace lr::pipeline

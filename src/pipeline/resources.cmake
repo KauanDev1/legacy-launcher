@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Stages the runtime resources into ${CMAKE_BINARY_DIR}/share/legacyrecomp (same layout as an install
-# prefix's share/legacyrecomp): tools/{XenonAnalyse,XenonRecomp,XenosRecomp,xenos_shader_common.h,ppc_context.h}, config/minecraft-tu1/*, and the
+# prefix's share/legacyrecomp): tools/{XenonAnalyse,XenonRecomp,ppc_context.h}, config/minecraft-tu1/*, and the
 # game template inputs under runtime/:
 #   runtime/template/CMakeLists.txt   the CMake project the build stage configures
 #   runtime/src/main.cpp              game entry point, compiled by the template with the generated headers
@@ -10,7 +10,7 @@
 #                                     template_compiles_with_staged_headers (tests/CMakeLists.txt) checks it
 #   runtime/include/simde/            SIMD Everywhere headers (ppc_context.h includes <x86/avx.h>)
 #   runtime/lib/                      liblr_runtime_core.a (sanitizer-free staged variant, see src/runtime),
-#                                     liblr_zstd.a (zstd decompression, the shader cache blob), libXenonUtils.a. Not libdisasm.a: XenonUtils' PowerPC disassembler is
+#                                     libXenonUtils.a. Not libdisasm.a: XenonUtils' PowerPC disassembler is
 #                                     GPL-2.0-or-later (binutils) and the game uses none of it (ADR 0002).
 # and the GUI launcher's fonts (assets/fonts: Inter, JetBrains Mono and their OFL licence texts) under fonts/.
 # ppc_context.h itself is not staged under runtime/: XenonRecomp copies it into work/generated.
@@ -103,7 +103,7 @@ add_custom_command(OUTPUT "${_lr_simde_stamp}"
 list(APPEND _lr_staged "${_lr_simde_stamp}")
 
 add_custom_target(lr_resources ALL
-  DEPENDS ${_lr_staged} XenonAnalyse XenonRecomp lr_runtime_core_staged lr_zstd XenonUtils
+  DEPENDS ${_lr_staged} XenonAnalyse XenonRecomp lr_runtime_core_staged XenonUtils
   COMMAND ${CMAKE_COMMAND} -E make_directory "${_lr_runtime_dir}/lib"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:XenonUtils>" "${_lr_runtime_dir}/lib/libXenonUtils.a"
   # Older builds staged libdisasm.a; remove it so `cmake --install` never ships it.
@@ -127,33 +127,4 @@ endif()
 if(NOT LR_XENONRECOMP_PATCH_HASH STREQUAL "none")
   string(SUBSTRING "${LR_XENONRECOMP_PATCH_HASH}" 0 16 _lr_patch_hash)
   string(APPEND LR_XENONRECOMP_COMMIT "+patches:${_lr_patch_hash}")
-endif()
-
-# XenosRecomp (shader translator, run at install time by a later stage) when DXC was found at configure time.
-# It links the system libdxcompiler.so (directx-shader-compiler); the bundled-DXC layout is ADR 0005.
-if(LR_HAVE_XENOSRECOMP)
-  add_custom_target(lr_resources_xenosrecomp ALL
-    DEPENDS XenosRecomp
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${LR_RESOURCES_DIR}/tools"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:XenosRecomp>" "${LR_RESOURCES_DIR}/tools/XenosRecomp"
-    # The HLSL prelude every translated shader starts with (third argument of the tool).
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${LR_XENOSRECOMP_DIR}/XenosRecomp/shader_common.h"
-            "${LR_RESOURCES_DIR}/tools/xenos_shader_common.h"
-    COMMENT "Staging XenosRecomp")
-  add_dependencies(lr_resources lr_resources_xenosrecomp)
-endif()
-
-# Commit of the XenosRecomp submodule (+ its patches hash): part of the shaders stage fingerprint, like the
-# XenonRecomp one above.
-execute_process(COMMAND git -C "${_lr_src_root}/thirdparty/XenosRecomp" rev-parse HEAD
-  OUTPUT_VARIABLE LR_XENOSRECOMP_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE
-  RESULT_VARIABLE _lr_git_rc ERROR_QUIET)
-if(NOT _lr_git_rc EQUAL 0 OR LR_XENOSRECOMP_COMMIT STREQUAL "")
-  set(LR_XENOSRECOMP_COMMIT "unknown")
-  message(WARNING "Could not read the XenosRecomp submodule commit (git -C thirdparty/XenosRecomp rev-parse HEAD). "
-                  "The shaders stage cache will not notice a XenosRecomp update; use --force shaders.")
-endif()
-if(NOT LR_XENOSRECOMP_PATCH_HASH STREQUAL "none")
-  string(SUBSTRING "${LR_XENOSRECOMP_PATCH_HASH}" 0 16 _lr_xenos_patch_hash)
-  string(APPEND LR_XENOSRECOMP_COMMIT "+patches:${_lr_xenos_patch_hash}")
 endif()
