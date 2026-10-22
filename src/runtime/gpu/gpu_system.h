@@ -40,11 +40,19 @@
 // per frame instead of a stream of them, and a game waiting for vblanks before its first swap still gets them.
 //
 // --trace-gpu (enable_trace): one line per PM4 packet ("pm4 type3 DRAW_INDX_2 dwords=3"), per draw
-// ("draw prim=4 count=3"), per resolve and per swap ("swap 1 fb=0x... 1280x720"), and once per second
+// ("draw prim=4 count=3"), per resolve and per swap ("swap 1 fb=0x... 1280x720"), per shader microcode the first
+// time it is loaded ("shader vertex 0x<XXH3-64> dwords=N cached|missing"), and once per second
 // "stats draws=N resolves=N textures=N swaps=N" (counts of that second). Written by the GPU thread, flushed after
 // every step before RPTR is written back (so a guest that saw RPTR advance also sees the lines on disk), on stop and on
 // the kernel's exit paths (flush_trace through kernel/trace.h's flush hook);
 // capped at 64 MiB (a final "gpu trace capped at 64 MiB" line).
+//
+// Shader loads. Every IM_LOAD / IM_LOAD_IMMEDIATE is hashed (XXH3-64 of the big-endian microcode in guest memory,
+// runtime/gpu/shader_cache.h) and looked up in shader_cache(); the first sighting of each (hash, stage) is recorded
+// in shader_stats() and traced. A hash missing from the cache is GpuHooks::fatal ("shader microcode 0x... is not in
+// the shader cache", exit 5) only when the backend binds shaders (Backend::binds_shaders, the Vulkan renderer);
+// with the NullBackend it is only reported (trace line "missing", shader_stats), which is what the shader gate
+// (ADR 0005) measures on the real game.
 #pragma once
 
 #include <atomic>
@@ -58,13 +66,16 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <set>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "common/result.h"
 #include "runtime/gpu/backend.h"
 #include "runtime/gpu/pm4.h"
 #include "runtime/gpu/registers.h"
+#include "runtime/gpu/shader_cache.h"
 
 namespace lr::gpu {
 
@@ -75,6 +86,17 @@ inline constexpr uint32_t kInterruptSourceCommand = 1;
 inline constexpr uint32_t kVblankCpu = 2;  // the CPU a vblank interrupt runs on (Xenia)
 
 inline constexpr uint64_t kGpuTraceCapBytes = 64ull << 20;
+
+// What the IM_LOAD / IM_LOAD_IMMEDIATE packets loaded so far, by microcode hash (the shader gate's numbers).
+struct ShaderLoadStats {
+  struct Shader {
+    uint64_t hash;
+    ShaderStage stage;
+    bool cached;  // found in the registered shader cache
+  };
+  uint64_t loads = 0;            // load_shader calls
+  std::vector<Shader> distinct;  // first sighting of each (hash, stage), in load order
+};
 
 // What GpuSystem needs from its host (the kernel; tests supply their own).
 struct GpuHooks {
@@ -121,6 +143,10 @@ class GpuSystem {
   Result<void> enable_trace(const std::optional<std::filesystem::path>& file);
   // Writes the buffered trace lines (no-op without a trace). Any thread; the kernel calls it on its exit paths.
   void flush_trace();
+  // The translated shaders (the game's main.cpp registers the generated cache here before the GPU thread starts).
+  ShaderCache& shader_cache() { return shader_cache_; }
+  // A copy of the shader load statistics. Any thread.
+  ShaderLoadStats shader_stats() const;
 
   // Swaps the backend processed (LR_SWAP packets executed).
   uint64_t swaps() const { return swaps_.load(std::memory_order_acquire); }
@@ -146,6 +172,9 @@ class GpuSystem {
   void on_interrupt_done(uint32_t source);
   void on_swap(uint64_t swaps);
   uint32_t read_wptr() const;
+  // Hashes a loaded shader and records its first sighting; false when it is missing from the cache and the backend
+  // binds shaders (fatal reported; the GPU thread stops after the current step).
+  bool on_shader_load(ShaderStage stage, uint32_t guest_addr, uint32_t dwords, bool backend_binds_shaders);
 
   MemoryAccess mem_;
   GpuHooks hooks_;
@@ -153,6 +182,13 @@ class GpuSystem {
   std::unique_ptr<BackendProxy> proxy_;
   std::unique_ptr<Trace> trace_;
   CommandProcessor cp_;
+  ShaderCache shader_cache_;
+
+  // Shader loads (shader_mutex_; written by the GPU thread).
+  mutable std::mutex shader_mutex_;
+  ShaderLoadStats shader_stats_;
+  std::set<std::pair<uint64_t, ShaderStage>> shaders_seen_;
+  std::atomic<bool> shader_failed_{false};
 
   // Ring state, set by guest threads and read by the GPU thread.
   std::mutex ring_mutex_;

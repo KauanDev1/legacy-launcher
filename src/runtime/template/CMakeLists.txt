@@ -10,7 +10,8 @@
 # Inputs: LR_GENERATED holds ppc_config.h, ppc_context.h (copied there by XenonRecomp), ppc_recomp_shared.h,
 # ppc_recomp.*.cpp, ppc_func_mapping.cpp and import_stubs.cpp (the import thunks, written by the build stage).
 # LR_SHADER_CACHE is the shaders stage output (work/shaders/shader_cache.cpp, outside LR_GENERATED so a recompile does
-# not wipe it): a data table with the zstd blob, nothing to link until the runtime decompresses it.
+# not wipe it): a data table with the zstd blob, which main.cpp registers with the runtime's ShaderCache
+# (liblr_zstd.a decompresses it).
 cmake_minimum_required(VERSION 3.25)
 project(LegacyRecompGame LANGUAGES CXX)
 
@@ -79,7 +80,7 @@ target_compile_options(legacyrecomp-game PRIVATE
 # deliberately not linked: the game never references it (ADR 0002, tripwire test no_gpl_disassembler_in_binaries).
 target_link_libraries(legacyrecomp-game PRIVATE
   "-Wl,--whole-archive" "${_rt}/lib/liblr_runtime_core.a" "-Wl,--no-whole-archive"
-  "${_rt}/lib/libXenonUtils.a"
+  "${_rt}/lib/libXenonUtils.a" "${_rt}/lib/liblr_zstd.a"
   SDL2::SDL2 Threads::Threads)
 set_target_properties(legacyrecomp-game PROPERTIES LINK_DEPENDS
-  "${_rt}/lib/liblr_runtime_core.a;${_rt}/lib/libXenonUtils.a")
+  "${_rt}/lib/liblr_runtime_core.a;${_rt}/lib/libXenonUtils.a;${_rt}/lib/liblr_zstd.a")

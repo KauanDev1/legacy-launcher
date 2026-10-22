@@ -1,8 +1,25 @@
 # SPDX-License-Identifier: MIT
-set(LR_RUNTIME_CORE_SOURCES guest_memory.cpp fault.cpp func_table.cpp loader.cpp xex_imports.cpp kernel/registry.cpp kernel/kernel.cpp kernel/glue.cpp guest_thread.cpp memory/page_heap.cpp memory/physical_heap.cpp kernel/exports/memory.cpp kernel/objects.cpp kernel/exports/objects.cpp kernel/variables.cpp kernel/dispatcher.cpp kernel/exports/sync.cpp kernel/threads.cpp kernel/exports/threads.cpp kernel/timers.cpp kernel/exports/time.cpp kernel/exports/critsec.cpp kernel/trace.cpp kernel/deadlock.cpp kernel/exports/debug.cpp kernel/vfs.cpp kernel/exports/vfs.cpp kernel/exports/files.cpp kernel/exports/lzx.cpp kernel/guest_printf.cpp kernel/exports/rtl.cpp kernel/exports/xex.cpp kernel/exports/config.cpp kernel/exports/crypto.cpp kernel/exports/xam.cpp kernel/exports/xam_ui.cpp kernel/exports/audio.cpp kernel/exports/video.cpp kernel/exports/net.cpp kernel/exports/msg.cpp kernel/exports/nui.cpp gpu/registers.cpp gpu/null_backend.cpp gpu/pm4.cpp gpu/mmio.cpp gpu/gpu_system.cpp)
+# zstd decompression only (the shader cache blob, gpu/shader_cache.cpp): third-party C sources from XenosRecomp's
+# zstd submodule, built without our strict flags and always -O2, no assembly (the AppImage builds it with zig too).
+# One sanitizer-free archive serves the launcher's tests and, staged as runtime/lib/liblr_zstd.a, the game template.
+set(LR_ZSTD_LIB "${CMAKE_SOURCE_DIR}/thirdparty/XenosRecomp/thirdparty/zstd/lib")
+if(NOT EXISTS "${LR_ZSTD_LIB}/zstd.h")
+  message(FATAL_ERROR "zstd not found in ${LR_ZSTD_LIB}: run `git submodule update --init --recursive`")
+endif()
+add_library(lr_zstd STATIC
+  "${LR_ZSTD_LIB}/common/debug.c" "${LR_ZSTD_LIB}/common/entropy_common.c" "${LR_ZSTD_LIB}/common/error_private.c"
+  "${LR_ZSTD_LIB}/common/fse_decompress.c" "${LR_ZSTD_LIB}/common/xxhash.c" "${LR_ZSTD_LIB}/common/zstd_common.c"
+  "${LR_ZSTD_LIB}/decompress/huf_decompress.c" "${LR_ZSTD_LIB}/decompress/zstd_ddict.c"
+  "${LR_ZSTD_LIB}/decompress/zstd_decompress.c" "${LR_ZSTD_LIB}/decompress/zstd_decompress_block.c")
+target_include_directories(lr_zstd SYSTEM PUBLIC "${LR_ZSTD_LIB}")
+target_compile_definitions(lr_zstd PRIVATE ZSTD_DISABLE_ASM ZSTD_LEGACY_SUPPORT=0 XXH_NAMESPACE=ZSTD_)
+target_compile_options(lr_zstd PRIVATE -O2 -w)
+set_target_properties(lr_zstd PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${LR_RESOURCES_DIR}/runtime/lib")
+
+set(LR_RUNTIME_CORE_SOURCES guest_memory.cpp fault.cpp func_table.cpp loader.cpp xex_imports.cpp kernel/registry.cpp kernel/kernel.cpp kernel/glue.cpp guest_thread.cpp memory/page_heap.cpp memory/physical_heap.cpp kernel/exports/memory.cpp kernel/objects.cpp kernel/exports/objects.cpp kernel/variables.cpp kernel/dispatcher.cpp kernel/exports/sync.cpp kernel/threads.cpp kernel/exports/threads.cpp kernel/timers.cpp kernel/exports/time.cpp kernel/exports/critsec.cpp kernel/trace.cpp kernel/deadlock.cpp kernel/exports/debug.cpp kernel/vfs.cpp kernel/exports/vfs.cpp kernel/exports/files.cpp kernel/exports/lzx.cpp kernel/guest_printf.cpp kernel/exports/rtl.cpp kernel/exports/xex.cpp kernel/exports/config.cpp kernel/exports/crypto.cpp kernel/exports/xam.cpp kernel/exports/xam_ui.cpp kernel/exports/audio.cpp kernel/exports/video.cpp kernel/exports/net.cpp kernel/exports/msg.cpp kernel/exports/nui.cpp gpu/registers.cpp gpu/null_backend.cpp gpu/pm4.cpp gpu/mmio.cpp gpu/gpu_system.cpp gpu/shader_cache.cpp)
 add_library(lr_runtime_core STATIC ${LR_RUNTIME_CORE_SOURCES})
 target_include_directories(lr_runtime_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
-target_link_libraries(lr_runtime_core PUBLIC lr_common lr_formats PRIVATE XenonUtils)
+target_link_libraries(lr_runtime_core PUBLIC lr_common lr_formats PRIVATE XenonUtils lr_zstd)
 lr_configure_target(lr_runtime_core)
 
 # --- Staging variant linked by the game template (share/legacyrecomp/runtime/lib/liblr_runtime_core.a) ---
@@ -17,7 +34,7 @@ list(TRANSFORM _lr_common_sources PREPEND "${_lr_common_dir}/")
 get_target_property(_lr_formats_dir lr_formats SOURCE_DIR)
 add_library(lr_runtime_core_staged STATIC ${LR_RUNTIME_CORE_SOURCES} ${_lr_common_sources} "${_lr_formats_dir}/xex2.cpp")
 target_include_directories(lr_runtime_core_staged PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
-target_link_libraries(lr_runtime_core_staged PRIVATE XenonUtils)
+target_link_libraries(lr_runtime_core_staged PRIVATE XenonUtils lr_zstd)
 target_compile_options(lr_runtime_core_staged PRIVATE -Wall -Wextra -Wpedantic -Werror -O2)
 set_target_properties(lr_runtime_core_staged PROPERTIES
   OUTPUT_NAME lr_runtime_core
@@ -27,6 +44,11 @@ set_target_properties(lr_runtime_core_staged PROPERTIES
 set(LR_MSPACK_INCLUDE "${LR_XENONRECOMP_DIR}/thirdparty/libmspack/libmspack/mspack")
 target_include_directories(lr_runtime_core PRIVATE ${LR_MSPACK_INCLUDE})
 target_include_directories(lr_runtime_core_staged PRIVATE ${LR_MSPACK_INCLUDE})
+# gpu/shader_cache.cpp uses xxHash header-only (XXH_INLINE_ALL), XenonRecomp's bundled copy: the same XXH3 the
+# XenosRecomp fork hashes the microcode with.
+set(LR_XXHASH_INCLUDE "${LR_XENONRECOMP_DIR}/thirdparty/xxHash")
+target_include_directories(lr_runtime_core SYSTEM PRIVATE ${LR_XXHASH_INCLUDE})
+target_include_directories(lr_runtime_core_staged SYSTEM PRIVATE ${LR_XXHASH_INCLUDE})
 
 # --- Vulkan backend (lr::gpu::vk): our wrapper over volk + VMA (lr_vulkan_thirdparty, root CMakeLists.txt) ---
 add_library(lr_vulkan STATIC gpu/vk/device.cpp)

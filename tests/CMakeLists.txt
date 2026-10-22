@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
 include(Catch)
-add_executable(lr_tests test_result.cpp test_sha256.cpp test_paths.cpp test_xdvdfs.cpp test_stfs.cpp test_xex2.cpp test_integration_formats.cpp test_runner.cpp test_game_config.cpp test_process.cpp test_doctor.cpp test_toolchain.cpp test_extract_verify.cpp test_recomp_config.cpp test_integration_pipeline.cpp test_switch_scan.cpp test_function_discovery.cpp test_runtime_core.cpp test_loader.cpp test_kernel_registry.cpp test_kernel_abi.cpp test_kernel_glue.cpp test_kernel_memory.cpp test_kernel_variables.cpp test_kernel_objects.cpp test_kernel_sync.cpp test_kernel_threads.cpp test_kernel_time.cpp test_kernel_critsec.cpp test_kernel_debug.cpp test_kernel_vfs.cpp test_kernel_files.cpp test_kernel_lzx.cpp test_kernel_rtl.cpp test_kernel_xex_config.cpp test_kernel_xam.cpp test_kernel_audio_ui.cpp test_sha1.cpp test_import_stubs.cpp test_guest_thread.cpp test_page_heap.cpp test_physical_heap.cpp test_fake_game.cpp test_build_stage.cpp test_shaders_stage.cpp test_integration_e2e.cpp test_integration_m3.cpp test_cli_args.cpp test_progress_bar.cpp test_queue_sink.cpp test_gui_model.cpp test_game_exit.cpp test_gpu_vk_device.cpp test_gpu_registers.cpp test_gpu_pm4.cpp test_gpu_memory.cpp test_gpu_system.cpp)
+add_executable(lr_tests test_result.cpp test_sha256.cpp test_paths.cpp test_xdvdfs.cpp test_stfs.cpp test_xex2.cpp test_integration_formats.cpp test_runner.cpp test_game_config.cpp test_process.cpp test_doctor.cpp test_toolchain.cpp test_extract_verify.cpp test_recomp_config.cpp test_integration_pipeline.cpp test_switch_scan.cpp test_function_discovery.cpp test_runtime_core.cpp test_loader.cpp test_kernel_registry.cpp test_kernel_abi.cpp test_kernel_glue.cpp test_kernel_memory.cpp test_kernel_variables.cpp test_kernel_objects.cpp test_kernel_sync.cpp test_kernel_threads.cpp test_kernel_time.cpp test_kernel_critsec.cpp test_kernel_debug.cpp test_kernel_vfs.cpp test_kernel_files.cpp test_kernel_lzx.cpp test_kernel_rtl.cpp test_kernel_xex_config.cpp test_kernel_xam.cpp test_kernel_audio_ui.cpp test_sha1.cpp test_import_stubs.cpp test_guest_thread.cpp test_page_heap.cpp test_physical_heap.cpp test_fake_game.cpp test_build_stage.cpp test_shaders_stage.cpp test_integration_e2e.cpp test_integration_m3.cpp test_cli_args.cpp test_progress_bar.cpp test_queue_sink.cpp test_gui_model.cpp test_game_exit.cpp test_gpu_vk_device.cpp test_gpu_registers.cpp test_gpu_pm4.cpp test_gpu_memory.cpp test_gpu_system.cpp test_gpu_shader_cache.cpp)
 target_include_directories(lr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/support)
 # lr_runtime_core is linked --whole-archive, as the game template does (see lr_fake_game below).
-target_link_libraries(lr_tests PRIVATE lr_common lr_formats lr_pipeline lr_cli lr_gui_core lr_vulkan "$<LINK_LIBRARY:WHOLE_ARCHIVE,lr_runtime_core>" XenonUtils tomlplusplus::tomlplusplus Catch2::Catch2WithMain)
+target_link_libraries(lr_tests PRIVATE lr_common lr_formats lr_pipeline lr_cli lr_gui_core lr_vulkan "$<LINK_LIBRARY:WHOLE_ARCHIVE,lr_runtime_core>" XenonUtils lr_zstd tomlplusplus::tomlplusplus Catch2::Catch2WithMain)
 lr_configure_target(lr_tests)
 catch_discover_tests(lr_tests ADD_TAGS_AS_LABELS PROPERTIES TIMEOUT 3600)
 target_compile_definitions(lr_tests PRIVATE LR_SOURCE_DIR="${CMAKE_SOURCE_DIR}" LR_RESOURCES_DIR="${LR_RESOURCES_DIR}"
@@ -23,11 +23,11 @@ if(TARGET SDL2::SDL2)
     COMMAND lr_gen_import_stubs ${LR_FAKE_DIR}/ppc_recomp_shared.h ${LR_FAKE_STUBS}
     DEPENDS lr_gen_import_stubs ${LR_FAKE_DIR}/ppc_recomp_shared.h VERBATIM)
   add_executable(lr_fake_game ${CMAKE_SOURCE_DIR}/src/runtime/main.cpp ${LR_FAKE_DIR}/ppc_func_mapping.cpp
-    ${LR_FAKE_DIR}/fake_recomp.cpp ${LR_FAKE_DIR}/fake_kernel.cpp ${LR_FAKE_STUBS})
+    ${LR_FAKE_DIR}/fake_recomp.cpp ${LR_FAKE_DIR}/fake_kernel.cpp ${LR_FAKE_DIR}/fake_shader_cache.cpp ${LR_FAKE_STUBS})
   target_include_directories(lr_fake_game PRIVATE ${LR_FAKE_DIR})
   # --whole-archive like the game template, so LR_KERNEL registrations inside lr_runtime_core are linked exactly as
   # in the real game (an object nothing references is otherwise dropped with its registration).
-  target_link_libraries(lr_fake_game PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,lr_runtime_core>" XenonUtils SDL2::SDL2)
+  target_link_libraries(lr_fake_game PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,lr_runtime_core>" XenonUtils lr_zstd SDL2::SDL2)
   # The same forced include as the game template, so the fake game exercises the real PPC_CALL_INDIRECT_FUNC.
   target_compile_options(lr_fake_game PRIVATE -include runtime/indirect_call.h)
   lr_configure_target(lr_fake_game)

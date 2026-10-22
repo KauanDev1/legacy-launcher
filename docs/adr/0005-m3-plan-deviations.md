@@ -86,3 +86,20 @@ Formato: o quê, por quê, custo se estiver errada.
   falhar alto (spec, seção 7).
 - Custo se errado: shaders reais que usem as construções recusadas param a etapa com a mensagem; o portão da Tarefa 15
   mede quantos.
+
+### M6. Cache de shaders no runtime: registro com `Result`, hash no `GpuSystem`, ausência fatal só com backend que liga shaders (Tarefa 15)
+- O quê: `ShaderCache::register_entries` devolve `Result<void>` e recebe também `lr_shader_blob_uncompressed_size` (o
+  plano tinha `void register_entries(entries, blob)`); descomprime o blob uma vez, no registro, e confere as entradas;
+  `spirv()` devolve `Result<std::vector<uint32_t>>`. O hash do microcódigo é calculado pelo `GpuSystem` (no proxy do
+  backend), que guarda a primeira ocorrência de cada (hash, estágio) em `shader_stats()` e a escreve no trace da GPU.
+  Hash ausente do cache é `guest_fatal` só quando o backend liga shaders (`Backend::binds_shaders`, falso por padrão);
+  com o `NullBackend` é só informado (linha `missing` no trace). zstd: biblioteca nossa, `lr_zstd`, com os fontes de
+  descompressão do submódulo zstd do XenosRecomp, preparada como `runtime/lib/liblr_zstd.a` e ligada pelo template;
+  xxHash só em cabeçalho (`XXH_INLINE_ALL`), a cópia do XenonRecomp que o fork usa.
+- Por quê: APIs públicas devolvem `Result` (AGENTS.md); o tamanho descomprimido já vem no cache gerado. Com o
+  `NullBackend` nada é desenhado, então um shader ausente não muda o que roda, e o portão precisa contar todos os
+  ausentes em vez de parar no primeiro. O alvo `libzstd_static` só existe quando o XenosRecomp é compilado (exige o
+  DXC), e a `libzstd.so` do sistema seria mais uma dependência dinâmica do jogo (AppImage).
+- Custo se errado: se o backend Vulkan da Tarefa 20 não sobrescrever `binds_shaders`, um shader ausente passa sem
+  erro e o desenho sai sem shader; o teste `unknown hash is reported` mostra o comportamento esperado para os dois
+  tipos de backend.

@@ -38,6 +38,9 @@ class Backend {
   virtual void wait_idle() = 0;
   // Host textures created so far, for the --trace-gpu per-second counters. Backends without textures report 0.
   virtual uint64_t textures_created() const { return 0; }
+  // True for a backend that binds the translated shaders (the Vulkan renderer): for it, a loaded microcode hash
+  // missing from the shader cache is fatal (GpuSystem). Backends that render nothing (NullBackend) only report it.
+  virtual bool binds_shaders() const { return false; }
 };
 
 }  // namespace lr::gpu

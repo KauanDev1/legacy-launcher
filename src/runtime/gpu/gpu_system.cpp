@@ -104,6 +104,7 @@ class GpuSystem::BackendProxy final : public Backend {
   void set_inner(std::unique_ptr<Backend> b) { inner_ = std::move(b); }
 
   void load_shader(ShaderStage stage, uint32_t guest_addr, uint32_t dwords) override {
+    if (!owner_.on_shader_load(stage, guest_addr, dwords, inner_->binds_shaders())) return;
     Busy b(owner_);
     inner_->load_shader(stage, guest_addr, dwords);
   }
@@ -136,6 +137,7 @@ class GpuSystem::BackendProxy final : public Backend {
     inner_->wait_idle();
   }
   uint64_t textures_created() const override { return inner_->textures_created(); }
+  bool binds_shaders() const override { return inner_->binds_shaders(); }
 
   uint64_t draws = 0, resolves = 0;  // GPU thread only
 
@@ -291,6 +293,37 @@ void GpuSystem::flush_trace() {
   if (trace_) trace_->flush();
 }
 
+ShaderLoadStats GpuSystem::shader_stats() const {
+  std::lock_guard<std::mutex> lock(shader_mutex_);
+  return shader_stats_;
+}
+
+bool GpuSystem::on_shader_load(ShaderStage stage, uint32_t guest_addr, uint32_t dwords, bool backend_binds_shaders) {
+  // The command processor already checked [guest_addr, guest_addr + 4 * dwords) against guest memory.
+  if (mem_.base == nullptr || uint64_t{guest_addr} + uint64_t{dwords} * 4 > mem_.size) return true;
+  const uint64_t hash = microcode_hash(mem_.base + guest_addr, dwords);
+  const char* stage_name = stage == ShaderStage::Vertex ? "vertex" : "pixel";
+  bool cached;
+  {
+    std::lock_guard<std::mutex> lock(shader_mutex_);
+    ++shader_stats_.loads;
+    if (!shaders_seen_.emplace(hash, stage).second) return true;
+    cached = shader_cache_.find(hash) != nullptr;
+    shader_stats_.distinct.push_back({hash, stage, cached});
+  }
+  if (trace_) {
+    trace_->line("shader %s 0x%016llX dwords=%u %s\n", stage_name, static_cast<unsigned long long>(hash), dwords,
+                 cached ? "cached" : "missing");
+  }
+  if (cached || !backend_binds_shaders) return true;
+  char h[24];
+  std::snprintf(h, sizeof h, "0x%016llX", static_cast<unsigned long long>(hash));
+  shader_failed_.store(true, std::memory_order_release);
+  fail(std::string("shader microcode ") + h + " (" + stage_name + ", " + std::to_string(dwords) +
+       " dwords) is not in the shader cache");
+  return false;
+}
+
 uint64_t GpuSystem::interrupts_delivered(uint32_t source) const {
   return source < 2 ? delivered_[source].load(std::memory_order_acquire) : 0;
 }
@@ -395,6 +428,7 @@ void GpuSystem::gpu_main() {
       }
       if (wptr != rptr_.load(std::memory_order_acquire)) {
         if (!step(generation, ring_guest, ring_dwords, scratch, wptr)) return;
+        if (shader_failed_.load(std::memory_order_acquire)) return;  // fatal returned (tests)
         spins = 0;
         continue;
       }

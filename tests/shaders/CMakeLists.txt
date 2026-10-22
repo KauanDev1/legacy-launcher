@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # XenosRecomp harness: synthetic shader containers (cases.h) -> patched XenosRecomp + DXC (at build time) ->
-# shader_cache.cpp compiled into lr_shader_tests, which checks hashes, SPIR-V and the dumped HLSL. Broken
+# shader_cache.cpp compiled into lr_shader_tests, which checks hashes, SPIR-V and the dumped HLSL, and that the
+# runtime ShaderCache finds every shader by the hash of its loaded microcode (test_shader_binding.cpp). Broken
 # containers run as plain ctest commands that expect the tool to fail. Only built when XenosRecomp is.
 set(LR_SHADER_GEN ${CMAKE_CURRENT_BINARY_DIR}/gen)
 set(LR_SHADER_CACHE ${LR_SHADER_GEN}/out/shader_cache.cpp)
@@ -21,15 +22,16 @@ add_custom_command(OUTPUT ${LR_SHADER_CACHE} ${LR_SHADER_LOG}
           ${CMAKE_CURRENT_SOURCE_DIR}/cases.h ${CMAKE_SOURCE_DIR}/tests/support/xenos_shader_builder.h
   COMMENT "Translating synthetic Xenos shaders with XenosRecomp" VERBATIM)
 
-add_executable(lr_shader_tests test_xenosrecomp.cpp ${LR_SHADER_CACHE})
+add_executable(lr_shader_tests test_xenosrecomp.cpp test_shader_binding.cpp ${LR_SHADER_CACHE})
 target_include_directories(lr_shader_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/tests
   ${LR_XENOSRECOMP_DIR}/XenosRecomp)
-target_link_libraries(lr_shader_tests PRIVATE Catch2::Catch2WithMain xxHash::xxhash libzstd_static)
+# lr_runtime_core: the runtime ShaderCache (test_shader_binding.cpp); lr_zstd also serves the harness' own decompression.
+target_link_libraries(lr_shader_tests PRIVATE Catch2::Catch2WithMain xxHash::xxhash lr_runtime_core lr_zstd)
 # LR_LEGACYRECOMP: the LegacyRecomp layout macros of shader_common.h.
 target_compile_definitions(lr_shader_tests PRIVATE LR_LEGACYRECOMP LR_SHADER_HLSL_DIR="${LR_SHADER_HLSL}"
   LR_SHADER_LOG="${LR_SHADER_LOG}" LR_SHADER_COMMON_PATH="${LR_SHADER_COMMON}")
 # The test source is ours: strict warnings and sanitizers. The generated cache is a data table; it stays plain.
-set_source_files_properties(test_xenosrecomp.cpp PROPERTIES COMPILE_OPTIONS
+set_source_files_properties(test_xenosrecomp.cpp test_shader_binding.cpp PROPERTIES COMPILE_OPTIONS
   "-Wall;-Wextra;-Wpedantic;-Werror;$<$<CONFIG:Debug>:-fsanitize=address,undefined>;$<$<CONFIG:Debug>:-fno-omit-frame-pointer>")
 set_source_files_properties(${LR_SHADER_CACHE} PROPERTIES GENERATED TRUE)
 target_link_options(lr_shader_tests PRIVATE $<$<CONFIG:Debug>:-fsanitize=address,undefined>)

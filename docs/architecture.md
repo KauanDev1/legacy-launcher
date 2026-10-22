@@ -43,7 +43,9 @@ O `legacyrecomp-game` é um executável compilado na máquina do usuário na eta
 
 - o C++ gerado pelo XenonRecomp (`work/generated/`);
 - os thunks das importações (um por nome `__imp__*`, gerado a partir de `ppc_recomp_shared.h`; ver "Kernel");
-- as bibliotecas pré-compiladas do runtime (`lr_runtime_core`, XenonUtils), numa variante sem sanitizers;
+- as bibliotecas pré-compiladas do runtime (`lr_runtime_core`, XenonUtils e `lr_zstd`, a descompressão zstd do
+  submódulo do XenosRecomp, para o blob de shaders), numa variante sem sanitizers;
+- o cache de shaders gerado pela etapa `shaders` (`work/shaders/shader_cache.cpp`);
 - o `main.cpp` do runtime, copiado como **fonte** e compilado junto do código gerado.
 
 O `main.cpp` não pode ser uma biblioteca pré-compilada porque usa `PPC_IMAGE_BASE`, `PPC_CODE_SIZE`,
@@ -562,8 +564,9 @@ adiantado, para os cabeçalhos do template do jogo continuarem pequenos.
 
 **Trace da GPU** (`--trace-gpu`, repassado por `legacyrecomp run -- --trace-gpu`): uma linha por pacote PM4
 (`pm4 type3 DRAW_INDX_2 dwords=3`, `pm4 type0 dwords=7`), por draw (`draw prim=4 count=3`), por resolve e por swap
-(`swap 1 fb=0x... 1280x720`), e uma vez por segundo `stats draws=N resolves=N textures=N swaps=N` (contagens daquele
-segundo). Destino: `--gpu-trace-file <caminho>` (sem ele, stderr); o `legacyrecomp run` sempre passa
+(`swap 1 fb=0x... 1280x720`), por microcódigo de shader na primeira vez que é carregado
+(`shader vertex 0x<hash> dwords=N cached|missing`, ver "Shaders no runtime"), e uma vez por segundo
+`stats draws=N resolves=N textures=N swaps=N` (contagens daquele segundo). Destino: `--gpu-trace-file <caminho>` (sem ele, stderr); o `legacyrecomp run` sempre passa
 `<raiz>/work/logs/gpu-trace.log`, que sozinho não faz nada. Escrito pela thread da GPU e descarregado a cada passo,
 antes do write-back do RPTR (um jogo que viu o RPTR andar também vê as linhas no disco) e em todo caminho de saída
 que descarrega o trace de importações (`set_trace_flush_hook`: saída normal, 3, 5 e 6; não no handler de falhas,
@@ -601,6 +604,18 @@ como `container-<hash>.hlsl`), com o prelúdio trocado por `#include "shader_com
 (big-endian), em `virtualSize + shader.physicalOffset`. O runtime calcula o mesmo hash sobre os dwords que o jogo
 carrega com `IM_LOAD`/`IM_LOAD_IMMEDIATE`, lidos da memória do convidado sem troca de bytes. O hash do contêiner
 (XXH3-64 do contêiner inteiro, a chave do upstream) só aparece no log e em comentário no cache.
+
+**Shaders no runtime** (`runtime/gpu/shader_cache.h`). O `main.cpp` do jogo registra as tabelas geradas
+(`lr_shader_cache`, o blob e seus tamanhos) em `GpuSystem::shader_cache()` antes de rodar código do convidado;
+`ShaderCache::register_entries` descomprime o blob (zstd, `liblr_zstd.a`) e confere cada entrada (estágio 0 ou 1,
+hash sem repetição, SPIR-V alinhado a 4 dentro do blob); um cache corrompido encerra o jogo com saída 2. A cada
+`IM_LOAD`/`IM_LOAD_IMMEDIATE`, o `GpuSystem` calcula `microcode_hash` (XXH3-64, a mesma função do fork) sobre os
+`dwords * 4` bytes no endereço do convidado (o tamanho do pacote cobre só o microcódigo, sem cabeçalho de contêiner)
+e procura a entrada. A primeira vez que cada par (hash, estágio) aparece é registrada em `shader_stats()` e no trace
+da GPU. Hash ausente do cache: com um backend que liga shaders (`Backend::binds_shaders`, o renderizador Vulkan da
+Tarefa 20) é `guest_fatal` (saída 5) com `shader microcode 0x<hash> (<estágio>, N dwords) is not in the shader
+cache`; com o `NullBackend`, que não desenha nada, só é informado (linha `missing` no trace), e é assim que o portão
+dos shaders mede a cobertura (ADR 0005).
 
 **Cache gerado** (`shader_cache.cpp`, derivado do jogo: só em `work/`, nunca no repositório):
 

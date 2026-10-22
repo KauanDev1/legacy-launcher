@@ -5,12 +5,12 @@
 #   runtime/template/CMakeLists.txt   the CMake project the build stage configures
 #   runtime/src/main.cpp              game entry point, compiled by the template with the generated headers
 #   runtime/include/{runtime,common}/ our headers (same include layout as src/: runtime/, runtime/kernel/,
-#                                     runtime/memory/, common/), plus formats/xex2.h. Every header main.cpp or
+#                                     runtime/memory/, runtime/gpu/, common/), plus formats/xex2.h. Every header main.cpp or
 #                                     the import thunks include, even transitively, must be here: the unit test
 #                                     template_compiles_with_staged_headers (tests/CMakeLists.txt) checks it
 #   runtime/include/simde/            SIMD Everywhere headers (ppc_context.h includes <x86/avx.h>)
 #   runtime/lib/                      liblr_runtime_core.a (sanitizer-free staged variant, see src/runtime),
-#                                     libXenonUtils.a. Not libdisasm.a: XenonUtils' PowerPC disassembler is
+#                                     liblr_zstd.a (zstd decompression, the shader cache blob), libXenonUtils.a. Not libdisasm.a: XenonUtils' PowerPC disassembler is
 #                                     GPL-2.0-or-later (binutils) and the game uses none of it (ADR 0002).
 # and the GUI launcher's fonts (assets/fonts: Inter, JetBrains Mono and their OFL licence texts) under fonts/.
 # ppc_context.h itself is not staged under runtime/: XenonRecomp copies it into work/generated.
@@ -50,6 +50,7 @@ list(APPEND _lr_staged "${_ctx_dst}")
 set(_lr_runtime_dir "${LR_RESOURCES_DIR}/runtime")
 file(GLOB _lr_runtime_headers CONFIGURE_DEPENDS RELATIVE "${_lr_src_root}/src"
   "${_lr_src_root}/src/runtime/*.h" "${_lr_src_root}/src/runtime/kernel/*.h" "${_lr_src_root}/src/runtime/memory/*.h"
+  "${_lr_src_root}/src/runtime/gpu/*.h"
   "${_lr_src_root}/src/common/*.h"
   "${_lr_src_root}/src/formats/xex2.h")
 set(_lr_runtime_files "")
@@ -102,7 +103,7 @@ add_custom_command(OUTPUT "${_lr_simde_stamp}"
 list(APPEND _lr_staged "${_lr_simde_stamp}")
 
 add_custom_target(lr_resources ALL
-  DEPENDS ${_lr_staged} XenonAnalyse XenonRecomp lr_runtime_core_staged XenonUtils
+  DEPENDS ${_lr_staged} XenonAnalyse XenonRecomp lr_runtime_core_staged lr_zstd XenonUtils
   COMMAND ${CMAKE_COMMAND} -E make_directory "${_lr_runtime_dir}/lib"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:XenonUtils>" "${_lr_runtime_dir}/lib/libXenonUtils.a"
   # Older builds staged libdisasm.a; remove it so `cmake --install` never ships it.
