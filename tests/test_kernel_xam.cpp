@@ -383,6 +383,16 @@ TEST_CASE("voice chat: inactive, no headset", "[unit][kernel][xam]") {
   CHECK(f.call("XamVoiceHeadsetPresent", 0u) == 0);
 }
 
+TEST_CASE("XamUserCheckPrivilege grants the local profile everything", "[unit][kernel][xam]") {
+  KernelFixture f;
+  const uint32_t out = f.alloc(4);
+  *f.mem.translate<be<uint32_t>>(out) = 7;
+  CHECK(f.call("XamUserCheckPrivilege", 0u, 0xFCu, out) == ERROR_SUCCESS);
+  CHECK(*f.mem.translate<be<uint32_t>>(out) == 1u);
+  CHECK(f.call("XamUserCheckPrivilege", 1u, 0xFCu, out) == ERROR_NO_SUCH_USER);
+  CHECK(f.call("XamUserCheckPrivilege", 0u, 0xFCu, 0u) == ERROR_INVALID_PARAMETER);
+}
+
 TEST_CASE("XMsg requests to the XAM app (0xFE) complete at once", "[unit][kernel][xam]") {
   KernelFixture f;
   constexpr uint32_t kXamApp = 0xFE, kXFail = 0x80004005, kXNotFound = 0x80070490;

@@ -357,6 +357,16 @@ uint32_t XNotifyGetNext(GuestCall& c, uint32_t handle, uint32_t match_id, U32Ptr
 
 uint32_t XamUserGetSigninState(uint32_t user_index) { return user_index == 0 ? kSigninStateLocal : 0; }
 
+// XamUserCheckPrivilege(user_index, privilege, result*): the local profile (user 0, or 0xFF = any user) has every
+// privilege (*result = TRUE), as Xenia; other users are not signed in.
+uint32_t XamUserCheckPrivilege(GuestCall& c, uint32_t user_index, uint32_t /*privilege*/, U32Ptr result_out) {
+  if (!result_out.valid_range(4)) return ERROR_INVALID_PARAMETER;
+  if (user_index != 0xFF && user_index >= kMaxUsers) return ERROR_INVALID_PARAMETER;
+  if (user_index != 0xFF && user_index != 0) return ERROR_NO_SUCH_USER;
+  *result_out.get(c.base) = 1;
+  return ERROR_SUCCESS;
+}
+
 // XamUserGetXUID(user_index, type_mask, xuid*): the local XUID for any offline/online type bit.
 uint32_t XamUserGetXUID(GuestCall& c, uint32_t user_index, uint32_t type_mask, U64Ptr xuid_out) {
   if (!xuid_out.valid_range(8)) return X_E_INVALIDARG;
@@ -500,6 +510,7 @@ LR_KERNEL(XNotifyGetNext);
 LR_KERNEL_STUB(XNotifyPositionUI, 0);  // no system UI to position (void import; r3 ignored)
 LR_KERNEL(XamUserGetSigninState);
 LR_KERNEL(XamUserGetXUID);
+LR_KERNEL(XamUserCheckPrivilege);
 LR_KERNEL(XamUserGetName);
 LR_KERNEL(XamUserGetSigninInfo);
 LR_KERNEL(XamUserReadProfileSettings);
