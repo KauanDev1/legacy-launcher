@@ -29,10 +29,24 @@ uint32_t NetDll_WSAStartup(GuestCall& c, uint32_t /*caller*/, uint16_t version, 
   return 0;
 }
 
+// NetDll_XNetGetTitleXnAddr / NetDll_XNetGetDebugXnAddr(caller, XNADDR*): offline, so the 36-byte XNADDR is zeroed
+// and the answer is XNET_GET_XNADDR_NONE (1), a final state (PENDING, 0, would make the game poll).
+constexpr uint32_t kXnAddrBytes = 36;
+constexpr uint32_t kXnAddrNone = 1;
+uint32_t NetDll_XNetGetTitleXnAddr(GuestCall& c, uint32_t /*caller*/, GuestPtr<uint8_t> addr) {
+  if (addr.valid_range(kXnAddrBytes)) std::memset(addr.get(c.base), 0, kXnAddrBytes);
+  return kXnAddrNone;
+}
+uint32_t NetDll_XNetGetDebugXnAddr(GuestCall& c, uint32_t caller, GuestPtr<uint8_t> addr) {
+  return NetDll_XNetGetTitleXnAddr(c, caller, addr);
+}
+
 }  // namespace exports
 
 LR_KERNEL_STUB_FN(NetDll_WSAStartup);                 // Winsock "started": offline, nothing to initialize
 LR_KERNEL_STUB(NetDll_XNetStartup, 0);                // XNet "started": offline, nothing to initialize
 LR_KERNEL_STUB(NetDll_XNetGetEthernetLinkStatus, 0);  // 0 = no Ethernet link: M2 is offline
+LR_KERNEL_STUB_FN(NetDll_XNetGetTitleXnAddr);         // offline: zeroed address, XNET_GET_XNADDR_NONE
+LR_KERNEL_STUB_FN(NetDll_XNetGetDebugXnAddr);         // same
 
 }  // namespace lr::kernel

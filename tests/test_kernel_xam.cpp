@@ -362,6 +362,17 @@ TEST_CASE("WSAStartup stub returns 0", "[unit][kernel][xam][net]") {
   CHECK(f.call("NetDll_XNetGetEthernetLinkStatus", 1u) == 0);  // no link
 }
 
+TEST_CASE("XNetGet*XnAddr report no network address (offline)", "[unit][kernel][xam][net]") {
+  KernelFixture f;
+  const uint32_t addr = f.alloc(36);
+  std::memset(f.mem.translate<uint8_t>(addr), 0xAB, 36);
+  CHECK(f.call("NetDll_XNetGetTitleXnAddr", 1u, addr) == 1);  // XNET_GET_XNADDR_NONE
+  for (uint32_t i = 0; i < 36; ++i) CHECK(f.mem.translate<uint8_t>(addr)[i] == 0);
+  std::memset(f.mem.translate<uint8_t>(addr), 0xAB, 36);
+  CHECK(f.call("NetDll_XNetGetDebugXnAddr", 1u, addr) == 1);
+  CHECK(f.mem.translate<uint8_t>(addr)[35] == 0);
+}
+
 TEST_CASE("XMsg requests to the XAM app (0xFE) complete at once", "[unit][kernel][xam]") {
   KernelFixture f;
   constexpr uint32_t kXamApp = 0xFE, kXFail = 0x80004005, kXNotFound = 0x80070490;
