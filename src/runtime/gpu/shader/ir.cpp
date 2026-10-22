@@ -389,7 +389,14 @@ Result<AluInstr> Decoder::decode_alu(uint32_t slot, const uint32_t* w) {
   // Destinations.
   if (a.export_data) {
     if (a.vector_dest_rel) return fail(slot, "alu", "export to a relative destination");
-    if ((a.vector_write_mask | a.scalar_write_mask) != 0) LR_TRY(note_export(slot, a.vector_dest));
+    // Where both masks overlap the export gets 1.0; with scalar_dest_rel, the components neither mask names get 0.0.
+    const uint32_t vm = a.vector_write_mask;
+    const uint32_t sm = a.scalar_write_mask;
+    a.export_vector_mask = vm & ~sm;
+    a.export_scalar_mask = sm & ~vm;
+    a.export_const1_mask = vm & sm;
+    a.export_const0_mask = a.scalar_dest_rel ? ~(vm | sm) & 0xFu : 0u;
+    if ((vm | sm) != 0 || a.scalar_dest_rel) LR_TRY(note_export(slot, a.vector_dest));
   } else {
     if (a.vector_write_mask != 0) note_temp(a.vector_dest, a.vector_dest_rel);
     if (a.scalar_write_mask != 0) note_temp(a.scalar_dest, a.scalar_dest_rel);
@@ -472,6 +479,7 @@ Result<FetchInstr> Decoder::decode_fetch(uint32_t slot, const uint32_t* w) {
     x.min_filter = u::get32(w[1], f::kTfMinFilter);
     x.mip_filter = u::get32(w[1], f::kTfMipFilter);
     x.aniso_filter = u::get32(w[1], f::kTfAnisoFilter);
+    x.arbitrary_filter = u::get32(w[1], f::kTfArbitraryFilter);
     x.vol_mag_filter = u::get32(w[1], f::kTfVolMagFilter);
     x.vol_min_filter = u::get32(w[1], f::kTfVolMinFilter);
     x.use_computed_lod = u::get32(w[1], f::kTfUseComputedLod) != 0;

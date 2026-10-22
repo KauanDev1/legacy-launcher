@@ -165,8 +165,21 @@ struct AluSource {
 //
 // Destinations: without export_data, the vector result goes to r<vector_dest> (r[aL + vector_dest] when
 // vector_dest_rel) under vector_write_mask, and the scalar result to r<scalar_dest> (likewise) under
-// scalar_write_mask. With export_data, both results go to export register vector_dest (scalar_dest is unused), each
-// under its own mask; exports are never relative (decode() rejects it).
+// scalar_write_mask. With export_data, everything goes to export register vector_dest (scalar_dest is unused, and
+// exports are never relative: decode() rejects vector_dest_rel), and the raw masks combine as resolved in the
+// export_*_mask fields (semantics per Xenia's constant-0/1 export masks, reference only), with vm/sm the raw
+// vector/scalar write masks:
+//   - vm & ~sm: the vector result (export_vector_mask);
+//   - sm & ~vm: the scalar result (export_scalar_mask);
+//   - vm & sm: the constant 1.0 (export_const1_mask);
+//   - ~(vm | sm), only when scalar_dest_rel is set: the constant 0.0 (export_const0_mask); scalar_dest_rel means
+//     nothing else on an export.
+// The export is written (and counted in the Program summary) when any of the four is nonzero. The four masks are 0
+// without export_data.
+//
+// *_CONST_0/1 scalar ops: the operands are the constant src[2] (component a) and the temporary scalar_const_temp
+// (component b, from src[2]'s swizzle); both take src[2].negate and abs_constants (the temporary has no abs bit of
+// its own; src[2].abs already holds abs_constants).
 //
 // Relative constants: src[i].const_relative is already resolved (the first constant operand of the instruction uses
 // const0_rel, a later one const1_rel); the raw bits are kept for the disassembler.
@@ -193,6 +206,11 @@ struct AluInstr {
   // *_CONST_0/1 scalar ops: the temporary operand (its index is spread over the scalar opcode bit 0, src3's select
   // bit and src3's swizzle); the constant operand is src[2].
   uint32_t scalar_const_temp = 0;
+  // Resolved export component masks (export_data only; see above).
+  uint32_t export_vector_mask = 0;
+  uint32_t export_scalar_mask = 0;
+  uint32_t export_const0_mask = 0;
+  uint32_t export_const1_mask = 0;
 };
 
 // Sources the vector op reads (1, 2 or 3: src1, src1..2, src1..3).
@@ -265,6 +283,7 @@ struct FetchInstr {
   uint32_t min_filter = 0;
   uint32_t mip_filter = 0;
   uint32_t aniso_filter = 0;  // 3 bits, 7 = from the fetch constant
+  uint32_t arbitrary_filter = 0;  // 3 bits, 7 = from the fetch constant
   uint32_t vol_mag_filter = 0;
   uint32_t vol_min_filter = 0;
   bool use_computed_lod = false;

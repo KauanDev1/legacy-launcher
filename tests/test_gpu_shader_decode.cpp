@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <variant>
@@ -168,6 +169,7 @@ TEST_CASE("exec clause decodes its alu and fetch slots", "[unit][gpu]") {
   t.mag_filter = 1;
   t.min_filter = 0;
   t.aniso_filter = 2;
+  t.arbitrary_filter = 5;
   t.unnormalized = true;
   t.predicated = true;
   t.pred_condition = false;
@@ -235,6 +237,7 @@ TEST_CASE("exec clause decodes its alu and fetch slots", "[unit][gpu]") {
   CHECK(tf.mag_filter == 1);
   CHECK(tf.min_filter == 0);
   CHECK(tf.aniso_filter == 2);
+  CHECK(tf.arbitrary_filter == 5);
   CHECK(tf.unnormalized);
   CHECK(tf.predicated);
   CHECK_FALSE(tf.pred_condition);
@@ -274,20 +277,57 @@ TEST_CASE("exec past the end of the microcode is an error", "[unit][gpu]") {
       state = state * 1664525u + 1013904223u;
       return state;
     };
-    for (uint32_t round = 0; round < 2000; ++round) {
-      std::vector<uint32_t> random(next() % 64);
-      for (uint32_t& w : random) w = next();
-      // Small exec addresses so some clauses land inside the buffer.
-      if (random.size() >= 3 && (round & 1)) random[0] &= ~0xFF0u;
-      const auto stage = (round & 2) ? ShaderStage::Pixel : ShaderStage::Vertex;
+    constexpr uint32_t kRounds = 2000;
+    constexpr uint32_t kFetchOps[] = {0, 1, 16, 17, 18, 19, 24, 25, 26};
+    uint32_t decoded = 0;
+    uint32_t shaped = 0;
+    uint32_t shaped_decoded = 0;
+    for (uint32_t round = 0; round < kRounds; ++round) {
+      std::vector<uint32_t> random;
+      if (round & 1) {
+        // Shaped: one exec_end over 1..6 random slots whose opcodes are valid and that export nothing, so decoding
+        // reaches every ALU and fetch field instead of stopping at an early check.
+        ++shaped;
+        const uint32_t n = 1 + next() % 6;
+        const uint32_t sequence = next() & 0xFFF;
+        x::emit(random, x::cf_pair(x::cf_exec(true, 1, n, sequence), x::cf_nop()));
+        for (uint32_t k = 0; k < n; ++k) {
+          std::array<uint32_t, 3> w = {next(), next(), next()};
+          if ((sequence >> (2 * k)) & 1) {
+            w[0] = (w[0] & ~0x1Fu) | kFetchOps[next() % 9];
+            if ((w[0] & 0x1F) == 0) {
+              w[0] = (w[0] & ~(3u << 25)) | ((next() % 3) << 25);  // a vertex fetch constant select 0..2
+              w[1] &= ~(1u << 30);                                // a full fetch, never mini
+            }
+          } else {
+            uint32_t scalar = next() % 51;
+            if (scalar == 41) scalar = 40;
+            w[0] = (w[0] & ~(0x3Fu << 26) & ~(1u << 15)) | (scalar << 26);  // valid scalar op, no export
+            w[2] = (w[2] & ~(0x1Fu << 24)) | ((next() % 30) << 24);         // valid vector op
+          }
+          x::emit(random, w);
+        }
+      } else {
+        random.resize(next() % 64);
+        for (uint32_t& w : random) w = next();
+        // Small exec addresses so some clauses land inside the buffer.
+        if (random.size() >= 3 && (round & 2)) random[0] &= ~0xFF0u;
+      }
+      const auto stage = (round & 4) ? ShaderStage::Pixel : ShaderStage::Vertex;
       auto r = sh::decode(stage, random);
       if (r) {
+        ++decoded;
+        if (round & 1) ++shaped_decoded;
         CHECK(r.value().temp_count <= sh::kMaxTemps);
         CHECK_FALSE(sh::disassemble(r.value()).empty());
       } else {
         CHECK(contains(r.error().message, "instruction "));
+        if (round & 1) FAIL_CHECK("a shaped program failed: " << r.error().message);
       }
     }
+    // Every shaped program is valid, so at least half of all rounds decode fully.
+    CHECK(shaped_decoded == shaped);
+    CHECK(decoded >= kRounds / 2);
   }
 }
 
@@ -464,6 +504,76 @@ TEST_CASE("memexport destination is recorded", "[unit][gpu]") {
   }
 }
 
+TEST_CASE("export constant writes follow the vector and scalar masks", "[unit][gpu]") {
+  std::vector<uint32_t> code;
+  x::emit(code, x::cf_pair(x::cf_exec(true, 1, 4, 0), x::cf_nop()));
+  x::Alu zero = move_alu();  // o3 = 0000: no mask, scalar_dest_rel
+  zero.export_data = true;
+  zero.vector_dest = 3;
+  zero.vector_mask = 0;
+  zero.scalar_mask = 0;
+  zero.scalar_dest_relative = true;
+  x::emit(code, x::alu(zero));  // slot 1
+  x::Alu pos = move_alu();      // oPos.xyz1: w is in both masks
+  pos.export_data = true;
+  pos.vector_dest = x::kExportVsPosition;
+  pos.vector_mask = 0xF;
+  pos.scalar_op = x::kScalarMax;
+  pos.scalar_mask = 0x8;
+  x::emit(code, x::alu(pos));  // slot 2
+  x::Alu split = pos;          // o1: xy from the vector op, zw from the scalar op
+  split.vector_dest = 1;
+  split.vector_mask = 0x3;
+  split.scalar_mask = 0xC;
+  x::emit(code, x::alu(split));  // slot 3
+  x::Alu none = move_alu();      // o5 with no mask and no scalar_dest_rel: writes nothing
+  none.export_data = true;
+  none.vector_dest = 5;
+  none.vector_mask = 0;
+  x::emit(code, x::alu(none));  // slot 4
+
+  const sh::Program p = decode_ok(ShaderStage::Vertex, code);
+  const sh::AluInstr& z = alu_at(p, 1);
+  CHECK(z.export_const0_mask == 0xF);
+  CHECK(z.export_const1_mask == 0);
+  CHECK(z.export_vector_mask == 0);
+  CHECK(z.export_scalar_mask == 0);
+  const sh::AluInstr& o = alu_at(p, 2);
+  CHECK(o.export_vector_mask == 0x7);
+  CHECK(o.export_scalar_mask == 0);
+  CHECK(o.export_const1_mask == 0x8);
+  CHECK(o.export_const0_mask == 0);
+  const sh::AluInstr& s = alu_at(p, 3);
+  CHECK(s.export_vector_mask == 0x3);
+  CHECK(s.export_scalar_mask == 0xC);
+  CHECK(s.export_const0_mask == 0);
+  CHECK(s.export_const1_mask == 0);
+  CHECK(alu_at(p, 4).export_const0_mask == 0);
+
+  CHECK(p.interpolators_written == ((1u << 3) | (1u << 1)));  // o3 counts, o5 does not
+  CHECK(p.writes_position);
+  CHECK_FALSE(p.uses_relative_temps);  // scalar_dest_rel on an export is not a relative temporary
+
+  const std::string text = sh::disassemble(p);
+  INFO(text);
+  CHECK(contains(text, "o3.0000"));
+  CHECK(contains(text, "oPos.xyz1"));
+  CHECK(contains(text, "o1.xy__"));
+  CHECK(contains(text, "maxs o1.__zw"));
+
+  SECTION("non-export instructions have no export masks") {
+    const sh::AluInstr plain = std::get<sh::AluInstr>(  // a copy: the Program is a temporary
+        decode_ok(ShaderStage::Vertex, [] {
+          std::vector<uint32_t> c;
+          x::emit(c, x::cf_pair(x::cf_exec(true, 1, 1, 0), x::cf_nop()));
+          x::emit(c, x::alu(move_alu()));
+          return c;
+        }()).slots[1]);
+    CHECK((plain.export_vector_mask | plain.export_scalar_mask | plain.export_const0_mask |
+           plain.export_const1_mask) == 0);
+  }
+}
+
 TEST_CASE("aL-relative source and destination temps are decoded", "[unit][gpu]") {
   std::vector<uint32_t> code;
   x::emit(code, x::cf_pair(x::cf_exec(true, 1, 2, 1u << 2), x::cf_nop()));
@@ -615,6 +725,7 @@ TEST_CASE("disassembly names every opcode of a mixed shader", "[unit][gpu]") {
   a14.scalar_op = x::kScalarMulConst0;
   a14.scalar_mask = 1;
   a14.src3 = {12, false};
+  a14.abs_constants = true;  // the CONST ops apply it to both operands
   x::emit(code, x::alu(a14));  // slot 14
 
   const sh::Program p = decode_ok(ShaderStage::Vertex, code);
@@ -624,7 +735,7 @@ TEST_CASE("disassembly names every opcode of a mixed shader", "[unit][gpu]") {
        {"nop", " exec ", "exec_end", "cond_exec ", "cond_exec_end", "cond_exec_pred ", "cond_exec_pred_end",
         "loop_start", "loop_end", "cond_call", "return", "cond_jmp", "alloc", "cond_exec_pred_clean ",
         "cond_exec_pred_clean_end", "mark_vs_fetch_done", "add ", "muls ", "vfetch ", "dp4 ", "rcp ", "tfetch ",
-        "set_tex_lod", "kill_eq", "mul ", "mul_const_0"}) {
+        "set_tex_lod", "kill_eq", "mul ", "mul_const_0 r0.x___, |c12.w|, |r0.x|"}) {
     CHECK(contains(text, name));
   }
   // Every opcode has a name, so a later dump never prints a placeholder.

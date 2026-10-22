@@ -329,8 +329,8 @@ inline std::array<uint32_t, 3> vfetch_mini(uint32_t dst, int32_t offset_dwords, 
 }
 
 // Every texture fetch field (tfetch and the other texture opcodes). Filters: 2 bits each (3 = use the fetch
-// constant); aniso: 3 bits (7 = use the fetch constant). lod_bias is in 1/16 steps (signed 7-bit), the offsets in half
-// texels (signed 5-bit).
+// constant); aniso and arbitrary: 3 bits (7 = use the fetch constant). lod_bias is in 1/16 steps (signed 7-bit),
+// the offsets in half texels (signed 5-bit).
 struct TFetch {
   uint32_t opcode = kFetchTexture;
   uint32_t dst = 0;
@@ -345,6 +345,7 @@ struct TFetch {
   uint32_t min_filter = 3;
   uint32_t mip_filter = 3;
   uint32_t aniso_filter = 7;
+  uint32_t arbitrary_filter = 7;
   uint32_t vol_mag_filter = 3;
   uint32_t vol_min_filter = 3;
   bool use_computed_lod = true;
@@ -367,7 +368,8 @@ inline std::array<uint32_t, 3> tfetch(const TFetch& f) {
                       ((f.fetch_valid_only ? 1u : 0u) << 19) | ((f.const_index & 0x1F) << 20) |
                       ((f.unnormalized ? 1u : 0u) << 25) | ((f.src_swizzle & 0x3F) << 26);
   const uint32_t w1 = (f.dst_swizzle & 0xFFF) | ((f.mag_filter & 3) << 12) | ((f.min_filter & 3) << 14) |
-                      ((f.mip_filter & 3) << 16) | ((f.aniso_filter & 7) << 18) | ((f.vol_mag_filter & 3) << 24) |
+                      ((f.mip_filter & 3) << 16) | ((f.aniso_filter & 7) << 18) |
+                      ((f.arbitrary_filter & 7) << 21) | ((f.vol_mag_filter & 3) << 24) |
                       ((f.vol_min_filter & 3) << 26) | ((f.use_computed_lod ? 1u : 0u) << 28) |
                       ((f.use_register_lod ? 1u : 0u) << 29) | ((f.predicated ? 1u : 0u) << 31);
   const uint32_t w2 = (f.use_register_gradients ? 1u : 0u) | ((f.sample_location_center ? 1u : 0u) << 1) |

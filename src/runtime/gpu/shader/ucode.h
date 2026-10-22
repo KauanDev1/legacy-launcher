@@ -122,6 +122,7 @@ inline constexpr Field kTfMagFilter{12, 2};       // dword 1
 inline constexpr Field kTfMinFilter{14, 2};
 inline constexpr Field kTfMipFilter{16, 2};
 inline constexpr Field kTfAnisoFilter{18, 3};
+inline constexpr Field kTfArbitraryFilter{21, 3};
 inline constexpr Field kTfVolMagFilter{24, 2};
 inline constexpr Field kTfVolMinFilter{26, 2};
 inline constexpr Field kTfUseComputedLod{28, 1};

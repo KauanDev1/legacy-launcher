@@ -71,6 +71,24 @@ std::string mask_suffix(uint32_t mask) {
   return s;
 }
 
+// An export's vector-side destination mask: the vector components, '0'/'1' for constant writes, '_' for the rest
+// (the scalar components are printed on the scalar side).
+std::string export_mask_suffix(const AluInstr& a) {
+  std::string s = ".";
+  for (uint32_t i = 0; i < 4; ++i) {
+    const uint32_t bit = 1u << i;
+    if ((a.export_vector_mask & bit) != 0)
+      s += kComp[i];
+    else if ((a.export_const0_mask & bit) != 0)
+      s += '0';
+    else if ((a.export_const1_mask & bit) != 0)
+      s += '1';
+    else
+      s += '_';
+  }
+  return s;
+}
+
 std::string export_name(ShaderStage stage, uint32_t reg) {
   if (reg == kExportAddress) return "eA";
   if (reg > kExportAddress && reg < kExportData0 + kExportDataCount) return "eM" + std::to_string(reg - kExportData0);
@@ -111,7 +129,7 @@ std::string scalar_component(const AluInstr& a, bool is_b, bool as_const_temp) {
     base = s.is_temp ? temp_name(s.reg, a.is_src_temp_relative[2]) : const_name(a, s);
   base += '.';
   base += kComp[comp];
-  if (s.abs && !as_const_temp) base = "|" + base + "|";
+  if (s.abs) base = "|" + base + "|";  // the CONST ops' temporary takes abs_constants too
   return s.negate ? "-" + base : base;
 }
 
@@ -126,7 +144,7 @@ std::string alu_text(ShaderStage stage, const AluInstr& a) {
   if (a.vector_saturate) out += "_sat";
   out += ' ';
   out += a.export_data ? export_name(stage, a.vector_dest) : temp_name(a.vector_dest, a.vector_dest_rel);
-  out += mask_suffix(a.vector_write_mask);
+  out += a.export_data ? export_mask_suffix(a) : mask_suffix(a.vector_write_mask);
   for (uint32_t i = 0; i < vector_op_source_count(a.vector_op); ++i) out += ", " + vector_src(a, i);
 
   if (a.scalar_op != ScalarOp::RetainPrev || a.scalar_write_mask != 0) {
@@ -135,7 +153,7 @@ std::string alu_text(ShaderStage stage, const AluInstr& a) {
     if (a.scalar_saturate) out += "_sat";
     out += ' ';
     out += a.export_data ? export_name(stage, a.vector_dest) : temp_name(a.scalar_dest, a.scalar_dest_rel);
-    out += mask_suffix(a.scalar_write_mask);
+    out += mask_suffix(a.export_data ? a.export_scalar_mask : a.scalar_write_mask);
     const uint32_t operands = scalar_op_operand_count(a.scalar_op);
     if (scalar_op_is_const(a.scalar_op)) {
       out += ", " + scalar_component(a, false, false) + ", " + scalar_component(a, true, true);
@@ -187,7 +205,8 @@ std::string fetch_text(const FetchInstr& f) {
     out += ", offset=(" + std::to_string(f.offset_x) + "," + std::to_string(f.offset_y) + "," +
            std::to_string(f.offset_z) + ")";
   out += ", filter=" + std::to_string(f.mag_filter) + "/" + std::to_string(f.min_filter) + "/" +
-         std::to_string(f.mip_filter) + "/" + std::to_string(f.aniso_filter);
+         std::to_string(f.mip_filter) + "/" + std::to_string(f.aniso_filter) + "/" +
+         std::to_string(f.arbitrary_filter);
   return out;
 }
 
