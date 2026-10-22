@@ -37,7 +37,8 @@ class Vfs {
 
   // Defaults: \Device\Cdrom0 -> game_dir (ro); \Device\Harddisk0\Cache0, \Device\Harddisk0\Partition0 and
   // \Device\Harddisk0\Partition1 -> <user_dir>/cache (rw, created, one folder for all three, spec section 9); symlinks
-  // game: and d: -> \Device\Cdrom0, cache: -> \Device\Harddisk0\Cache0. An empty user_dir mounts no disk device. If
+  // game:, d: and update: (the title update, which the extract stage merges into the game files) ->
+  // \Device\Cdrom0, cache: -> \Device\Harddisk0\Cache0. An empty user_dir mounts no disk device. If
   // <user_dir>/cache cannot be created no disk device is mounted (cache: and the partitions then resolve to
   // NotFound), a warning goes to stderr and false is returned; the kernel carries on.
   bool mount_defaults(const std::filesystem::path& game_dir, const std::filesystem::path& user_dir);

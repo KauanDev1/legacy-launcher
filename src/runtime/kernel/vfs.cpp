@@ -109,6 +109,9 @@ bool Vfs::mount_defaults(const fs::path& game_dir, const fs::path& user_dir) {
   }
   create_symlink("game:", "\\Device\\Cdrom0");
   create_symlink("d:", "\\Device\\Cdrom0");
+  // The extract stage merges the title update package over the game files, so update: (the TU content, e.g.
+  // UPDATE:\res\1_2_2\gui\items.png) is the same read-only folder.
+  create_symlink("update:", "\\Device\\Cdrom0");
   create_symlink("cache:", "\\Device\\Harddisk0\\Cache0");
   return ok;
 }

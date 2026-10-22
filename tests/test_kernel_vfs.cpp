@@ -51,7 +51,8 @@ TEST_CASE("resolve handles odd guest paths", "[unit][vfs]") {
   const fs::path want = t.game / "Data" / "x.arc";
   for (const char* p : {"game:\\Data\\x.arc", "GAME:\\DATA\\X.ARC", "\\??\\game:\\Data\\x.arc", "game:\\\\Data\\\\\\\\x.arc",
                         "game:/Data/x.arc", "d:\\data\\.\\x.arc", "\\Device\\Cdrom0\\Data\\x.arc",
-                        "\\DEVICE\\CDROM0\\data\\x.arc", "game:\\Data\\..\\Data\\x.arc", "\\??\\GAME:\\Data\\x.arc"}) {
+                        "\\DEVICE\\CDROM0\\data\\x.arc", "game:\\Data\\..\\Data\\x.arc", "\\??\\GAME:\\Data\\x.arc",
+                        "UPDATE:\\Data\\x.arc", "update:\\data\\x.arc"}) {  // update: = the title update, merged
     INFO(p);
     auto r = t.vfs.resolve(p);
     REQUIRE(r);
