@@ -103,3 +103,25 @@ Formato: o quê, por quê, custo se estiver errada.
 - Custo se errado: se o backend Vulkan da Tarefa 20 não sobrescrever `binds_shaders`, um shader ausente passa sem
   erro e o desenho sai sem shader; o teste `unknown hash is reported` mostra o comportamento esperado para os dois
   tipos de backend.
+
+### M7. Portão dos shaders (Tarefa 15): reprovado, plano B
+- O quê: medição no jogo real (2026-10-22). Tradução: `translated 64 of 85` (75,3%, abaixo dos 90%); 21 contêineres
+  falharam: 15 pixel shaders com exportação de memória (`unsupported pixel shader export register 32`), 2 vertex
+  shaders com `vfetch` sem elemento de vértice, 2 com texturas 1D (`g_Texture1DIndex`, erro do DXC) e 2 vertex shaders
+  com amostragem de LOD implícito (erro do DXC: só permitida em fragment e compute). Sem falhas por microcódigo
+  repetido com traduções diferentes; `literal-loops` somou 0. Como a ferramenta não escreve o cache quando algum
+  contêiner falha, a cobertura foi medida contra os 64 hashes traduzidos do `shaders.log`, com o jogo compilado com um
+  cache vazio e `NullBackend` (`--headless --trace-gpu --exit-after-swaps 300`, saída 0, 300 swaps): 1112 pacotes
+  `IM_LOAD` e 902 `IM_LOAD_IMMEDIATE`, 7 microcódigos distintos (4 vertex, 3 pixel), 2 cobertos (os 2 pixel shaders
+  carregados sem alteração), 5 ausentes (cobertura de 28,6%). Nenhum dos 5 ausentes é o microcódigo de um contêiner do
+  XEX: 1 pixel shader e 1 vertex shader diferem do microcódigo de um contêiner em 1 e 2 dwords (no mesmo tamanho), e
+  3 vertex shaders (15, 24 e 27 dwords) não correspondem a contêiner nenhum. Os hashes estão na seção do relatório da
+  Tarefa 15. Decisão do plano: cobertura < 100% e tradução < 90%: parar e voltar ao controlador (plano B, tradutor
+  próprio); a Parte E não começa.
+- Por quê: o critério é o do plano. A medição mostra dois problemas diferentes: lacunas do tradutor (exportação de
+  memória, texturas 1D, amostragem em VS, `vfetch` sem elemento) e, mais fundo, o próprio jogo (o D3D) altera o
+  microcódigo antes de carregá-lo e carrega shaders que não estão em contêiner, então nenhum cache feito só a partir
+  dos contêineres do XEX, com chave no hash do microcódigo carregado, cobre o que o jogo usa.
+- Custo se errado: se os dwords alterados forem só campos de fetch que dá para normalizar antes do hash, e os 3 vertex
+  shaders sem contêiner vierem de outro arquivo do disco, o plano A ainda serviria com mais trabalho no fork; trocar
+  para o plano B sem conferir isso custa a escrita de um tradutor. A escolha entre os dois é do controlador.
