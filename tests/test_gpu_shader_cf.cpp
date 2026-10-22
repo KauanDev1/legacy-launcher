@@ -453,8 +453,81 @@ TEST_CASE("runaway jump loop stops at the iteration cap", "[unit][vulkan]") {
   HarnessInputs in;
   in.width = 1;
   in.ps_constants = ladder_constants();
-  CHECK(sh::kCfBackwardBranchCap == (1u << 20));
+  CHECK(sh::kCfBackwardBranchCap == (1u << 24));  // every count up to 2^24 is exact in a float
   CHECK(run_ps(h, program, in) == static_cast<float>(sh::kCfBackwardBranchCap));
+}
+
+TEST_CASE("cond_jmp onto its own loop_end continues the loop", "[unit][vulkan]") {
+  ShaderHarness h = make_harness();
+  // Loop 0 (aL = 10, 11, 12): r1 += r[aL], then a jump to the loop's own loop_end skips r1 += 128. Staying inside the
+  // body pops nothing, so the loop runs its three iterations either way.
+  const std::vector<Cf> program =
+      concat(load_ladder(), {raw(xe::cf_loop_start(0, 7)), exec({add(1, r(1), rel(0))}),
+                             raw(xe::cf_cond_jmp(6, 0, true)), exec({add(1, r(1), c(8))}), raw(xe::cf_loop_end(0, 3)),
+                             exec_end({mov(0, r(1), true)})});
+  HarnessInputs in;
+  in.ps_constants = ladder_constants();
+  in.loops[0] = loop_constant(3, 10, 1);
+  in.bools[0] = 1;
+  CHECK(run_ps(h, program, in) == 1.0f + 2.0f + 4.0f);  // taken: a continue
+  in.bools[0] = 0;
+  CHECK(run_ps(h, program, in) == 1.0f + 2.0f + 4.0f + 3 * 128.0f);  // not taken
+}
+
+TEST_CASE("conditional cond_call", "[unit][vulkan]") {
+  ShaderHarness h = make_harness();
+  // r1 = 1; call 3 (r1 *= 4) when bool 3 is set; then r1 += 8.
+  const std::vector<Cf> program = {exec({mov(1, c(1))}), raw(xe::cf_cond_call(3, 3, true)),
+                                   exec_end({add(1, r(1), c(4)), mov(0, r(1), true)}), exec({mul(1, r(1), c(3))}),
+                                   raw(xe::cf_ret())};
+  HarnessInputs in;
+  in.ps_constants = ladder_constants();
+  in.bools[0] = 1u << 3;
+  CHECK(run_ps(h, program, in) == 12.0f);
+  in.bools[0] = 0;
+  CHECK(run_ps(h, program, in) == 9.0f);
+}
+
+TEST_CASE("cond_jmp on the predicate", "[unit][vulkan]") {
+  ShaderHarness h = make_harness();
+  // p0 = (c9.w == 0); a jump on p0 == true skips r1 = 2.
+  const std::vector<Cf> program = {exec({pred_set(xe::kScalarPredSetEq, c(9)), mov(1, c(1))}),
+                                   raw(xe::cf_cond_jmp(3, 0, true, true)), exec({mov(1, c(2))}),
+                                   exec_end({mov(0, r(1), true)})};
+  HarnessInputs in;
+  in.ps_constants = ladder_constants({{0, 0, 0, 0}});
+  CHECK(run_ps(h, program, in) == 1.0f);  // p0 true: taken
+  in.ps_constants = ladder_constants({{0, 0, 0, 1}});
+  CHECK(run_ps(h, program, in) == 2.0f);  // p0 false: not taken
+}
+
+TEST_CASE("predicated break whose condition stays false runs the full count", "[unit][vulkan]") {
+  ShaderHarness h = make_harness();
+  // p0 = (c9.w == 0) before loop 0 (aL = 10, 11, 12), whose loop_end breaks when p0 is true.
+  const std::vector<Cf> program =
+      concat(load_ladder(), {exec({pred_set(xe::kScalarPredSetEq, c(9))}), raw(xe::cf_loop_start(0, 6)),
+                             exec({add(1, r(1), rel(0))}), raw(xe::cf_loop_end(0, 4, true, true)),
+                             exec_end({mov(0, r(1), true)})});
+  HarnessInputs in;
+  in.loops[0] = loop_constant(3, 10, 1);
+  in.ps_constants = ladder_constants({{0, 0, 0, 1}});
+  CHECK(run_ps(h, program, in) == 1.0f + 2.0f + 4.0f);  // p0 false throughout: three iterations
+  in.ps_constants = ladder_constants({{0, 0, 0, 0}});
+  CHECK(run_ps(h, program, in) == 1.0f);  // p0 true: breaks after the first
+}
+
+TEST_CASE("top-level return and an unmatched loop_end fall through", "[unit][vulkan]") {
+  ShaderHarness h = make_harness();
+  HarnessInputs in;
+  in.ps_constants = ladder_constants();
+  // A return at call depth 0 is a no-op: r1 = 1, then r1 += 2.
+  CHECK(run_ps(h, {exec({mov(1, c(1))}), raw(xe::cf_ret()), exec_end({add(1, r(1), c(2)), mov(0, r(1), true)})},
+               in) == 3.0f);
+  // A loop_end with no loop_start sees a count of 0 and leaves (no wrap to 0xFFFFFFFF): the body runs once.
+  in.loops[2] = loop_constant(5, 0, 1);
+  CHECK(run_ps(h, {exec({mov(1, c(1))}), exec({add(1, r(1), c(2))}), raw(xe::cf_loop_end(2, 1)),
+                   exec_end({mov(0, r(1), true)})},
+               in) == 3.0f);
 }
 
 // --- structure (spirv-dis) ----------------------------------------------------------------------------------------
@@ -480,7 +553,7 @@ TEST_CASE("malformed control flow still translates to valid SPIR-V", "[unit]") {
   // Guest-controlled control flow never aborts and never makes an invalid module: whatever the targets, nesting or
   // stack depths, the pc-switch form is well-formed and the runtime stacks stay in bounds.
   std::vector<std::pair<std::string, std::vector<Cf>>> programs;
-  programs.push_back({"return at depth 0", {exec({mov(1, c(1))}), raw(xe::cf_ret()), exec_end({mov(0, r(1), true)})}});
+  programs.push_back({"return at depth 0 (a no-op)", {exec({mov(1, c(1))}), raw(xe::cf_ret()), exec_end({mov(0, r(1), true)})}});
   programs.push_back({"loop_end without loop_start",
                       {exec({mov(1, c(1))}), raw(xe::cf_loop_end(2, 0)), exec_end({mov(0, r(1), true)})}});
   programs.push_back({"loop_start without loop_end, skipping past the end",

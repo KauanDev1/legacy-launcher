@@ -20,14 +20,15 @@
 namespace lr::gpu::shader {
 
 // Bumped whenever the translated SPIR-V changes for the same input (the disk cache is keyed by it).
-inline constexpr uint32_t kTranslatorVersion = 2;
+inline constexpr uint32_t kTranslatorVersion = 3;
 inline constexpr uint32_t kNoParamGen = 0xFF;
 
 // A shader with jumps, calls or loops runs as a loop around a switch on its pc (translator_cf.cpp). Only taken
 // backward branches count (LOOP_END back-edges, backward jmp/call, a return to an earlier instruction, a skip to an
 // earlier one): when the count reaches this cap the branch is not followed and the shader ends with its outputs as
-// written so far, so guest microcode can never hang the GPU. Three nested loops of 255 iterations already exceed it.
-inline constexpr uint32_t kCfBackwardBranchCap = 1u << 20;
+// written so far, so guest microcode can never hang the GPU. Three nested loops of 255 iterations fit (255^3 <
+// 2^24); four, or three with a call in the innermost body (each return counts), are cut short.
+inline constexpr uint32_t kCfBackwardBranchCap = 1u << 24;
 
 // The PS key modifiers, decoded (key_options(const ShaderKey&)). The VS has none in M3.
 struct TranslateOptions {

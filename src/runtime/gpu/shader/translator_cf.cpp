@@ -8,9 +8,9 @@
 //     `ended` flag, which guards every later clause; an unconditional one ends the program.
 //   - the pc switch otherwise: main is one structured loop around an OpSwitch on a function-local `pc`, one case per
 //     CF index that is index 0, a branch target, or follows a branch. A case runs the CF instructions from its index
-//     up to the next case (falling through by setting pc to it) or up to a branch, which sets pc. exec_end, return at
-//     call depth 0 and a pc past the program set pc to kPcEnd, which leaves the loop. Its merge block holds the stage
-//     epilogue, so exports and the single final OpKill come after it.
+//     up to the next case (falling through by setting pc to it) or up to a branch, which sets pc. exec_end and a pc
+//     past the program set pc to kPcEnd, which leaves the loop (a return at call depth 0 is a no-op). Its merge block
+//     holds the stage epilogue, so exports and the single final OpKill come after it.
 //
 // State (Function variables, set in main's entry block):
 //   - p0: the predicate, false at the start, kept across clauses (only ALU PRED_SET* writes it);
@@ -23,10 +23,10 @@
 // Loops (ADR 0005 M5). The loop constant (shared block, kSharedLoops) holds the count in bits 0..7, the start of aL
 // in bits 8..15 and the signed step of aL in bits 16..23. loop_start with count 0 skips to its target (nothing is
 // pushed); otherwise it pushes the count and aL (the start, or with is_repeat the current aL). loop_end decrements the
-// count and adds the step to aL, then leaves the loop when the count is 0 or, with is_predicated_break, when
-// p0 == pred_break_condition; leaving pops both stacks, which restores the enclosing aL. A cond_jmp from inside a loop
-// body to outside it pops once per loop it leaves (bodies are matched statically: a loop_end closes the innermost open
-// loop_start), so aL is restored on every exit. Xenia leaves the stacks as they are on such a jump; Xenos semantics,
+// count and adds the step to aL, then leaves the loop when the count was 1 or less (0 only on an unmatched loop_end)
+// or, with is_predicated_break, when p0 == pred_break_condition; leaving pops both stacks, which restores the
+// enclosing aL. A cond_jmp from inside a loop body to outside it pops once per loop it leaves (bodies are matched
+// statically: a loop_end closes the innermost open loop_start), so aL is restored on every exit. Xenia leaves the stacks as they are on such a jump; Xenos semantics,
 // as the ADR pins them, restore aL on any exit.
 //
 // Every guest value stays in bounds by construction: CF targets are checked by decode(), pc values that are not a
@@ -227,9 +227,12 @@ void CfEmitter::loop_end(uint32_t i, const CfInstr& c) {
                         {b_.op(spv::OpBitcast, ty_.i32, {b_.op(spv::OpShiftLeftLogical, ty_.u32, {lc, u(8)})}), u(24)});
   const Id counts = load(t_.loop_counts_, ty_.uvec4);
   const Id al = load(t_.al_stack_, ty_.ivec4);
-  const Id left = b_.op(spv::OpISub, ty_.u32, {t_.extract(counts, 0, ty_.u32), u(1)});
+  const Id left = b_.op(spv::OpISub, ty_.u32, {t_.extract(counts, 0, ty_.u32), u(1)});  // kept only when staying
   const Id next_al = b_.op(spv::OpIAdd, ty_.i32, {t_.extract(al, 0, ty_.i32), step});
-  Id leave = b_.op(spv::OpIEqual, ty_.bool_, {left, u(0)});
+  // Leave when this was the last iteration. Tested on the count before the decrement (<= 1), so a loop_end with no
+  // loop_start, or reached by a jump into the body, leaves instead of wrapping the count to 0xFFFFFFFF.
+  const Id first_count = t_.extract(counts, 0, ty_.u32);
+  Id leave = b_.op(spv::OpULessThanEqual, ty_.bool_, {first_count, u(1)});
   if (c.is_predicated_break)
     leave = b_.op(spv::OpLogicalOr, ty_.bool_, {leave, t_.pred_matches(c.pred_break_condition)});
   const Id stay_counts = b_.op(spv::OpCompositeInsert, ty_.uvec4, {left, counts, 0});
@@ -271,14 +274,14 @@ void CfEmitter::call(uint32_t i, const CfInstr& c) {
 }
 
 void CfEmitter::ret(uint32_t i) {
-  // At depth 0 a return ends the program (the brief's rule; Xenia's ucode.h calls it a no-op outside a function).
+  // At depth 0 a return is a no-op (pc = i + 1), per the hardware note in Xenia's ucode.h.
   const Id depth = load(t_.call_depth_, ty_.u32);
   const Id in_call = b_.op(spv::OpINotEqual, ty_.bool_, {depth, u(0)});
   const Id stack = load(t_.call_stack_, ty_.uvec4);
   const Id address = t_.extract(stack, 0, ty_.u32);
   store(t_.call_stack_, select(ty_.uvec4, in_call, pop(stack, ty_.uvec4), stack));
   store(t_.call_depth_, select(ty_.u32, in_call, b_.op(spv::OpISub, ty_.u32, {depth, u(1)}), depth));
-  set_pc(select(ty_.u32, in_call, address, u(kPcEnd)));
+  set_pc(select(ty_.u32, in_call, address, u(i + 1)));
   count_backward(land(in_call, b_.op(spv::OpULessThanEqual, ty_.bool_, {address, u(i)})));
 }
 
