@@ -79,11 +79,11 @@ void Translator::emit_stage_prologue() {
     if (v) b_.op_void(spv::OpStore, {v, zero4});
 
   if (is_vs()) {
-    // r0.x = float(clamp(VertexIndex + index_offset, min_index, max_index)); the sum wraps as uint, the clamp is
-    // unsigned (the VGT index registers are unsigned).
+    // r0.x = float(clamp((VertexIndex + index_offset) & 0xFFFFFF, min_index, max_index)): the hardware index is 24
+    // bits, so the sum is masked before the unsigned clamp.
     const Id vertex = b_.op(spv::OpLoad, t_.i32, {vertex_index_in_});
     const Id sum = b_.op(spv::OpIAdd, t_.i32, {vertex, load_shared(kSharedIndexOffset)});
-    Id index = b_.op(spv::OpBitcast, t_.u32, {sum});
+    Id index = b_.op(spv::OpBitwiseAnd, t_.u32, {b_.op(spv::OpBitcast, t_.u32, {sum}), const_u(kVertexIndexMask)});
     index = glsl(t_.u32, GLSLstd450UMax, {index, load_shared(kSharedMinIndex)});
     index = glsl(t_.u32, GLSLstd450UMin, {index, load_shared(kSharedMaxIndex)});
     const Id x = b_.op(spv::OpConvertUToF, t_.f32, {index});
@@ -130,6 +130,8 @@ void Translator::emit_stage_prologue() {
 
 Result<void> Translator::emit_export(uint32_t slot, const AluInstr& a, Id vector_result, Id scalar_result) {
   const uint32_t reg = a.vector_dest;
+  // An export with no component to write does nothing, whatever its register (the decoder does not count it).
+  if ((a.export_vector_mask | a.export_scalar_mask | a.export_const0_mask | a.export_const1_mask) == 0) return {};
   if (reg >= kExportAddress && reg < kExportData0 + kExportDataCount)
     return unsupported(slot, "alu", "memexport (eA/eM)");
   if (is_vs() && reg == kExportVsPointSize) return {};  // dropped in M3 (ShaderInfo::drops_point_size)

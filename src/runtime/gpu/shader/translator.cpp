@@ -95,6 +95,10 @@ Error Translator::internal(std::string_view what) {
   return Error{ErrorCode::Internal, "shader translator: " + std::string(what), ""};
 }
 
+void Translator::record_internal(std::string_view what) {
+  if (!internal_error_) internal_error_ = internal(what);
+}
+
 // --- types, constants, globals ------------------------------------------------------------------------------------
 
 Id Translator::const_vec4(float x, float y, float z, float w) {
@@ -179,7 +183,10 @@ Id Translator::load_shared(uint32_t contract_offset) {
         b_.op(spv::OpAccessChain, b_.type_pointer(spv::StorageClassPhysicalStorageBuffer, type), {shared_, const_u(m)});
     return b_.op(spv::OpLoad, type, {ptr, spv::MemoryAccessAlignedMask, type == t_.vec4 ? 16u : 4u});
   }
-  return 0;  // not a member offset: a translator bug, caught by the caller's use (never reached by design)
+  // Not a member offset: a translator bug. Recorded (run() returns it) and replaced by a placeholder so emission
+  // can go on; the module is discarded.
+  record_internal("load_shared: " + std::to_string(contract_offset) + " is not a shared-block member offset");
+  return const_u(0);
 }
 
 // --- registers ----------------------------------------------------------------------------------------------------
@@ -362,6 +369,7 @@ Result<TranslatedShader> Translator::run() {
   LR_TRY(emit_control_flow());
   emit_stage_epilogue();
   b_.end_main();
+  if (internal_error_) return *internal_error_;
 
   b_.entry_point("main", interface_);
   if (!is_vs()) {

@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -252,7 +254,8 @@ TEST_CASE("VTE flags undo the divide by W before the ndc transform", "[unit][vul
 
 TEST_CASE("r0.x is the vertex index plus the index offset, clamped", "[unit][vulkan]") {
   ShaderHarness h = make_harness();
-  // Points: vertex index v draws at pixel clamp(v + 1, 2, 3) the value r0.
+  // Points: vertex index v draws at pixel clamp((v + offset) & 0xFFFFFF, 2, 3) the value r0. With offset 2^24 + 1 the
+  // sum passes 2^24 and the 24-bit mask leaves v + 1, as with offset 1.
   const auto vs = translate_ok(ShaderStage::Vertex, vs_code({mov(0, r(0), true)}));
   const auto ps = ps_copy(0);
   HarnessInputs in;
@@ -260,15 +263,17 @@ TEST_CASE("r0.x is the vertex index plus the index offset, clamped", "[unit][vul
   in.vertex_count = 6;
   in.topology = lr::testing::HarnessTopology::PointList;
   in.vs_constants = points(6);
-  in.index_offset = 1;
   in.min_index = 2;
   in.max_index = 3;
-  const HarnessResult res = draw_ok(h, vs, ps, in);
-  REQUIRE(res.color[0].size() == 6);
-  for (uint32_t i = 0; i < 6; ++i) {
-    INFO("pixel " << i << " " << pixel_text(res.color[0][i]));
-    const float expected = (i == 2 || i == 3) ? static_cast<float>(i) : 0.0f;
-    CHECK(res.color[0][i] == Pixel{expected, 0, 0, 0});
+  for (const int32_t offset : {1, 0x1000001}) {
+    in.index_offset = offset;
+    const HarnessResult res = draw_ok(h, vs, ps, in);
+    REQUIRE(res.color[0].size() == 6);
+    for (uint32_t i = 0; i < 6; ++i) {
+      INFO("offset " << offset << " pixel " << i << " " << pixel_text(res.color[0][i]));
+      const float expected = (i == 2 || i == 3) ? static_cast<float>(i) : 0.0f;
+      CHECK(res.color[0][i] == Pixel{expected, 0, 0, 0});
+    }
   }
 }
 
@@ -392,18 +397,46 @@ TEST_CASE("alpha test greater-equal discards", "[unit][vulkan]") {
   HarnessInputs in;
   in.vs_constants = fullscreen();
   in.alpha_ref = 0.5f;
-  in.spec_alpha = sh::kAlphaTestEnable | (6u << sh::kAlphaTestFuncShift);  // pass when alpha >= ref
-  for (const float alpha : {0.25f, 0.5f, 0.75f}) {
-    in.ps_constants = {{1, 1, 1, alpha}};
-    const HarnessResult res = draw_ok(h, vs, ps, in);
-    INFO("alpha " << alpha);
-    const Pixel expected = alpha >= 0.5f ? Pixel{1, 1, 1, alpha} : Pixel{0, 0, 0, 0};
-    for (const Pixel& p : res.color[0]) CHECK(p == expected);
+
+  SECTION("alpha >= ref passes, the rest is discarded; a disabled test keeps everything") {
+    in.spec_alpha = sh::kAlphaTestEnable | (6u << sh::kAlphaTestFuncShift);  // pass when alpha >= ref
+    for (const float alpha : {0.25f, 0.5f, 0.75f}) {
+      in.ps_constants = {{1, 1, 1, alpha}};
+      const HarnessResult res = draw_ok(h, vs, ps, in);
+      INFO("alpha " << alpha);
+      const Pixel expected = alpha >= 0.5f ? Pixel{1, 1, 1, alpha} : Pixel{0, 0, 0, 0};
+      for (const Pixel& p : res.color[0]) CHECK(p == expected);
+    }
+    in.spec_alpha = 6u << sh::kAlphaTestFuncShift;  // the same function, test disabled
+    in.ps_constants = {{1, 1, 1, 0.25f}};
+    const HarnessResult disabled = draw_ok(h, vs, ps, in);
+    for (const Pixel& p : disabled.color[0]) CHECK(p == Pixel{1, 1, 1, 0.25f});
   }
-  in.spec_alpha = 6u << sh::kAlphaTestFuncShift;  // the same function, test disabled
-  in.ps_constants = {{1, 1, 1, 0.25f}};
-  const HarnessResult disabled = draw_ok(h, vs, ps, in);
-  for (const Pixel& p : disabled.color[0]) CHECK(p == Pixel{1, 1, 1, 0.25f});
+  SECTION("a NaN alpha passes only not-equal (5) and always (7)") {
+    in.ps_constants = {{1, 1, 1, std::numeric_limits<float>::quiet_NaN()}};
+    for (uint32_t func = 0; func < 8; ++func) {
+      in.spec_alpha = sh::kAlphaTestEnable | (func << sh::kAlphaTestFuncShift);
+      const HarnessResult res = draw_ok(h, vs, ps, in);
+      INFO("function " << func);
+      const bool pass = func == 5 || func == 7;
+      for (const Pixel& p : res.color[0]) {
+        CHECK(p[0] == (pass ? 1.0f : 0.0f));  // a discarded pixel keeps the clear colour
+        CHECK(std::isnan(p[3]) == pass);
+      }
+    }
+  }
+}
+
+TEST_CASE("zero-mask exports are skipped", "[unit]") {
+  // Exports with every resolved mask 0 write nothing, even to a register the stage does not have (62 in a PS) or
+  // to eA; they are neither errors nor memexport.
+  xe::Alu to_position = mov(sh::kExportVsPosition, c(0), true);
+  to_position.vector_mask = 0;
+  xe::Alu to_ea = mov(sh::kExportAddress, c(0), true);
+  to_ea.vector_mask = 0;
+  const auto ps = translate_ok(ShaderStage::Pixel, ps_code({to_position, to_ea, mov(0, c(1), true)}));
+  CHECK(ps.info.colors_written == 1);
+  require_valid(ps.spirv);
 }
 
 // --- checked with spirv-dis ---------------------------------------------------------------------------------------

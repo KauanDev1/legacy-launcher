@@ -655,12 +655,14 @@ pixel é descartado. NaN compara como não ordenado: só "diferente" e "sempre" 
 
 Uma exportação escreve os componentes da máscara vetorial com o resultado vetorial, os da máscara escalar com o
 resultado escalar, os das duas máscaras ao mesmo tempo com 1,0 e, quando `scalar_dest_rel` está ligado, os de nenhuma
-das duas com 0,0. Cada registrador de exportação começa em zero.
+das duas com 0,0. Uma exportação com as quatro máscaras zeradas não faz nada, qualquer que seja o registrador (nem
+erro, nem exportação de memória). Cada registrador de exportação começa em zero.
 
 **Registradores temporários**: um array local de `vec4` do tamanho `temp_count` do programa (64 quando algum
 temporário é relativo a `aL`). Todos começam em zero, menos:
-- VS: `r0.x` = `float(clamp(gl_VertexIndex + index_offset, min, max))`. A soma é feita com aritmética de 32 bits que
-  dá a volta, e o limite é sem sinal (`umin(umax(v, min), max)`), como os registradores do VGT;
+- VS: `r0.x` = `float(umin(umax((gl_VertexIndex + index_offset) & 0xFFFFFF, min), max))`. A soma é feita com
+  aritmética de 32 bits que dá a volta; o resultado é reduzido aos 24 bits do índice de vértice do hardware
+  (`& 0xFFFFFF`, `kVertexIndexMask`) e só depois limitado, sem sinal, a `[min, max]`;
 - PS: `r0..r15` vêm dos interpoladores de mesmo índice;
 - PS com `param_gen`: o registrador `ps_param_gen` recebe x = |floor(FragCoord.x)| com o bit de sinal ligado quando
   a face é de trás; y = |floor(FragCoord.y)| com o bit de sinal ligado quando o desenho é uma lista de pontos
@@ -671,7 +673,11 @@ temporário é relativo a `aL`). Todos começam em zero, menos:
 locations 0..15 (64 componentes, o mínimo garantido do Vulkan), zero quando o interpolador não é escrito, sem
 decoração de interpolação. O PS declara uma entrada na location r para cada registrador r < 16 que o programa
 referencia (todas as 16 quando algum temporário é relativo), decorada `Flat` quando o bit r de `flat_mask` está ligado
-e `Centroid` quando o bit r de `centroid_mask` está. O VS escreve `gl_PointSize = 1.0`; o tamanho de ponto exportado
+e `Centroid` quando o bit r de `centroid_mask` está. Uma entrada `Flat` recebe o valor do vértice provocante; o Vulkan
+usa o primeiro vértice por padrão, e o Xenos escolhe entre o primeiro e o último por
+`PA_SU_SC_MODE_CNTL.provoking_vtx_last`. O runtime (Tarefa 20) precisa respeitar esse bit com
+`VK_EXT_provoking_vertex` (modo `LAST_VERTEX`) ou, sem a extensão, registrar a limitação (entradas flat com o
+primeiro vértice quando o jogo pede o último). O VS escreve `gl_PointSize = 1.0`; o tamanho de ponto exportado
 (63) é descartado e marcado em `ShaderInfo::drops_point_size` (expansão de point sprites fica fora do M3). Saídas do
 PS: `oC0..oC3` nas locations 0..3 (só as escritas) e `FragDepth` (com `DepthReplacing`) quando escreve a
 profundidade.
@@ -692,7 +698,8 @@ test usa a mesma flag). Nunca há `OpKill` no meio do shader, então fetches pos
 
 **Limites conhecidos do M3** (falham alto, salvo onde indicado): exportação de memória; o tamanho de ponto exportado
 é descartado (informado em `ShaderInfo`); fetches com LOD implícito dentro de um caso do `switch` de pc alcançado por
-um `cond_jmp` que depende de predicado podem perder as derivadas. Na Tarefa 15.4 o tradutor só aceita `exec` e
+um `cond_jmp` que depende de predicado podem perder as derivadas; o z do `param_gen` vale 0 para linhas, onde o Xenia
+põe -0,0 (o bit de sinal marca linha), porque a chave não tem flag de linha (silencioso). Na Tarefa 15.4 o tradutor só aceita `exec` e
 `exec_end` em linha reta e as operações vetoriais `MAX`, `ADD` e `MUL`; o resto (controle de fluxo, demais operações
 da ALU, unidade escalar, fetch, endereçamento relativo, predicados) é um erro `is not supported` até as Tarefas
 15.5 a 15.9.

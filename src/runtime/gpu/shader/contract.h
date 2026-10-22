@@ -53,6 +53,9 @@ inline constexpr uint32_t kVteXyDividedByW = 1u << 0;     // vtx_xy_fmt: xy were
 inline constexpr uint32_t kVteZDividedByW = 1u << 1;      // vtx_z_fmt: z was divided by W; multiply it back
 inline constexpr uint32_t kVteW0NotReciprocal = 1u << 2;  // vtx_w0_fmt: W is W; when clear, the VS exports 1/W
 
+// VS r0.x = float(clamp((VertexIndex + index_offset) & kVertexIndexMask, min_index, max_index)), clamp unsigned.
+inline constexpr uint32_t kVertexIndexMask = 0xFFFFFF;  // the hardware vertex index is 24 bits
+
 // --- vertex fetch table (Task 15.8): one entry per vertex fetch constant ------------------------------------------
 inline constexpr uint32_t kVertexFetchSlots = 96;
 inline constexpr uint32_t kVertexFetchEntryBytes = 16;

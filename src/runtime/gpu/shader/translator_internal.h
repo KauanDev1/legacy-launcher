@@ -21,6 +21,7 @@
 #include <bitset>
 #include <cstdint>
 #include <initializer_list>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -50,6 +51,8 @@ class Translator {
   // "instruction <index> (<kind>): <what> is not supported"
   static Error unsupported(uint32_t index, std::string_view kind, std::string_view what);
   static Error internal(std::string_view what);
+  // For helpers that return an Id: keeps the first internal error, which run() returns once emission ends.
+  void record_internal(std::string_view what);
 
   bool is_vs() const { return program_.stage == ShaderStage::Vertex; }
 
@@ -134,6 +137,7 @@ class Translator {
   Id depth_out_ = 0, frag_coord_in_ = 0, front_facing_in_ = 0, point_coord_in_ = 0;
   Id killed_ = 0;      // PS: Function bool, 0 when nothing can kill
   Id spec_alpha_ = 0;  // PS: spec constant 0
+  std::optional<Error> internal_error_;  // see record_internal()
 };
 
 }  // namespace lr::gpu::shader::detail
