@@ -21,7 +21,9 @@ saída do comando e mantenha este cabeçalho. Gerado na Task 28 do M2 (2026-10-1
 construído no commit que fecha o M2: a execução sem interface gráfica (`legacyrecomp run -- --headless`) para com
 saída 3 em `VdInitializeEngines`, a primeira importação de vídeo que cria a GPU (a linha de chegada do M2). A ordem
 real das chamadas até ali está em `docs/reverse-engineering/kernel-imports.md`. Regerado na Task 29 (2026-10-18), com
-as mesmas linhas da tabela e a contagem final separada em funções e variáveis.
+as mesmas linhas da tabela e a contagem final separada em funções e variáveis. Regerado na Task 12 do M3 (2026-10-22),
+do binário que roda o jogo sobre a GPU emulada (NullBackend) por mais de 700 swaps, até uma falha de recompilação
+(chamada indireta para `0x8235B828`, um switch sem guarda; ver `docs/reverse-engineering/kernel-imports.md`).
 
 | Import | Kind | Status |
 |---|---|---|
@@ -83,7 +85,7 @@ as mesmas linhas da tabela e a contagem final separada em funções e variáveis
 | MmAllocatePhysicalMemoryEx | function | implemented |
 | MmFreePhysicalMemory | function | implemented |
 | MmGetPhysicalAddress | function | implemented |
-| MmMapIoSpace | function | missing |
+| MmMapIoSpace | function | implemented |
 | MmQueryAddressProtect | function | implemented |
 | MmQueryAllocationSize | function | implemented |
 | MmQueryStatistics | function | implemented |
@@ -135,11 +137,11 @@ as mesmas linhas da tabela e a contagem final separada em funções e variáveis
 | NetDll_XNetDnsReverseRelease | function | missing |
 | NetDll_XNetGetBroadcastVersionStatus | function | missing |
 | NetDll_XNetGetConnectStatus | function | missing |
-| NetDll_XNetGetDebugXnAddr | function | missing |
+| NetDll_XNetGetDebugXnAddr | function | stub |
 | NetDll_XNetGetEthernetLinkStatus | function | stub |
 | NetDll_XNetGetOpt | function | missing |
 | NetDll_XNetGetSystemLinkPort | function | missing |
-| NetDll_XNetGetTitleXnAddr | function | missing |
+| NetDll_XNetGetTitleXnAddr | function | stub |
 | NetDll_XNetGetXnAddrPlatform | function | missing |
 | NetDll_XNetInAddrToServer | function | missing |
 | NetDll_XNetInAddrToString | function | missing |
@@ -270,29 +272,29 @@ as mesmas linhas da tabela e a contagem final separada em funções e variáveis
 | RtlUnicodeStringToAnsiString | function | implemented |
 | RtlUnicodeToMultiByteN | function | implemented |
 | RtlUnwind | function | implemented |
-| VdCallGraphicsNotificationRoutines | function | missing |
-| VdEnableDisableClockGating | function | missing |
-| VdEnableRingBufferRPtrWriteBack | function | missing |
+| VdCallGraphicsNotificationRoutines | function | stub |
+| VdEnableDisableClockGating | function | stub |
+| VdEnableRingBufferRPtrWriteBack | function | implemented |
 | VdGetCurrentDisplayGamma | function | stub |
 | VdGetCurrentDisplayInformation | function | stub |
-| VdGetSystemCommandBuffer | function | missing |
-| VdInitializeEngines | function | missing |
-| VdInitializeRingBuffer | function | missing |
-| VdInitializeScalerCommandBuffer | function | missing |
+| VdGetSystemCommandBuffer | function | stub |
+| VdInitializeEngines | function | implemented |
+| VdInitializeRingBuffer | function | implemented |
+| VdInitializeScalerCommandBuffer | function | stub |
 | VdIsHSIOTrainingSucceeded | function | stub |
-| VdPersistDisplay | function | missing |
-| VdQuerySystemCommandBuffer | function | missing |
+| VdPersistDisplay | function | stub |
+| VdQuerySystemCommandBuffer | function | stub |
 | VdQueryVideoFlags | function | stub |
 | VdQueryVideoMode | function | stub |
-| VdRetrainEDRAM | function | missing |
-| VdRetrainEDRAMWorker | function | missing |
-| VdSetDisplayMode | function | missing |
-| VdSetDisplayModeOverride | function | missing |
-| VdSetGraphicsInterruptCallback | function | missing |
-| VdSetSystemCommandBuffer | function | missing |
-| VdSetSystemCommandBufferGpuIdentifierAddress | function | missing |
-| VdShutdownEngines | function | missing |
-| VdSwap | function | missing |
+| VdRetrainEDRAM | function | stub |
+| VdRetrainEDRAMWorker | function | stub |
+| VdSetDisplayMode | function | stub |
+| VdSetDisplayModeOverride | function | stub |
+| VdSetGraphicsInterruptCallback | function | implemented |
+| VdSetSystemCommandBuffer | function | stub |
+| VdSetSystemCommandBufferGpuIdentifierAddress | function | stub |
+| VdShutdownEngines | function | stub |
+| VdSwap | function | implemented |
 | XAudioEnableDucker | function | missing |
 | XAudioGetDuckerAttackTime | function | missing |
 | XAudioGetDuckerHoldTime | function | missing |
@@ -300,10 +302,10 @@ as mesmas linhas da tabela e a contagem final separada em funções e variáveis
 | XAudioGetDuckerReleaseTime | function | missing |
 | XAudioGetDuckerThreshold | function | missing |
 | XAudioGetSpeakerConfig | function | stub |
-| XAudioGetVoiceCategoryVolume | function | missing |
-| XAudioRegisterRenderDriverClient | function | missing |
-| XAudioSubmitRenderDriverFrame | function | missing |
-| XAudioUnregisterRenderDriverClient | function | missing |
+| XAudioGetVoiceCategoryVolume | function | stub |
+| XAudioRegisterRenderDriverClient | function | stub |
+| XAudioSubmitRenderDriverFrame | function | stub |
+| XAudioUnregisterRenderDriverClient | function | stub |
 | XGetAVPack | function | stub |
 | XGetGameRegion | function | implemented |
 | XGetLanguage | function | implemented |
@@ -342,12 +344,12 @@ as mesmas linhas da tabela e a contagem final separada em funções e variáveis
 | XamCacheReset | function | missing |
 | XamContentClose | function | missing |
 | XamContentCreateDeviceEnumerator | function | implemented |
-| XamContentCreateEnumerator | function | missing |
+| XamContentCreateEnumerator | function | implemented |
 | XamContentCreateEx | function | missing |
 | XamContentDelete | function | missing |
 | XamContentFlush | function | missing |
 | XamContentGetCreator | function | missing |
-| XamContentGetDeviceData | function | missing |
+| XamContentGetDeviceData | function | implemented |
 | XamContentGetDeviceName | function | missing |
 | XamContentGetDeviceState | function | implemented |
 | XamContentGetLicenseMask | function | implemented |
@@ -370,13 +372,13 @@ as mesmas linhas da tabela e a contagem final separada em funções e variáveis
 | XamGetSystemVersion | function | implemented |
 | XamGetToken | function | missing |
 | XamInputGetCapabilities | function | stub |
-| XamInputGetKeystrokeEx | function | missing |
-| XamInputGetState | function | missing |
-| XamInputSetState | function | missing |
+| XamInputGetKeystrokeEx | function | stub |
+| XamInputGetState | function | stub |
+| XamInputSetState | function | stub |
 | XamIsUIActive | function | stub |
 | XamLoaderGetLaunchData | function | implemented |
 | XamLoaderGetLaunchDataSize | function | implemented |
-| XamLoaderLaunchTitle | function | missing |
+| XamLoaderLaunchTitle | function | implemented |
 | XamLoaderSetLaunchData | function | missing |
 | XamLoaderTerminateTitle | function | implemented |
 | XamNotifyCreateListener | function | implemented |
@@ -387,7 +389,7 @@ as mesmas linhas da tabela e a contagem final separada em funções e variáveis
 | XamNuiCameraTiltGetStatus | function | missing |
 | XamNuiCameraTiltReportStatus | function | missing |
 | XamNuiCameraTiltSetCallback | function | missing |
-| XamNuiGetDeviceStatus | function | missing |
+| XamNuiGetDeviceStatus | function | stub |
 | XamNuiIdentityGetSessionId | function | missing |
 | XamParseGamerTileKey | function | missing |
 | XamProfileCreateEnumerator | function | missing |
@@ -412,7 +414,7 @@ as mesmas linhas da tabela e a contagem final separada em funções e variáveis
 | XamShowKeyboardUI | function | missing |
 | XamShowMarketplaceDownloadItemsUI | function | missing |
 | XamShowMarketplaceUI | function | missing |
-| XamShowMessageBoxUI | function | missing |
+| XamShowMessageBoxUI | function | implemented |
 | XamShowMessageBoxUIEx | function | missing |
 | XamShowMessageComposeUI | function | missing |
 | XamShowMessagesUI | function | missing |
@@ -425,10 +427,10 @@ as mesmas linhas da tabela e a contagem final separada em funções e variáveis
 | XamShowWordRegisterUI | function | missing |
 | XamTaskSchedule | function | implemented |
 | XamUserAreUsersFriends | function | missing |
-| XamUserCheckPrivilege | function | missing |
-| XamUserCreateAchievementEnumerator | function | missing |
+| XamUserCheckPrivilege | function | implemented |
+| XamUserCreateAchievementEnumerator | function | implemented |
 | XamUserCreateStatsEnumerator | function | missing |
-| XamUserGetDeviceContext | function | missing |
+| XamUserGetDeviceContext | function | implemented |
 | XamUserGetIndexFromXUID | function | missing |
 | XamUserGetMembershipTierFromXUID | function | missing |
 | XamUserGetName | function | implemented |
@@ -443,8 +445,8 @@ as mesmas linhas da tabela e a contagem final separada em funções e variáveis
 | XamUserWriteProfileSettings | function | missing |
 | XamVoiceClose | function | missing |
 | XamVoiceCreate | function | missing |
-| XamVoiceHeadsetPresent | function | missing |
-| XamVoiceIsActiveProcess | function | missing |
+| XamVoiceHeadsetPresent | function | stub |
+| XamVoiceIsActiveProcess | function | stub |
 | XamVoiceSubmitPacket | function | missing |
 | XamWriteBiometricData | function | missing |
 | XamWriteGamerTile | function | missing |
@@ -484,11 +486,11 @@ as mesmas linhas da tabela e a contagem final separada em funções e variáveis
 | swprintf | function | implemented |
 | vsprintf | function | implemented |
 | vswprintf | function | implemented |
-| VdHSIOCalibrationLock | variable | missing |
-| VdGpuClockInMHz | variable | missing |
-| KeCertMonitorData | variable | missing |
-| VdGlobalXamDevice | variable | missing |
-| VdGlobalDevice | variable | missing |
+| VdHSIOCalibrationLock | variable | implemented |
+| VdGpuClockInMHz | variable | implemented |
+| KeCertMonitorData | variable | implemented |
+| VdGlobalXamDevice | variable | implemented |
+| VdGlobalDevice | variable | implemented |
 | XboxHardwareInfo | variable | implemented |
 | XexExecutableModuleHandle | variable | implemented |
 | ExLoadedCommandLine | variable | implemented |
@@ -500,5 +502,5 @@ as mesmas linhas da tabela e a contagem final separada em funções e variáveis
 | KeDebugMonitorData | variable | implemented |
 | ExThreadObjectType | variable | implemented |
 
-Functions: implemented 163, stub 29, missing 267 / 459
-Variables: implemented 10, stub 0, missing 5 / 15
+Functions: implemented 176, stub 54, missing 229 / 459
+Variables: implemented 15, stub 0, missing 0 / 15

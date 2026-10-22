@@ -193,9 +193,152 @@ como referência.
 - **variáveis**: `VdGlobalDevice` e `VdGlobalXamDevice` (0), `VdGpuClockInMHz` (500), `VdHSIOCalibrationLock` (seção
   crítica, spin 10000), `KeCertMonitorData` (ponteiro nulo, o padrão do Xenia).
 - Dados do jogo real (experimento de 2026-10-18, spec seção 2): `VdInitializeRingBuffer(0x1FFF4000, 12)`, write-back
-  em `0x1FFFD03C`, `VdSetGraphicsInterruptCallback(0x824371B0, 0x40055980)`. Ainda não confirmados com esta
-  implementação: isso é a Task 12.
+  em `0x1FFFD03C`, `VdSetGraphicsInterruptCallback(0x824371B0, 0x40055980)`. Confirmados com esta implementação
+  na Task 12 (seção seguinte).
 - `KeLockL2`/`KeUnlockL2` (categoria 16, M3) continuam missing até o jogo chamá-los.
+
+## Ordem real depois da GPU (Task 12 do M3)
+
+Registrada na Task 12 do M3 (2026-10-22) com `legacyrecomp run -- --headless --trace-imports --trace-gpu` sobre a GPU
+emulada (NullBackend, nada é desenhado): 362 409 chamadas de importação, 117 importações distintas, 15 threads do jogo
+mais o worker do kernel (`worker` na tabela, id 65536). O jogo processa 757 swaps (`VdSwap` 758 vezes, cerca de 62
+por segundo no ritmo `PacedBySwap`), 6940 draws e 757 resolves, sem caixa de mensagem, e para com saída 4 numa
+chamada indireta para `0x8235B828` (a partir de `0x8235B788`): um `bctr` sem verificação de limite com a tabela de
+saltos logo depois dele (`0x8235B7AC`, um dos 19 sítios "unguarded" do `analyse.log`), que o recompilador trata como
+chamada de função. A tabela continua a da seção anterior a partir de `VdInitializeEngines` (linha 2428 do trace): cada
+importação na ordem da sua primeira chamada, a thread dessa chamada e o total de chamadas até a parada.
+
+| # | Importação | Thread | Chamadas | Observação |
+|---|---|---|---|---|
+| 1 | `VdInitializeEngines` | 1 | 1 | (1); linha de chegada do M2 |
+| 2 | `KeGetCurrentProcessType` | 1 | 7348 |  |
+| 3 | `ExRegisterTitleTerminateNotification` | 1 | 3 |  |
+| 4 | `VdSetGraphicsInterruptCallback` | 1 | 1 | callback `0x824371B0`, dado `0x40055980` |
+| 5 | `MmAllocatePhysicalMemoryEx` | 1 | 861 |  |
+| 6 | `ExGetXConfigSetting` | 1 | 766 |  |
+| 7 | `VdSetSystemCommandBufferGpuIdentifierAddress` | 1 | 2 |  |
+| 8 | `MmGetPhysicalAddress` | 1 | 1 |  |
+| 9 | `VdInitializeRingBuffer` | 1 | 1 | `0x1FFF4000`, log2 12 (anel de 32 KiB) |
+| 10 | `VdEnableRingBufferRPtrWriteBack` | 1 | 1 | `0x1FFFD03C`, bloco log2 6 |
+| 11 | `KiApcNormalRoutineNop` | 1 | 1 |  |
+| 12 | `RtlEnterCriticalSection` | 1 | 129912 |  |
+| 13 | `RtlLeaveCriticalSection` | 1 | 129910 |  |
+| 14 | `KeInitializeDpc` | 1 | 2 | dois DPCs do D3D (rotina `0x82441380`), um por thread de interrupção |
+| 15 | `ExCreateThread` | 1 | 14 |  |
+| 16 | `ObReferenceObjectByHandle` | 1 | 199 |  |
+| 17 | `KeSetBasePriorityThread` | 1 | 128 |  |
+| 18 | `ObDereferenceObject` | 1 | 199 |  |
+| 19 | `KeSetAffinityThread` | 2 | 11 | threads do D3D presas às CPUs 2 e 4 |
+| 20 | `VdQueryVideoMode` | 1 | 4 |  |
+| 21 | `RtlInitializeCriticalSection` | 1 | 364 |  |
+| 22 | `VdQueryVideoFlags` | 1 | 2 |  |
+| 23 | `VdCallGraphicsNotificationRoutines` | 1 | 1 |  |
+| 24 | `VdGetCurrentDisplayGamma` | 1 | 2 |  |
+| 25 | `KeQueryPerformanceFrequency` | 1 | 761 |  |
+| 26 | `KeEnterCriticalRegion` | 1 | 762 |  |
+| 27 | `VdRetrainEDRAMWorker` | 1 | 1 |  |
+| 28 | `VdRetrainEDRAM` | 1 | 759 |  |
+| 29 | `KeLeaveCriticalRegion` | 1 | 762 |  |
+| 30 | `VdIsHSIOTrainingSucceeded` | 1 | 1 |  |
+| 31 | `KeTlsAlloc` | 1 | 13 |  |
+| 32 | `NtAllocateVirtualMemory` | 1 | 309 |  |
+| 33 | `NtCreateSemaphore` | 1 | 3 |  |
+| 34 | `NtCreateEvent` | 1 | 11 |  |
+| 35 | `NtResumeThread` | 1 | 9 |  |
+| 36 | `XAudioGetSpeakerConfig` | 1 | 4 |  |
+| 37 | `XAudioRegisterRenderDriverClient` | 1 | 3 | driver silencioso |
+| 38 | `KeSetEvent` | 1 | 1543 |  |
+| 39 | `KeWaitForMultipleObjects` | 4 | 3 |  |
+| 40 | `XAudioGetVoiceCategoryVolume` | 4 | 3 |  |
+| 41 | `NtClearEvent` | 4 | 6 |  |
+| 42 | `NtReleaseSemaphore` | 4 | 6 |  |
+| 43 | `NtWaitForSingleObjectEx` | 5 | 1280 |  |
+| 44 | `NtSetEvent` | 5 | 7 |  |
+| 45 | `KeTlsSetValue` | 1 | 1034 |  |
+| 46 | `RtlInitAnsiString` | 1 | 212 |  |
+| 47 | `NtQueryFullAttributesFile` | 1 | 4 |  |
+| 48 | `RtlNtStatusToDosError` | 1 | 103 |  |
+| 49 | `KeTlsGetValue` | 1 | 64535 |  |
+| 50 | `KeEnableFpuExceptions` | 1 | 64 |  |
+| 51 | `MmFreePhysicalMemory` | 1 | 226 |  |
+| 52 | `KeTlsFree` | 1 | 8 |  |
+| 53 | `NtFreeVirtualMemory` | 1 | 242 |  |
+| 54 | `KfAcquireSpinLock` | worker | 2294 | callback de interrupção no worker do kernel |
+| 55 | `KfReleaseSpinLock` | worker | 2294 |  |
+| 56 | `KeWaitForSingleObject` | 2 | 425 | thread 2 do D3D, evento ao lado do DPC (`0x400587CC`); estoura o tempo sem interrupções |
+| 57 | `XGetVideoMode` | 1 | 2 |  |
+| 58 | `XexGetModuleHandle` | 1 | 14 |  |
+| 59 | `vswprintf` | 1 | 19 |  |
+| 60 | `RtlUnicodeToMultiByteN` | 1 | 2 |  |
+| 61 | `XexGetModuleSection` | 1 | 2 | seção `media` (pacote XUI) em `0x82C70000` |
+| 62 | `RtlTryEnterCriticalSection` | 8 | 1 |  |
+| 63 | `XamGetSystemVersion` | 1 | 9 |  |
+| 64 | `NetDll_XNetStartup` | 1 | 3 |  |
+| 65 | `NetDll_WSAStartup` | 1 | 5 |  |
+| 66 | `ExAllocatePoolTypeWithTag` | 1 | 2 |  |
+| 67 | `XamNotifyCreateListener` | 1 | 6 |  |
+| 68 | `XamUserReadProfileSettings` | 1 | 7 |  |
+| 69 | `XexGetProcedureAddress` | 1 | 4 |  |
+| 70 | `KeQueryBasePriorityThread` | 1 | 60 |  |
+| 71 | `NtCreateTimer` | 11 | 1 |  |
+| 72 | `NtSetTimerEx` | 11 | 1 |  |
+| 73 | `NtClose` | 1 | 110 |  |
+| 74 | `XamNuiGetDeviceStatus` | 1 | 2 |  |
+| 75 | `XamUserGetSigninInfo` | 1 | 29 |  |
+| 76 | `NetDll_XNetGetTitleXnAddr` | 1 | 2 | offline: `XNET_GET_XNADDR_NONE` |
+| 77 | `RtlRaiseException` | 12 | 3 |  |
+| 78 | `XamContentGetDeviceData` | 12 | 19 | sem dispositivo de armazenamento |
+| 79 | `XGetVideoCapabilities` | 12 | 1 |  |
+| 80 | `XMsgInProcessCall` | 12 | 2 |  |
+| 81 | `NetDll_XNetGetEthernetLinkStatus` | 12 | 1 |  |
+| 82 | `XamContentGetLicenseMask` | 12 | 1 |  |
+| 83 | `XNotifyGetNext` | 11 | 2032 |  |
+| 84 | `XamVoiceIsActiveProcess` | 11 | 5062 | 0, consultado a cada quadro |
+| 85 | `XamUserGetSigninState` | 11 | 15 |  |
+| 86 | `XamUserCheckPrivilege` | 11 | 1 | usuário local tem todos |
+| 87 | `XamUserGetDeviceContext` | 11 | 2 | 0 |
+| 88 | `RtlInitializeCriticalSectionAndSpinCount` | 1 | 1 |  |
+| 89 | `KeQuerySystemTime` | 1 | 4 |  |
+| 90 | `RtlTimeToTimeFields` | 1 | 4 |  |
+| 91 | `RtlTimeFieldsToTime` | 1 | 4 |  |
+| 92 | `NtCreateFile` | 1 | 208 | texturas em `GAME:\res\...` e `UPDATE:\res\1_2_2\...` |
+| 93 | `NtQueryInformationFile` | 1 | 105 |  |
+| 94 | `NtReadFile` | 1 | 110 | pela tabela de ponteiros da CRT (thunk em `0x82B62FFC`) |
+| 95 | `MmQueryAddressProtect` | 1 | 904 |  |
+| 96 | `XamInputGetKeystrokeEx` | 1 | 758 | sem controle: `ERROR_DEVICE_NOT_CONNECTED`, uma vez por quadro |
+| 97 | `VdGetSystemCommandBuffer` | 1 | 758 |  |
+| 98 | `VdSwap` | 1 | 758 | um por quadro; front buffer físico `0x1FA54000`, 1280x720 |
+| 99 | `VdSetDisplayMode` | 1 | 1 |  |
+| 100 | `VdGetCurrentDisplayInformation` | 1 | 1 |  |
+| 101 | `RtlFillMemoryUlong` | 1 | 1 |  |
+| 102 | `VdInitializeScalerCommandBuffer` | 1 | 1 |  |
+| 103 | `VdPersistDisplay` | 1 | 1 |  |
+| 104 | `KeAcquireSpinLockAtRaisedIrql` | worker | 757 | callback, fonte 1 (pacote `INTERRUPT`), um por swap |
+| 105 | `KeReleaseSpinLockFromRaisedIrql` | worker | 757 |  |
+| 106 | `XamUserCreateAchievementEnumerator` | 1 | 1 | enumerador vazio |
+| 107 | `XamEnumerate` | 1 | 2 |  |
+| 108 | `XamInputGetState` | 1 | 4 |  |
+| 109 | `XamContentCreateEnumerator` | 1 | 1 | enumerador vazio; última importação nova antes da falha |
+
+Correções que a Task 12 precisou, nesta ordem (detalhes no relatório da task):
+
+1. o loader mapeava só as seções do PE; os recursos do XEX (a seção `media`, pacote XUI de 38 MiB que começa em
+   `0x82C70000`) ficavam de fora e o jogo mostrava "Loading Error" ao não achar `media/skin_Minecraft.xur`;
+2. importações novas: `XamNuiGetDeviceStatus`, `NetDll_XNetGetTitleXnAddr`/`NetDll_XNetGetDebugXnAddr`,
+   `XamContentGetDeviceData`, `XamVoiceIsActiveProcess`/`XamVoiceHeadsetPresent`, `XamUserCheckPrivilege`,
+   `XamUserGetDeviceContext`, `XamInputGetKeystrokeEx`/`XamInputGetState`/`XamInputSetState`,
+   `XamUserCreateAchievementEnumerator`, `XamContentCreateEnumerator`;
+3. três thunks de importação (`NtReadFile`, `NtReadFileScatter`, `NtQueryDirectoryFile`) que a CRT só alcança por
+   uma tabela de ponteiros também viraram funções na análise (`sub_82B62FFC`...); a função gerada sobrescrevia o
+   thunk na tabela de chamadas indiretas e o `ReadFile` falhava sem chamar o kernel. Agora o primeiro mapeamento
+   de um endereço (o thunk) vence;
+4. o dispositivo `update:` (conteúdo do title update) aponta para os arquivos do jogo, onde a extração já grava o TU1;
+5. cada interrupção roda na CPU certa: o callback do D3D apaga da máscara o bit da CPU atual (KPCR `+0x10C`) e a GPU
+   espera essa máscara zerar com `WAIT_REG_MEM`; com a CPU sempre 0, a GPU ficava presa no primeiro quadro.
+
+O callback de vblank (`0x824371B0`, fonte 0) lê o registrador MMIO `0x1951` (status de interrupção, `0x7FC86544`) e,
+com o bit 0 ligado, troca o front buffer escrevendo `0x1844` (`0x7FC86110`). Nenhuma espera girando em registrador
+MMIO apareceu (RBBM_STATUS não foi consultado num laço que travasse).
 
 ## Categorias (listas completas)
 
