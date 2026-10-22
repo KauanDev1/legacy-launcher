@@ -54,9 +54,11 @@ inline uint64_t cf_cond_exec(bool end, uint32_t address, uint32_t count, uint32_
          cf_opcode(end ? kCfCondExecEnd : kCfCondExec);
 }
 
-// loop_start: loop constant `loop_id`; `address` = CF index to skip to when the count is 0.
-inline uint64_t cf_loop_start(uint32_t loop_id, uint32_t address) {
-  return (address & 0x1FFFull) | (uint64_t(loop_id & 31) << 16) | cf_opcode(kCfLoopStart);
+// loop_start: loop constant `loop_id`; `address` = CF index to skip to when the count is 0; `repeat` keeps the
+// current aL instead of loading the start value.
+inline uint64_t cf_loop_start(uint32_t loop_id, uint32_t address, bool repeat = false) {
+  return (address & 0x1FFFull) | (uint64_t(repeat ? 1 : 0) << 13) | (uint64_t(loop_id & 31) << 16) |
+         cf_opcode(kCfLoopStart);
 }
 
 // loop_end: loop constant `loop_id`; `address` = CF index of the first body instruction.
@@ -100,7 +102,10 @@ struct Alu {
   uint32_t scalar_mask = 0;
   bool export_data = false;
   AluSrc src1, src2, src3;
-  bool const0_relative = false;  // constant index + aL (or + a0 when address_register_relative)
+  // Relative constant addressing (index + aL, or + a0 with address_register_relative): const0 applies to the first
+  // constant operand (src1, src2, src3 order), const1 to a later one.
+  bool const0_relative = false;
+  bool const1_relative = false;
   bool address_register_relative = false;
 };
 
@@ -110,7 +115,7 @@ inline std::array<uint32_t, 3> alu(const Alu& a) {
   const uint32_t w1 = (a.src3.swizzle & 0xFF) | ((a.src2.swizzle & 0xFF) << 8) | ((a.src1.swizzle & 0xFF) << 16) |
                       ((a.src3.negate ? 1u : 0u) << 24) | ((a.src2.negate ? 1u : 0u) << 25) |
                       ((a.src1.negate ? 1u : 0u) << 26) | ((a.address_register_relative ? 1u : 0u) << 29) |
-                      ((a.const0_relative ? 1u : 0u) << 31);
+                      ((a.const1_relative ? 1u : 0u) << 30) | ((a.const0_relative ? 1u : 0u) << 31);
   const uint32_t w2 = (a.src3.reg & 0xFF) | ((a.src2.reg & 0xFF) << 8) | ((a.src1.reg & 0xFF) << 16) |
                       ((a.vector_op & 0x1F) << 24) | ((a.src3.temp ? 1u : 0u) << 29) |
                       ((a.src2.temp ? 1u : 0u) << 30) | ((a.src1.temp ? 1u : 0u) << 31);

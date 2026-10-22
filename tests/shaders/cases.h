@@ -106,6 +106,84 @@ inline x::ShaderDesc vertex_loop() {
   return d;
 }
 
+// VS: repeat loop over loop constant 3 (keeps the current aL); oPos = r2.
+inline x::ShaderDesc vertex_loop_repeat() {
+  x::ShaderDesc d;
+  d.vertex = true;
+  d.constants = {{"g_Weights", x::kFloat4, 0, 8}};
+  x::emit(d.microcode, x::cf_pair(x::cf_loop_start(3, 3, true), x::cf_exec(false, 2, 1, 0)));
+  x::emit(d.microcode, x::cf_pair(x::cf_loop_end(3, 1), x::cf_exec(true, 3, 1, 0)));
+  x::Alu acc;
+  acc.vector_op = x::kVectorAdd;
+  acc.vector_dest = 2;
+  acc.src1 = {2};
+  acc.src2 = {0, false};
+  acc.const0_relative = true;
+  x::emit(d.microcode, x::alu(acc));
+  x::Alu pos;
+  pos.export_data = true;
+  pos.vector_dest = x::kExportVsPosition;
+  pos.src1 = {2};
+  pos.src2 = {2};
+  x::emit(d.microcode, x::alu(pos));
+  return d;
+}
+
+// VS: oPos = c0 + c[1 + aL]: the second constant operand is addressed by const_1_rel_abs, not const_0.
+inline x::ShaderDesc vertex_constant_pair() {
+  x::ShaderDesc d;
+  d.vertex = true;
+  d.constants = {{"g_Table", x::kFloat4, 0, 8}};
+  x::emit(d.microcode, x::cf_pair(x::cf_exec(true, 1, 1, 0), x::cf_nop()));
+  x::Alu pos;
+  pos.vector_op = x::kVectorAdd;
+  pos.export_data = true;
+  pos.vector_dest = x::kExportVsPosition;
+  pos.src1 = {0, false};
+  pos.src2 = {1, false};
+  pos.const1_relative = true;
+  x::emit(d.microcode, x::alu(pos));
+  return d;
+}
+
+// PS: r1 = c1 only when bool constant 130 is true; oC0 = c0.
+inline x::ShaderDesc pixel_bool_130() {
+  x::ShaderDesc d;
+  d.vertex = false;
+  d.constants = {{"g_Color", x::kFloat4, 0, 2}, {"g_Flag", x::kBool, 2, 1}};
+  d.ps_outputs = 1;
+  x::emit(d.microcode, x::cf_pair(x::cf_cond_exec(false, 1, 1, 0, 130, true), x::cf_exec(true, 2, 1, 0)));
+  x::Alu tmp;
+  tmp.vector_dest = 1;
+  tmp.src1 = {1, false};
+  tmp.src2 = {1, false};
+  x::emit(d.microcode, x::alu(tmp));
+  x::Alu out;
+  out.export_data = true;
+  out.vector_dest = x::kExportPsColor0;
+  out.src1 = {0, false};
+  out.src2 = {0, false};
+  x::emit(d.microcode, x::alu(out));
+  return d;
+}
+
+// PS that reads only the COLOR0 interpolator (into r0): oC0 = r0.
+inline x::ShaderDesc pixel_color0_only() {
+  x::ShaderDesc d;
+  d.vertex = false;
+  d.constants = {{"g_Unused", x::kFloat4, 0, 1}};
+  d.interpolators = {{x::kColor, 0, 0}};
+  d.ps_outputs = 1;
+  x::emit(d.microcode, x::cf_pair(x::cf_exec(true, 1, 1, 0), x::cf_nop()));
+  x::Alu out;
+  out.export_data = true;
+  out.vector_dest = x::kExportPsColor0;
+  out.src1 = {0};
+  out.src2 = {0};
+  x::emit(d.microcode, x::alu(out));
+  return d;
+}
+
 // Broken: the shader header offset points past the container.
 inline x::ShaderDesc broken_bounds() {
   x::ShaderDesc d = vertex_basic();
@@ -134,7 +212,11 @@ inline std::vector<Case> good_cases() {
   return {{"vertex_basic.bin", vertex_basic()},
           {"pixel_alpha_test.bin", pixel_alpha_test()},
           {"vertex_bool_100.bin", vertex_bool_100()},
-          {"vertex_loop.bin", vertex_loop()}};
+          {"vertex_loop.bin", vertex_loop()},
+          {"vertex_loop_repeat.bin", vertex_loop_repeat()},
+          {"vertex_constant_pair.bin", vertex_constant_pair()},
+          {"pixel_bool_130.bin", pixel_bool_130()},
+          {"pixel_color0_only.bin", pixel_color0_only()}};
 }
 
 // Each in a directory of its own; the tool must fail on each.

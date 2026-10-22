@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Runs the patched XenosRecomp (LegacyRecomp mode) on a directory of synthetic shader containers.
 # EXPECT=success: the tool must exit 0 and print "translated N of N"; its output goes to LOG.
-# EXPECT=failure: the tool must exit non-zero and print EXPECT_TEXT (e.g. "translated 0 of 1").
+# EXPECT=failure: the tool must exit non-zero and print every text of EXPECT_TEXT, a list separated by "|"
+# (e.g. "translated 0 of 1|outside the container").
 # Usage: cmake -DTOOL=<exe> -DINCLUDE=<shader_common.h> -DIN=<dir> -DOUT=<shader_cache.cpp> [-DHLSL=<dir>]
 #              [-DLOG=<file>] -DEXPECT=success|failure [-DEXPECT_TEXT=<text>] -P run_xenosrecomp.cmake
 set(_args "${IN}" "${OUT}" "${INCLUDE}")
@@ -33,8 +34,11 @@ else()
   if(_rc EQUAL 0)
     message(FATAL_ERROR "XenosRecomp exited 0 on a broken container")
   endif()
-  string(FIND "${_all}" "${EXPECT_TEXT}" _pos)
-  if(_pos EQUAL -1)
-    message(FATAL_ERROR "XenosRecomp output lacks '${EXPECT_TEXT}'")
-  endif()
+  string(REPLACE "|" ";" _texts "${EXPECT_TEXT}")
+  foreach(_text IN LISTS _texts)
+    string(FIND "${_all}" "${_text}" _pos)
+    if(_pos EQUAL -1)
+      message(FATAL_ERROR "XenosRecomp output lacks '${_text}'")
+    endif()
+  endforeach()
 endif()

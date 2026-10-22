@@ -1,7 +1,7 @@
 From 4f2b756a809dd01fadb30dfd56d2a5deebe7bf2c Mon Sep 17 00:00:00 2001
 From: Kauan Turcato Storto <159664484+KauanDev1@users.noreply.github.com>
 Date: Thu, 22 Oct 2026 12:42:33 -0400
-Subject: [PATCH 3/3] feat: LR_LEGACYRECOMP tool mode writes the LegacyRecomp
+Subject: [PATCH 3/4] feat: LR_LEGACYRECOMP tool mode writes the LegacyRecomp
  shader cache
 
 XenosRecomp <input file or dir> <shader_cache.cpp> <shader_common.h>

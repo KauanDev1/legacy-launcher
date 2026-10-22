@@ -589,7 +589,8 @@ Procura contêineres como o upstream (cabeçalho `0x102A11xx`, bit 0 = vertex sh
 no arquivo; `field1C` e `field20` zero; contêineres de bytes idênticos contam uma vez), traduz cada um para HLSL e
 compila com o DXC (`-spirv -T vs_6_0|ps_6_0 -HV 2021 -fvk-use-dx-layout -all-resources-bound`, mais `-fvk-invert-y` no
 VS e `-DLR_LEGACYRECOMP`). Escreve uma linha `container 0x<hash do contêiner> microcode 0x<hash do microcódigo>
-vertex|pixel` por contêiner traduzido, os erros (`error: container 0x...: <motivo>`, com o diagnóstico do DXC) no
+vertex|pixel literal-loops <n>` por contêiner traduzido (n = laços cuja constante veio de um literal `defi`),
+os erros (`error: container 0x...: <motivo>`, com o diagnóstico do DXC) no
 stderr e, no fim, `translated N of M` (M = contêineres distintos encontrados). Saída 0 só com N = M ≥ 1; 1 quando algum
 contêiner falha (tabela fora do contêiner, construção não suportada, erro do DXC, o mesmo microcódigo em dois
 contêineres com traduções diferentes) ou nenhum é encontrado; 2 para uso errado ou arquivo ilegível. Com falha, o
@@ -627,10 +628,13 @@ endereços de dispositivo (`bufferDeviceAddress`) de três buffers lidos com `vk
 little-endian, alinhados a 16; o elemento i é o registrador de constante i como o microcódigo o endereça. VS: i = a
 constante float i do arquivo de registradores; PS: i = a constante float 256 + i (convenção do D3D do Xbox 360: as
 definições de PS na tabela do contêiner já vêm com registrador ≥ 256). Endereço relativo (`+ a0` ou `+ aL`) fora de
-0..255 lê zero. Constantes definidas na tabela de definições do contêiner viram literais no shader quando o acesso não
-é relativo.
+0..255 lê zero. Qual bit de endereçamento relativo vale para um operando constante: `const_0_rel_abs` se nenhum
+operando anterior da instrução (na ordem src1, src2, src3) é constante, senão `const_1_rel_abs` (também nas operações
+escalares com constante). Constantes definidas na tabela de definições do contêiner viram literais no shader quando o
+acesso não é relativo.
 
-**Bloco compartilhado** (`SharedConstants`, 688 bytes, little-endian, valores de 32 bits alinhados a 4):
+**Bloco compartilhado** (`SharedConstants`, 688 bytes, little-endian; o endereço base precisa ser alinhado a 16
+bytes, e os valores de 32 bits ficam alinhados a 4):
 
 | Offset | Tipo | Conteúdo |
 |---|---|---|
@@ -638,16 +642,18 @@ definições de PS na tabela do contêiner já vêm com registrador ≥ 256). En
 | 128 | `uint[32]` | índice no heap de `Texture3D`, por fetch constant |
 | 256 | `uint[32]` | índice no heap de `TextureCube`, por fetch constant |
 | 384 | `uint[32]` | índice no heap de samplers, por fetch constant |
-| 512 | `uint[8]` | 256 booleanos: o booleano b é o bit `b % 32` da palavra `b / 32`; 0..127 = banco do VS, 128..255 = banco do PS (cópia, em ordem, dos 8 registradores `SHADER_CONSTANT_BOOL_000_031` .. `_224_255`) |
+| 512 | `uint[8]` | 256 booleanos: o booleano b é o bit `b % 32` da palavra `b / 32` (cópia literal, em ordem, dos 8 registradores `SHADER_CONSTANT_BOOL_000_031` .. `_224_255`), os mesmos para VS e PS |
 | 544 | `uint[32]` | constantes de laço 0..31 (cópia de `SHADER_CONSTANT_LOOP_00` .. `_31`): bits 0..7 contagem, 8..15 valor inicial de `aL`, 16..23 passo de `aL` com sinal; as mesmas para VS e PS |
-| 672 | `float2` | meio pixel: o VS termina com `oPos.xy += g_HalfPixelOffset * oPos.w` (zero desliga) |
+| 672 | `float2` | meio pixel, no espaço de recorte do D3D: o VS termina com `oPos.xy += g_HalfPixelOffset * oPos.w`, antes da inversão de Y do `-fvk-invert-y`, então o sinal de y é o do D3D (y para cima); zero desliga |
 | 680 | `float` | referência do alpha test (`RB_ALPHA_REF`) |
 | 684 | `uint` | reservado (zero) |
 
-Cada estágio vê 128 booleanos: o tradutor usa o índice `(PS ? 128 : 0) + (endereço de 8 bits do microcódigo % 128)`,
-que vale tanto se o microcódigo do PS endereça 128..255 quanto 0..127. Um laço usa a constante indicada pelo
-microcódigo; se a tabela de definições do contêiner traz um literal inteiro para ela, o literal tem prioridade.
-`cond_exec`, `cond_exec_pred` e `cond_jmp` respeitam a condição; laços aninhados restauram `aL` no fim.
+O endereço de booleano do microcódigo (8 bits) é o índice no arquivo de 256 booleanos, igual nos dois estágios: o
+tradutor emite `g_Bool(<endereço>)` sem banco nem módulo. Um laço usa a constante indicada pelo microcódigo; se a
+tabela de definições do contêiner traz um literal inteiro (`defi`) para ela, o literal tem prioridade (a ferramenta
+informa, por contêiner, quantos laços vieram de literais: `literal-loops N`). `cond_exec`, `cond_exec_pred` e
+`cond_jmp` respeitam a condição; todo laço salva `aL` ao entrar e o restaura ao sair (também no `switch` de pc), e um
+laço com `is_repeat` mantém o `aL` atual em vez de carregar o valor inicial.
 
 **Texturas e samplers (bindless).** `Texture2D<float4>[]` no set 0, binding 0; `Texture3D<float4>[]` no set 1,
 binding 0; `TextureCube<float4>[]` no set 2, binding 0; `SamplerState[]` no set 3, binding 0. São arrays de tamanho de
@@ -673,9 +679,10 @@ O registrador de índice da instrução é ignorado (o índice é o do desenho);
 
 **Saídas do VS e entradas do PS.** O VS sempre declara 18 saídas `float4`: `TEXCOORD0..15` nas locations 0..15,
 `COLOR0` na 16 e `COLOR1` na 17 (mais a posição); o PS declara as mesmas entradas nas mesmas locations, ligadas por
-semântica pelas tabelas de interpoladores dos contêineres. Isso exige `maxVertexOutputComponents` ≥ 72 (acima do
-mínimo de 64 do Vulkan; lavapipe e GPUs de desktop têm 128). O VS sai com Y invertido (`-fvk-invert-y`): o viewport
-usa altura positiva, como no D3D. O registrador de posição do PS (campo do contêiner) recebe
+semântica pelas tabelas de interpoladores dos contêineres. O runtime precisa conferir `maxVertexOutputComponents` ≥ 72
+(acima do mínimo de 64 do Vulkan; lavapipe e GPUs de desktop têm 128) e falhar com mensagem clara se não houver.
+O VS sai com Y invertido (`-fvk-invert-y`): o viewport usa altura positiva, como no D3D. O registrador de posição do
+PS (campo do contêiner) recebe
 `((iPos.xy - 0.5) * (frente ? 1 : -1, 1), 0, 0)`. Saídas do PS: `SV_Target0..3` nas locations 0..3 (só as que o
 contêiner declara) e `SV_Depth`.
 

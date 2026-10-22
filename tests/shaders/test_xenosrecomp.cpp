@@ -153,7 +153,7 @@ TEST_CASE("vertex shader container translates and reports its microcode hash", "
   const uint64_t hash = microcode_hash(desc);
 
   const auto log = read_text(LR_SHADER_LOG);
-  CHECK(has(log, "translated 4 of 4"));
+  CHECK(has(log, "translated 8 of 8"));
   CHECK(has(log, "microcode " + hex(hash) + " vertex"));
   // The container hash is reported next to it (XXH3-64 of the whole container, as upstream keys it).
   const auto container = x::build_container(desc);
@@ -221,7 +221,7 @@ TEST_CASE("shader using bool constant 100", "[unit][shaders]") {
   const uint64_t hash = microcode_hash(sh::vertex_bool_100());
   REQUIRE(find_entry(hash) != nullptr);
   STATIC_REQUIRE(LR_SHARED_BOOLEANS_OFFSET == 512);
-  STATIC_REQUIRE(LR_STAGE_BOOLEAN_COUNT == 128);
+  STATIC_REQUIRE(LR_BOOLEAN_COUNT == 256);
   const auto text = hlsl(hash);
   CHECK(has(text, "if (g_Bool(100) == 1)"));
 }
@@ -246,4 +246,44 @@ TEST_CASE("shared constants layout matches the documented contract", "[unit][sha
   STATIC_REQUIRE(LR_SHARED_CONSTANTS_SIZE == 688);
   STATIC_REQUIRE(LR_FLOAT_CONSTANT_COUNT == 256);
   STATIC_REQUIRE(LR_FETCH_CONSTANT_COUNT == 32);
+}
+
+TEST_CASE("pixel shader bool constant 130 indexes the shared bool file directly", "[unit][shaders]") {
+  // The 8-bit bool address is an index into the 256-bit bool file, the same in both stages.
+  const uint64_t hash = microcode_hash(sh::pixel_bool_130());
+  REQUIRE(find_entry(hash) != nullptr);
+  CHECK(has(hlsl(hash), "if (g_Bool(130) == 1)"));
+}
+
+TEST_CASE("second constant operand uses its own relative addressing bit", "[unit][shaders]") {
+  const uint64_t hash = microcode_hash(sh::vertex_constant_pair());
+  REQUIRE(find_entry(hash) != nullptr);
+  CHECK(has(hlsl(hash), "g_VSConstant(0).xyzw + g_VSConstant(1 + aL).xyzw"));
+}
+
+TEST_CASE("repeat loop keeps the current aL", "[unit][shaders]") {
+  const uint64_t hash = microcode_hash(sh::vertex_loop_repeat());
+  REQUIRE(find_entry(hash) != nullptr);
+  const auto text = hlsl(hash);
+  CHECK(has(text, "g_LoopConstant(3)"));
+  CHECK(has(text, "int lrSavedAL0 = aL;"));
+  CHECK(has(text, "aL = lrSavedAL0;"));
+  CHECK_FALSE(has(text, "aL = lrLoopStart("));
+  // The non-repeat loop does load the start value.
+  CHECK(has(hlsl(microcode_hash(sh::vertex_loop())), "aL = lrLoopStart(lrLoop0);"));
+}
+
+TEST_CASE("pixel shader reading only COLOR0 gets input location 16", "[unit][shaders]") {
+  const uint64_t hash = microcode_hash(sh::pixel_color0_only());
+  const auto* e = find_entry(hash);
+  REQUIRE(e != nullptr);
+  const auto locations = decorations(spirv(*e), kDecorationLocation);
+  CHECK(contains(locations, 16));  // COLOR0 input
+  CHECK(contains(locations, 0));   // SV_Target0
+  CHECK(locations.size() == 2);
+}
+
+TEST_CASE("the tool reports loop ids taken from definition literals", "[unit][shaders]") {
+  const auto log = read_text(LR_SHADER_LOG);
+  CHECK(has(log, "microcode " + hex(microcode_hash(sh::vertex_loop())) + " vertex literal-loops 0"));
 }

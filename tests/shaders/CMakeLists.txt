@@ -35,12 +35,15 @@ set_source_files_properties(${LR_SHADER_CACHE} PROPERTIES GENERATED TRUE)
 target_link_options(lr_shader_tests PRIVATE $<$<CONFIG:Debug>:-fsanitize=address,undefined>)
 catch_discover_tests(lr_shader_tests ADD_TAGS_AS_LABELS PROPERTIES TIMEOUT 120)
 
-# Broken containers: the tool must exit non-zero and report that nothing was translated. The fixture generator
-# writes them; the command needs the tool and the generated inputs, which the harness above already builds.
+# Broken containers: the tool must exit non-zero, report that nothing was translated and name the failure. The
+# fixture generator writes them; the command needs the tool and the generated inputs, which the harness above builds.
+set(_lr_broken_bounds_text "outside the container")
+set(_lr_broken_dxc_text "DXC failed")
 foreach(_case bounds dxc)
   add_test(NAME "broken container makes the tool fail (${_case})"
     COMMAND ${CMAKE_COMMAND} -DTOOL=$<TARGET_FILE:XenosRecomp> -DINCLUDE=${LR_SHADER_COMMON}
             -DIN=${LR_SHADER_GEN}/broken-${_case} -DOUT=${CMAKE_CURRENT_BINARY_DIR}/broken-${_case}.cpp
-            -DEXPECT=failure "-DEXPECT_TEXT=translated 0 of 1" -P ${CMAKE_CURRENT_SOURCE_DIR}/run_xenosrecomp.cmake)
+            -DEXPECT=failure "-DEXPECT_TEXT=translated 0 of 1|${_lr_broken_${_case}_text}"
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/run_xenosrecomp.cmake)
   set_tests_properties("broken container makes the tool fail (${_case})" PROPERTIES LABELS "unit;shaders")
 endforeach()

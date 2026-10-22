@@ -1,7 +1,7 @@
 From 7c9cd8c1be22cc93ca92b974f2ac9676e4cf5444 Mon Sep 17 00:00:00 2001
 From: Kauan Turcato Storto <159664484+KauanDev1@users.noreply.github.com>
 Date: Thu, 22 Oct 2026 12:42:32 -0400
-Subject: [PATCH 2/3] feat: translate for an emulated Xenos GPU under
+Subject: [PATCH 2/4] feat: translate for an emulated Xenos GPU under
  LR_LEGACYRECOMP
 
 With LR_LEGACYRECOMP the translator targets LegacyRecomp's emulated GPU,

@@ -61,21 +61,24 @@ Formato: o quê, por quê, custo se estiver errada.
 - Custo se errado: se a Tarefa 20 preferir derivar o layout do microcódigo, a tabela fica sem uso (custo zero); se o
   formato precisar mudar, muda num patch do fork e no teste `tests/shaders`.
 
-### M4. Booleanos: dois bancos de 128 no bloco compartilhado (Tarefa 13)
-- O quê: o plano fala em "128 booleanos" no bloco compartilhado. Como o bloco é um só por desenho (VS e PS), ele guarda
-  os 256 bits dos 8 registradores de booleanos do Xenos, em ordem: o VS lê o banco 0..127 e o PS o banco 128..255, com
-  índice `banco + (endereço do microcódigo % 128)`. As 32 constantes de laço são as mesmas para os dois estágios (como
-  no Xenia, que também usa um único buffer de booleanos e laços).
-- Por quê: não confirmamos se o microcódigo de PS endereça os booleanos de 0..127 ou de 128..255 (o upstream supõe
-  0..15 por estágio; o Xenia indexa os 256 direto). O módulo 128 dentro do banco do estágio dá o resultado certo nos
-  dois casos.
-- Custo se errado: se o D3D do 360 mapear booleanos de outro jeito (por exemplo, um único banco compartilhado), um
-  desvio condicional de PS lê o bit errado; a correção é o índice em `lrBoolIndex` (patch 0002) e a cópia no runtime.
+### M4. Booleanos: o arquivo de 256 bits inteiro no bloco compartilhado, endereçado direto (Tarefa 13)
+- O quê: o plano fala em "128 booleanos" no bloco compartilhado. O bloco guarda os 256 bits dos 8 registradores de
+  booleanos do Xenos, copiados literalmente e em ordem, e o shader lê `g_Bool(<endereço>)` com o endereço de 8 bits
+  da instrução de controle de fluxo, sem banco por estágio nem módulo. As 32 constantes de laço são as mesmas para os
+  dois estágios. A primeira versão usava `banco do estágio + endereço % 128`; a rodada de revisão 1 a trocou pelo
+  endereçamento direto.
+- Por quê: o `bool_address` do Xenos é um índice de 8 bits no arquivo de 256 booleanos, igual nos dois estágios, como
+  no Xenia (referência), que também usa um único buffer de booleanos e laços.
+- Custo se errado: se o microcódigo de PS endereçar só 0..127 esperando o banco do PS, um desvio condicional de PS lê
+  o bit errado; a correção é o índice emitido em `shader_recompiler.cpp` (patch 0004) e o teste
+  `pixel shader bool constant 130 indexes the shared bool file directly`.
 
 ### M5. Tradução mais estrita que o upstream (Tarefa 13)
 - O quê: no modo LegacyRecomp, `cond_exec*` e `cond_exec_pred*` respeitam a condição (o upstream executava a cláusula
   sempre), os laços usam início e passo da constante (o upstream contava de 0 com passo 1 e exigia um literal `i<N>`),
-  `aL` é restaurado ao fim de laços aninhados, `r0.x` começa com o índice do vértice e `oPos` começa zerado. Todo
+  `aL` é salvo e restaurado em todo laço (também no `switch` de pc), um laço com `is_repeat` mantém o `aL` atual, o
+  segundo operando constante de uma instrução usa `const_1_rel_abs` (o upstream usava sempre `const_0_rel_abs`),
+  `r0.x` começa com o índice do vértice e `oPos` começa zerado. Todo
   acesso a tabela do contêiner é conferido contra o tamanho dele; contêiner malformado, exportação sem destino,
   laço aninhado num shader com saltos e o mesmo microcódigo com traduções diferentes falham a tradução em vez de
   `assert`. Ficam de fora (falham alto): texturas 1D e exportação de memória; o tamanho de ponto é descartado.
