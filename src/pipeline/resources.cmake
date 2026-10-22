@@ -50,7 +50,7 @@ list(APPEND _lr_staged "${_ctx_dst}")
 set(_lr_runtime_dir "${LR_RESOURCES_DIR}/runtime")
 file(GLOB _lr_runtime_headers CONFIGURE_DEPENDS RELATIVE "${_lr_src_root}/src"
   "${_lr_src_root}/src/runtime/*.h" "${_lr_src_root}/src/runtime/kernel/*.h" "${_lr_src_root}/src/runtime/memory/*.h"
-  "${_lr_src_root}/src/runtime/gpu/*.h"
+  "${_lr_src_root}/src/runtime/gpu/*.h" "${_lr_src_root}/src/runtime/gpu/shader/*.h"
   "${_lr_src_root}/src/common/*.h"
   "${_lr_src_root}/src/formats/xex2.h")
 set(_lr_runtime_files "")
