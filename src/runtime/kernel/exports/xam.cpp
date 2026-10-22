@@ -490,6 +490,20 @@ uint32_t XamUserCreateAchievementEnumerator(GuestCall& c, uint32_t /*title_id*/,
   return ERROR_SUCCESS;
 }
 
+// XamContentCreateEnumerator(user_index, device_id, content_type, content_flags, max_count, buffer_size*, handle*): an
+// empty enumerator of XCONTENT_DATA (0x134 bytes) items: there is no storage device, so no saves or DLC to list.
+constexpr uint32_t kContentDataSize = 0x134;
+uint32_t XamContentCreateEnumerator(GuestCall& c, uint32_t /*user_index*/, uint32_t /*device_id*/,
+                                    uint32_t /*content_type*/, uint32_t /*content_flags*/, uint32_t max_count,
+                                    U32Ptr buffer_size, U32Ptr handle_out) {
+  if (!handle_out.valid_range(4)) return ERROR_INVALID_PARAMETER;
+  put(c, buffer_size, kContentDataSize * max_count);
+  auto r = create_enumerator(kContentDataSize, max_count, {});
+  if (!r) return ERROR_FUNCTION_FAILED;
+  put(c, handle_out, r.value());
+  return ERROR_SUCCESS;
+}
+
 // XamContentCreateDeviceEnumerator(content_type, content_flags, max_count, buffer_size*, handle*): an empty
 // enumerator of X_CONTENT_DEVICE_DATA (0x50 bytes) items.
 uint32_t XamContentCreateDeviceEnumerator(GuestCall& c, uint32_t /*content_type*/, uint32_t /*content_flags*/,
@@ -539,6 +553,7 @@ LR_KERNEL(XamUserReadProfileSettings);
 LR_KERNEL(XamContentGetDeviceState);
 LR_KERNEL(XamContentGetDeviceData);
 LR_KERNEL(XamContentCreateDeviceEnumerator);
+LR_KERNEL(XamContentCreateEnumerator);
 LR_KERNEL(XamUserCreateAchievementEnumerator);
 LR_KERNEL(XamContentGetLicenseMask);
 LR_KERNEL_STUB(XamVoiceIsActiveProcess, 0);  // voice chat is not active in this process (offline, no voice)
