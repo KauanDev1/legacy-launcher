@@ -307,6 +307,7 @@ TEST_CASE("physical storage buffer load through a bitcast uvec2 validates", "[un
   INFO(dis);
   CHECK(dis.find("OpMemoryModel PhysicalStorageBuffer64 GLSL450") != std::string::npos);
   CHECK(dis.find("OpBitcast") != std::string::npos);
+  CHECK(dis.find("Aligned 16") != std::string::npos);  // loads through a physical pointer carry their alignment
   CHECK(dis.find("OpCapability Int64") == std::string::npos);  // no shaderInt64
 }
 

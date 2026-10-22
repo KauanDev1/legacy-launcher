@@ -3,26 +3,35 @@
 // dev container) and reads the pixels back. Every translator test whose result is a value goes through it (plan B,
 // ADR 0005 M8).
 //
-// A draw renders in.vertex_count vertices (a triangle list with no vertex input; default one triangle, which
-// fullscreen_triangle_vs() makes cover the target) into in.width x 1 targets: in.color_targets RGBA32F colour
+// A draw renders in.vertex_count vertices (no vertex input; in.topology, default a triangle list of one triangle,
+// which fullscreen_triangle_vs() makes cover the target) into in.width x 1 targets: in.color_targets RGBA32F colour
 // attachments (locations 0..3, cleared to 0) and, with in.depth_target, a D32_SFLOAT depth attachment (cleared to
-// in.depth_clear, compare ALWAYS, writes on). Pixel i has its centre at (i + 0.5, 0.5).
+// in.depth_clear, compare ALWAYS, writes on). Pixel i has its centre at (i + 0.5, 0.5). The viewport is
+// (0, 0, width, 1), depth 0..1; front faces are counter-clockwise, nothing is culled.
 //
-// The pipeline layout is the translated shaders' resource interface, whatever the shaders use of it:
-//   push constants  128 bytes, vertex and fragment stages; in.push_constants is copied to offset 0, then the device
-//                   address of each in.buffers[i] is written as a little-endian uint64 at its push_offset
+// The pipeline layout is the translated shaders' resource interface (runtime/gpu/shader/contract.h), whatever the
+// shaders use of it:
+//   push constants  128 bytes, vertex and fragment stages. First the contract's device addresses are written
+//                   (offset 0: in.vs_constants, 8: in.ps_constants, 16: the shared block), then in.push_constants is
+//                   copied to offset 0, then the device address of each in.buffers[i] is written as a little-endian
+//                   uint64 at its push_offset (later writes win)
 //   set 0 binding 0 sampled images, 2D (Texture2D heap)      in.textures with dim 2D, in order: heap index 0, 1, ...
 //   set 1 binding 0 sampled images, 3D (Texture3D heap)      likewise for 3D
 //   set 2 binding 0 sampled images, cube (TextureCube heap)  likewise for cube
 //   set 3 binding 0 samplers (sampler heap)                  in.samplers, heap index = position
+//   spec constant 0 in.spec_alpha, both stages
 // Each heap holds kHarnessHeapSize descriptors and is partially bound. The fetch_slot fields name the texture fetch
-// constant a texture or sampler stands for; Task 15.4 writes the shared block's index tables (heap index per fetch
-// constant) from them. Until then a shader indexes the heaps directly.
+// constant a texture or sampler stands for: the shared block's index tables map that fetch constant to the heap
+// index (other fetch constants map to 0).
+//
+// The shared block (kSharedBlockBytes) holds in.bools, in.loops, ndc_scale, ndc_offset, alpha_ref, vte_flags,
+// index_offset, min_index and max_index at their contract offsets. The defaults draw a translated VS as is: identity
+// ndc transform, W given as W (kVteW0NotReciprocal), no index offset or clamp.
 //
 // HarnessInputs fields are added by the task that first needs them:
 //   15.3  width, vertex_count, push_constants, buffers, color_targets, depth_target/depth_clear, textures, samplers;
-//   15.4  vs_constants/ps_constants (256 float4 each), bools (8 words), loops (32), the shared-block overrides
-//         (ndc_scale, ndc_offset, vte_flags, index_offset, min_index, max_index, alpha_ref), spec_alpha (spec
+//   15.4  topology, vs_constants/ps_constants (256 float4 each), bools (8 words), loops (32), the shared-block
+//         fields (ndc_scale, ndc_offset, vte_flags, index_offset, min_index, max_index, alpha_ref), spec_alpha (spec
 //         constant 0);
 //   15.8  fetch_slots ({slot, bytes, endian} per vertex-fetch table entry).
 #pragma once
@@ -31,11 +40,13 @@
 #include <cstdint>
 #include <cstring>
 #include <span>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "common/result.h"
+#include "runtime/gpu/shader/contract.h"
 #include "runtime/gpu/vk/device.h"
 
 namespace lr::testing {
@@ -46,6 +57,7 @@ inline constexpr uint32_t kHarnessPushConstantBytes = 128;
 enum class HarnessTextureDim { k2D, k3D, kCube };
 enum class HarnessAddress { Repeat, MirroredRepeat, ClampToEdge, ClampToBorder };  // border: transparent black
 enum class HarnessFilter { Nearest, Linear };  // min, mag and mip filter
+enum class HarnessTopology { TriangleList, PointList };
 
 // A byte blob the shader reads through its buffer device address.
 struct HarnessBuffer {
@@ -80,6 +92,21 @@ struct HarnessInputs {
   float depth_clear = 1.0f;
   std::vector<HarnessTexture> textures;
   std::vector<HarnessSampler> samplers;
+  HarnessTopology topology = HarnessTopology::TriangleList;
+
+  // The translated shaders' contract (contract.h).
+  std::vector<std::array<float, 4>> vs_constants;  // c0, c1, ... (at most 256; the rest are 0)
+  std::vector<std::array<float, 4>> ps_constants;
+  std::array<uint32_t, 8> bools{};
+  std::array<uint32_t, 32> loops{};
+  std::array<float, 4> ndc_scale{1.0f, 1.0f, 1.0f, 1.0f};
+  std::array<float, 4> ndc_offset{0.0f, 0.0f, 0.0f, 0.0f};
+  uint32_t vte_flags = gpu::shader::kVteW0NotReciprocal;
+  int32_t index_offset = 0;
+  uint32_t min_index = 0;
+  uint32_t max_index = 0xFFFFFFFFu;
+  float alpha_ref = 0.0f;
+  uint32_t spec_alpha = 0;  // spec constant 0
 };
 
 struct HarnessResult {
@@ -106,7 +133,8 @@ class ShaderHarness {
   // LeakSanitizer: lavapipe leaks a little thread-local state of its worker threads once it has drawn (112 bytes in
   // two allocations, whether or not the device is destroyed). create() therefore keeps every loaded Vulkan driver and
   // layer mapped to the end of the process (RTLD_NODELETE), so those frames keep their module names, and the
-  // harness defines __lsan_default_suppressions() for the driver, its LLVM and the validation layer.
+  // harness defines __lsan_default_suppressions() for the driver (libvulkan_lvp, and libgallium where Mesa splits
+  // the driver core out), its LLVM and the validation layer.
   static Result<ShaderHarness> create();
 
   Result<HarnessResult> draw(std::span<const uint32_t> vs, std::span<const uint32_t> ps, const HarnessInputs& in);
@@ -115,6 +143,10 @@ class ShaderHarness {
 
  private:
   explicit ShaderHarness(gpu::vk::Device device) : device_(std::move(device)) {}
+  // The draw; every Vulkan object it creates is destroyed when it returns (after vkDeviceWaitIdle), so validation
+  // errors from the destruction land in vk_errors too.
+  Result<HarnessResult> draw_impl(std::span<const uint32_t> vs, std::span<const uint32_t> ps, const HarnessInputs& in,
+                                  std::vector<std::string>& vk_errors);
   gpu::vk::Device device_;
 };
 

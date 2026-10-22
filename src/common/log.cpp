@@ -37,9 +37,9 @@ void emit(Level level, std::string_view msg) {
 
 }  // namespace
 
-void set_sink(Sink sink) {
+Sink set_sink(Sink sink) {
   std::lock_guard lock(g_mutex);
-  g_sink = std::move(sink);
+  return std::exchange(g_sink, std::move(sink));
 }
 
 void info(std::string_view msg) { emit(Level::Info, msg); }

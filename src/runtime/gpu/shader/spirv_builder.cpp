@@ -325,14 +325,25 @@ Result<void> SpirvBuilder::check_interface() const {
 }
 
 std::vector<uint32_t> SpirvBuilder::finish() {
-  assert(main_begun_ && main_ended_ && "finish() needs begin_main() and end_main()");
-  assert(has_entry_point_ && "finish() needs entry_point()");
   const auto check = check_interface();
   assert(check.ok() && "entry point interface misses a used global (check_interface())");
   if (!check.ok()) {
     log::error(check.error().message);
     return {};
   }
+  return assemble();
+}
+
+Result<std::vector<uint32_t>> SpirvBuilder::try_finish() {
+  if (!main_begun_ || !main_ended_ || !has_entry_point_)
+    return Error{ErrorCode::Internal, "SPIR-V module finished without main or an entry point", ""};
+  LR_TRY(check_interface());
+  return assemble();
+}
+
+std::vector<uint32_t> SpirvBuilder::assemble() {
+  assert(main_begun_ && main_ended_ && "finish() needs begin_main() and end_main()");
+  assert(has_entry_point_ && "finish() needs entry_point()");
   // Every id is allocated by now (finish emits no new ones).
   const Id fn_type = type_function(type_void());
 

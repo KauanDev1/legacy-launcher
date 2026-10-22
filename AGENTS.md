@@ -40,7 +40,8 @@ pipeline -> formats (xdvdfs, stfs, xex2) -> common
 runtime  -> formats (xex2 only), common
 common: Result/Error, log, sha256, paths, fs_util
 thirdparty: XenonRecomp (pinned upstream + thirdparty/patches/xenonrecomp, applied to a copy at configure by
-            cmake/LrSubmodulePatches.cmake; bundles tomlplusplus/fmt/xxHash), Catch2, imgui, volk, VMA, Vulkan-Headers
+            cmake/LrSubmodulePatches.cmake; bundles tomlplusplus/fmt/xxHash), Catch2, imgui, volk, VMA, Vulkan-Headers,
+            SPIRV-Headers (header-only, for the shader translator's SpirvBuilder)
 ```
 
 Namespaces: `lr`, `lr::formats`, `lr::pipeline`, `lr::runtime`, `lr::kernel`.

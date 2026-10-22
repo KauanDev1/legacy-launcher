@@ -8,15 +8,24 @@
 // the same list as ids.
 //
 // Deduplication. Scalar, vector, pointer, function, image, sampler and sampled-image types and every non-spec constant
-// are deduplicated: asking twice gives the same id (SPIR-V forbids two identical non-aggregate types). Structs and
-// arrays are not: each call makes a new type, because their layout decorations (Block, Offset, ArrayStride) are per
-// type and two identical declarations may need different ones. Spec constants are never merged (each has its SpecId).
+// are deduplicated: asking twice gives the same id. SPIR-V forbids two identical non-aggregate types except pointers;
+// pointers are exempt from that uniqueness rule, but the builder merges them too, so a decoration on a pointer type
+// (ArrayStride for OpPtrAccessChain, for example) must be added once, by whoever creates that pointer type first.
+// Structs and arrays are not merged: each call makes a new type, because their layout decorations (Block, Offset,
+// ArrayStride) are per type and two identical declarations may need different ones. Spec constants are never merged
+// (each has its SpecId).
 //
 // Interface. From SPIR-V 1.4 on, the entry point's interface lists every global variable the entry point uses
 // (Input, Output, PushConstant, Private, UniformConstant, StorageBuffer, ...), not just Input/Output. The builder
 // records a global as used when it is a pointer operand of an instruction in `main` (operand 0 of any instruction,
 // both operands of OpCopyMemory*, every operand of an OpExtInst); that covers every use without variable pointers.
-// `check_interface()` reports a used global missing from `entry_point`'s list, and `finish()` asserts it.
+// `check_interface()` reports a used global missing from `entry_point`'s list; `try_finish()` returns that error and
+// `finish()` asserts it. Code that turns guest input into SPIR-V (the translator) uses `try_finish()`, so a bug of
+// its own becomes a Result error and never aborts the game.
+//
+// Physical storage buffers. A buffer device address is read as a uvec2 and turned into a pointer with OpBitcast; the
+// module then needs capability PhysicalStorageBufferAddresses and memory_model(PhysicalStorageBuffer64, GLSL450), and
+// every load or store through such a pointer needs the Aligned memory operand.
 #pragma once
 
 #include <cstdint>
@@ -110,8 +119,11 @@ class SpirvBuilder {
   // entry_point. Asserts check_interface(); in a build without assertions a failing check logs an error and
   // returns an empty vector.
   std::vector<uint32_t> finish();
+  // finish() without the assertion: the check_interface() error, or the module. Same preconditions as finish().
+  Result<std::vector<uint32_t>> try_finish();
 
  private:
+  std::vector<uint32_t> assemble();
   Id next_id() { return bound_++; }
   Id dedup_type(std::vector<uint32_t> key);      // key = {opcode, operands...}; emits into globals_
   Id dedup_constant(std::vector<uint32_t> key);  // key = {opcode, type, operands...}

@@ -5,12 +5,16 @@
 #include <link.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "common/log.h"
+#include "runtime/gpu/shader/contract.h"
 #include "runtime/gpu/shader/spirv_builder.h"
 #include "vk_mem_alloc.h"
 
@@ -29,10 +33,12 @@ Error vk_error(const char* what, VkResult r) {
     if (harness_r_ != VK_SUCCESS) return vk_error(#call, harness_r_); \
   } while (0)
 
-// Runs the registered destroy calls in reverse order.
+// Runs `first` (vkDeviceWaitIdle), then the registered destroy calls in reverse order.
 struct Cleanup {
+  std::function<void()> first;
   std::vector<std::function<void()>> fns;
   ~Cleanup() {
+    if (first) first();
     for (auto it = fns.rbegin(); it != fns.rend(); ++it) (*it)();
   }
   void add(std::function<void()> fn) { fns.push_back(std::move(fn)); }
@@ -131,7 +137,7 @@ VkSamplerAddressMode address_mode(HarnessAddress a) {
 
 uint32_t mip_size(uint32_t size, uint32_t mip) { return std::max<uint32_t>(size >> mip, 1); }
 
-// Marks every loaded Vulkan driver, layer and LLVM library RTLD_NODELETE, so the loader's dlclose at
+// Marks every loaded Vulkan driver (and its libgallium), layer and LLVM library RTLD_NODELETE, so the loader's dlclose at
 // vkDestroyInstance leaves them mapped and LeakSanitizer can still name them at exit (see the header).
 void pin_vulkan_libraries() {
   std::vector<std::string> paths;
@@ -139,7 +145,7 @@ void pin_vulkan_libraries() {
       [](dl_phdr_info* info, size_t, void* data) {
         const std::string_view name = info->dlpi_name ? info->dlpi_name : "";
         if (name.find("libvulkan_") != std::string_view::npos || name.find("libVkLayer") != std::string_view::npos ||
-            name.find("libLLVM") != std::string_view::npos)
+            name.find("libLLVM") != std::string_view::npos || name.find("libgallium") != std::string_view::npos)
           static_cast<std::vector<std::string>*>(data)->emplace_back(name);
         return 0;
       },
@@ -186,7 +192,26 @@ Result<ShaderHarness> ShaderHarness::create() {
 
 Result<HarnessResult> ShaderHarness::draw(std::span<const uint32_t> vs, std::span<const uint32_t> ps,
                                           const HarnessInputs& in) {
+  // Validation-layer errors (logged by Device's messenger) fail the draw, including those raised while draw_impl
+  // destroys its objects; the previous sink comes back afterwards.
+  std::vector<std::string> vk_errors;
+  log::Sink previous = log::set_sink([&vk_errors](log::Level level, std::string_view msg) {
+    if (level == log::Level::Error) vk_errors.emplace_back(msg);
+    std::fprintf(stderr, "%.*s\n", static_cast<int>(msg.size()), msg.data());
+  });
+  auto result = draw_impl(vs, ps, in, vk_errors);
+  log::set_sink(std::move(previous));
+  if (!vk_errors.empty())
+    return Error{ErrorCode::Internal, "harness: Vulkan validation error: " + vk_errors.front(), ""};
+  return result;
+}
+
+Result<HarnessResult> ShaderHarness::draw_impl(std::span<const uint32_t> vs, std::span<const uint32_t> ps,
+                                               const HarnessInputs& in, std::vector<std::string>&) {
+  namespace sc = gpu::shader;
   if (in.width == 0) return Error{ErrorCode::Internal, "harness: width is 0", ""};
+  if (in.vs_constants.size() > sc::kFloatConstantCount || in.ps_constants.size() > sc::kFloatConstantCount)
+    return Error{ErrorCode::Internal, "harness: more than 256 float constants", ""};
   if (in.color_targets < 1 || in.color_targets > 4)
     return Error{ErrorCode::Internal, "harness: color_targets must be 1..4", ""};
   if (in.push_constants.size() > kHarnessPushConstantBytes)
@@ -195,16 +220,8 @@ Result<HarnessResult> ShaderHarness::draw(std::span<const uint32_t> vs, std::spa
 
   const VkDevice dev = device_.device();
   const VmaAllocator allocator = device_.allocator();
-  // Validation-layer errors (logged by Device's messenger) fail the draw. Declared before `cleanup`, so the default
-  // sink comes back after every object is destroyed.
-  std::vector<std::string> vk_errors;
-  log::set_sink([&vk_errors](log::Level level, std::string_view msg) {
-    if (level == log::Level::Error) vk_errors.emplace_back(msg);
-    std::fprintf(stderr, "%.*s\n", static_cast<int>(msg.size()), msg.data());
-  });
-  Cleanup restore_sink;
-  restore_sink.add([] { log::set_sink({}); });
   Cleanup cleanup;
+  cleanup.first = [dev] { vkDeviceWaitIdle(dev); };
 
   // --- shader modules ---
   auto make_module = [&](std::span<const uint32_t> code, VkShaderModule& out) -> Result<void> {
@@ -296,6 +313,7 @@ Result<HarnessResult> ShaderHarness::draw(std::span<const uint32_t> vs, std::spa
 
   // --- textures: upload through a staging buffer, then one descriptor per texture in its dimension's heap ---
   std::array<uint32_t, 3> heap_fill{};
+  std::array<std::array<uint32_t, 32>, 4> heap_tables{};  // 2D, 3D, cube, sampler: heap index per fetch constant
   for (const HarnessTexture& t : in.textures) {
     const bool cube = t.dim == HarnessTextureDim::kCube;
     const bool is_3d = t.dim == HarnessTextureDim::k3D;
@@ -345,6 +363,7 @@ Result<HarnessResult> ShaderHarness::draw(std::span<const uint32_t> vs, std::spa
     w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     w.dstSet = sets[heap];
     w.dstBinding = 0;
+    if (t.fetch_slot < 32) heap_tables[heap][t.fetch_slot] = heap_fill[heap];
     w.dstArrayElement = heap_fill[heap]++;
     w.descriptorCount = 1;
     w.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
@@ -373,6 +392,7 @@ Result<HarnessResult> ShaderHarness::draw(std::span<const uint32_t> vs, std::spa
     w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     w.dstSet = sets[3];
     w.dstBinding = 0;
+    if (s.fetch_slot < 32) heap_tables[3][s.fetch_slot] = i;
     w.dstArrayElement = i;
     w.descriptorCount = 1;
     w.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
@@ -381,20 +401,56 @@ Result<HarnessResult> ShaderHarness::draw(std::span<const uint32_t> vs, std::spa
   }
 
   // --- push constants and the buffers they address ---
-  std::array<uint8_t, kHarnessPushConstantBytes> push{};
-  std::copy(in.push_constants.begin(), in.push_constants.end(), push.begin());
-  for (const HarnessBuffer& hb : in.buffers) {
-    if (hb.push_offset % 8 != 0 || hb.push_offset + 8 > kHarnessPushConstantBytes)
-      return Error{ErrorCode::Internal, "harness: buffer push_offset out of range or unaligned", ""};
-    LR_TRY_ASSIGN(buf, make_host_buffer(allocator, cleanup, hb.bytes.size(),
+  // A device-address buffer holding `bytes`; returns its address.
+  auto address_buffer = [&](std::span<const uint8_t> bytes) -> Result<uint64_t> {
+    LR_TRY_ASSIGN(buf, make_host_buffer(allocator, cleanup, bytes.size(),
                                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                         false));
-    if (!hb.bytes.empty()) std::memcpy(buf.mapped, hb.bytes.data(), hb.bytes.size());
+    if (!bytes.empty()) std::memcpy(buf.mapped, bytes.data(), bytes.size());
     vmaFlushAllocation(allocator, buf.alloc, 0, VK_WHOLE_SIZE);
     VkBufferDeviceAddressInfo ai{};
     ai.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
     ai.buffer = buf.buffer;
-    const uint64_t address = vkGetBufferDeviceAddress(dev, &ai);
+    return uint64_t{vkGetBufferDeviceAddress(dev, &ai)};
+  };
+  std::array<uint8_t, kHarnessPushConstantBytes> push{};
+  {
+    // The contract: float constants and the shared block, at their push-constant offsets.
+    auto constants = [](const std::vector<std::array<float, 4>>& c) {
+      std::vector<uint8_t> bytes(sc::kFloatConstantBytes, 0);
+      if (!c.empty()) std::memcpy(bytes.data(), c.data(), c.size() * 16);
+      return bytes;
+    };
+    std::vector<uint8_t> shared(sc::kSharedBlockBytes, 0);
+    auto put = [&shared](uint32_t offset, const void* data, size_t size) {
+      std::memcpy(shared.data() + offset, data, size);
+    };
+    put(sc::kSharedTexture2DIndex, heap_tables[0].data(), 128);
+    put(sc::kSharedTexture3DIndex, heap_tables[1].data(), 128);
+    put(sc::kSharedTextureCubeIndex, heap_tables[2].data(), 128);
+    put(sc::kSharedSamplerIndex, heap_tables[3].data(), 128);
+    put(sc::kSharedBools, in.bools.data(), sizeof(in.bools));
+    put(sc::kSharedLoops, in.loops.data(), sizeof(in.loops));
+    put(sc::kSharedNdcScale, in.ndc_scale.data(), 16);
+    put(sc::kSharedNdcOffset, in.ndc_offset.data(), 16);
+    put(sc::kSharedAlphaRef, &in.alpha_ref, 4);
+    put(sc::kSharedVteFlags, &in.vte_flags, 4);
+    put(sc::kSharedIndexOffset, &in.index_offset, 4);
+    put(sc::kSharedMinIndex, &in.min_index, 4);
+    put(sc::kSharedMaxIndex, &in.max_index, 4);
+    const std::pair<uint32_t, std::vector<uint8_t>> blocks[] = {{sc::kPushVsConstants, constants(in.vs_constants)},
+                                                                {sc::kPushPsConstants, constants(in.ps_constants)},
+                                                                {sc::kPushSharedBlock, std::move(shared)}};
+    for (const auto& [offset, bytes] : blocks) {
+      LR_TRY_ASSIGN(address, address_buffer(bytes));
+      std::memcpy(push.data() + offset, &address, sizeof(address));
+    }
+  }
+  std::copy(in.push_constants.begin(), in.push_constants.end(), push.begin());
+  for (const HarnessBuffer& hb : in.buffers) {
+    if (hb.push_offset % 8 != 0 || hb.push_offset + 8 > kHarnessPushConstantBytes)
+      return Error{ErrorCode::Internal, "harness: buffer push_offset out of range or unaligned", ""};
+    LR_TRY_ASSIGN(address, address_buffer(hb.bytes));
     std::memcpy(push.data() + hb.push_offset, &address, sizeof(address));
   }
 
@@ -491,11 +547,20 @@ Result<HarnessResult> ShaderHarness::draw(std::span<const uint32_t> vs, std::spa
   stage_ci[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
   stage_ci[1].module = ps_module;
   stage_ci[1].pName = "main";
+  const VkSpecializationMapEntry spec_entry{sc::kSpecAlphaTest, 0, sizeof(uint32_t)};
+  VkSpecializationInfo spec{};
+  spec.mapEntryCount = 1;
+  spec.pMapEntries = &spec_entry;
+  spec.dataSize = sizeof(in.spec_alpha);
+  spec.pData = &in.spec_alpha;
+  stage_ci[0].pSpecializationInfo = &spec;
+  stage_ci[1].pSpecializationInfo = &spec;
   VkPipelineVertexInputStateCreateInfo vertex_input{};
   vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
   VkPipelineInputAssemblyStateCreateInfo assembly{};
   assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-  assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+  assembly.topology = in.topology == HarnessTopology::PointList ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST
+                                                                : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
   VkViewport viewport{0.0f, 0.0f, static_cast<float>(in.width), 1.0f, 0.0f, 1.0f};
   VkRect2D scissor{{0, 0}, {in.width, 1}};
   VkPipelineViewportStateCreateInfo viewport_state{};
@@ -617,8 +682,6 @@ Result<HarnessResult> ShaderHarness::draw(std::span<const uint32_t> vs, std::spa
     result.depth.resize(in.width);
     std::memcpy(result.depth.data(), depth_readback.mapped, size_t{in.width} * 4);
   }
-  if (!vk_errors.empty())
-    return Error{ErrorCode::Internal, "harness: Vulkan validation error: " + vk_errors.front(), ""};
   return result;
 }
 
@@ -627,7 +690,10 @@ Result<HarnessResult> ShaderHarness::draw(std::span<const uint32_t> vs, std::spa
 // LeakSanitizer's default suppressions for lr_tests (read once at startup; unused without the sanitizer): the Vulkan
 // driver's and validation layer's own allocations, see ShaderHarness::create(). Our objects are destroyed in draw().
 extern "C" const char* __lsan_default_suppressions() {
+  // libgallium: newer Mesa builds move lavapipe's core (and its worker-thread state) out of libvulkan_lvp.so into
+  // libgallium-<version>.so, so the same leak is reported under that module name.
   return "leak:libvulkan_lvp.so\n"
+         "leak:libgallium\n"
          "leak:libLLVM\n"
          "leak:libVkLayer_khronos_validation.so\n";
 }

@@ -14,6 +14,7 @@
 
 #include "common/result.h"
 #include "runtime/gpu/backend.h"
+#include "runtime/gpu/shader/contract.h"
 
 namespace lr::gpu::shader {
 
@@ -301,15 +302,7 @@ bool fetch_writes_dest(const FetchInstr& f);
 
 // --- program ------------------------------------------------------------------------------------------------------
 
-// Export register numbers (ALU vector_dest with export_data).
-inline constexpr uint32_t kExportInterpolatorCount = 16;  // VS 0..15
-inline constexpr uint32_t kExportColorCount = 4;          // PS 0..3
-inline constexpr uint32_t kExportAddress = 32;            // eA (memexport)
-inline constexpr uint32_t kExportData0 = 33;              // eM0..eM4 = 33..37
-inline constexpr uint32_t kExportDataCount = 5;
-inline constexpr uint32_t kExportPsDepth = 61;
-inline constexpr uint32_t kExportVsPosition = 62;
-inline constexpr uint32_t kExportVsPointSize = 63;  // point size / edge flag / kill vertex
+// Export register numbers (ALU vector_dest with export_data): kExport* in contract.h.
 
 inline constexpr uint32_t kMaxTemps = 64;  // the register array size when any temporary is aL-relative
 

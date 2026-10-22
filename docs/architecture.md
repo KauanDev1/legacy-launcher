@@ -578,7 +578,124 @@ swaps e espera saída 0.
 
 ## Shaders (M3, plano B)
 
-Os shaders do jogo não são traduzidos na instalação: o runtime traduz o microcódigo que o jogo carrega (`IM_LOAD`/`IM_LOAD_IMMEDIATE`, identificado por `microcode_hash`, XXH3-64 dos bytes big-endian) para SPIR-V na primeira vez que o vê. O contrato do tradutor (chave, bloco compartilhado de 736 bytes, interpoladores por registrador) está em `docs/adr/0005-m3-plan-deviations.md` (M8) e será descrito aqui na Tarefa 15.4; o fork do XenosRecomp está no histórico do git (`0523eda`..`3b15c74`).
+Os shaders do jogo não são traduzidos na instalação: o runtime traduz o microcódigo que o jogo carrega
+(`IM_LOAD`/`IM_LOAD_IMMEDIATE`, identificado por `microcode_hash`, XXH3-64 dos bytes big-endian) para SPIR-V na
+primeira vez que o vê (ADR 0005, M8). O fork do XenosRecomp está no histórico do git (`0523eda`..`3b15c74`).
+
+O tradutor (`src/runtime/gpu/shader/`, namespace `lr::gpu::shader`) é código próprio sob MIT, só CPU, sem tipos do
+Vulkan: `decode()` (`ir.h`) transforma os dwords em um `Program`, e `translate(Program, TranslateOptions)`
+(`translator.h`) devolve `Result<TranslatedShader>` com o SPIR-V 1.5 (montado pelo `SpirvBuilder`) e um `ShaderInfo`
+(fetch constants de vértice e de textura usadas, dimensão de cada textura, interpoladores lidos, cores escritas,
+profundidade, `kill`, tamanho de ponto descartado). Microcódigo que o tradutor não trata é um erro
+`instruction <n> (<tipo>): <o quê> is not supported`, com `<n>` o índice do CF ou o endereço do slot da ALU/fetch;
+um erro do próprio tradutor também vira `Result`, nunca `abort`. Com um backend que liga shaders, o erro é
+`guest_fatal` (saída 5). `kTranslatorVersion` sobe sempre que o SPIR-V gerado muda para a mesma entrada.
+
+## Contrato dos shaders traduzidos (plano B)
+
+Esta seção é o contrato entre o SPIR-V traduzido e a GPU emulada: o lado do runtime (Tarefa 20) se implementa só a
+partir dela. Os números são as constantes de `src/runtime/gpu/shader/contract.h`; os dois mudam juntos.
+
+**Push constants** (32 bytes no offset 0, visíveis nos estágios vertex e fragment): quatro endereços de dispositivo
+(`bufferDeviceAddress`), cada um lido como `uvec2` (32 bits baixos, depois altos) e convertido com `OpBitcast` em
+ponteiro `PhysicalStorageBuffer64` (sem exigir `shaderInt64`):
+
+| Offset | Buffer |
+|---|---|
+| 0 | constantes float do VS |
+| 8 | constantes float do PS |
+| 16 | bloco compartilhado |
+| 24 | tabela de vertex fetch (Tarefa 15.8) |
+
+**Constantes float**: 256 `float4` (4096 bytes) por estágio, little-endian, passo de 16 bytes, base alinhada a 16;
+o elemento i é o registrador de constante i como o microcódigo o endereça. VS: a constante float i do arquivo de
+registradores; PS: a constante 256 + i. Toda leitura por ponteiro físico leva o operando `Aligned` (16 para `float4`,
+4 para escalares).
+
+**Bloco compartilhado** (736 bytes, little-endian, base alinhada a 16; os mesmos valores para VS e PS):
+
+| Offset | Tipo | Conteúdo |
+|---|---|---|
+| 0 | `uint[32]` | índice no heap de `Texture2D` (set 0) para cada texture fetch constant tf0..tf31 |
+| 128 | `uint[32]` | índice no heap de `Texture3D` (set 1), por fetch constant |
+| 256 | `uint[32]` | índice no heap de `TextureCube` (set 2), por fetch constant |
+| 384 | `uint[32]` | índice no heap de samplers (set 3), por fetch constant |
+| 512 | `uint[8]` | 256 booleanos: o booleano b é o bit `b % 32` da palavra `b / 32` (cópia dos 8 registradores `SHADER_CONSTANT_BOOL_000_031` .. `_224_255`) |
+| 544 | `uint[32]` | constantes de laço 0..31 (cópia de `SHADER_CONSTANT_LOOP_00` .. `_31`): bits 0..7 contagem, 8..15 valor inicial de `aL`, 16..23 passo de `aL` com sinal |
+| 672 | `float4` | `ndc_scale` |
+| 688 | `float4` | `ndc_offset` |
+| 704 | `float` | referência do alpha test (`RB_ALPHA_REF`) |
+| 708 | `uint` | flags do VTE (`PA_CL_VTE_CNTL`): bit 0 `vtx_xy_fmt`, bit 1 `vtx_z_fmt`, bit 2 `vtx_w0_fmt` |
+| 712 | `int` | deslocamento de índice (`VGT_INDX_OFFSET`) |
+| 716 | `uint` | índice mínimo de vértice (`VGT_MIN_VTX_INDX`) |
+| 720 | `uint` | índice máximo de vértice (`VGT_MAX_VTX_INDX`) |
+| 724..735 | | reservado (zero) |
+
+**Tabela de vertex fetch** (lida pelo VS a partir da Tarefa 15.8): 96 entradas de 16 bytes, uma por vertex fetch
+constant (`const_index * 3 + select`): offset 0 `uint64` endereço de dispositivo do buffer (lido como `uvec2`),
+offset 8 `uint32` tamanho em bytes, offset 12 `uint32` modo de troca de bytes (endian) do Xenos. Não há entradas de
+vértice do Vulkan (`VkPipelineVertexInputState` vazio).
+
+**Texturas e samplers (bindless)**: set 0 `Texture2D` (texturas 1D são `Texture2D` de altura 1), set 1 `Texture3D`,
+set 2 `TextureCube`, set 3 samplers; binding 0 em cada um, arrays de tamanho de execução (descriptor indexing:
+partially bound, update-after-bind). Um `tfetch` da fetch constant k lê o heap no índice da tabela do bloco
+compartilhado.
+
+**Especialização**: constante de especialização 0 (`uint`, pixel shader): bit 1 liga o alpha test; bits 2..4 são a
+função de comparação do Xenos (`RB_COLORCONTROL.ALPHA_FUNC`: 0 nunca, 1 menor, 2 igual, 3 menor ou igual, 4 maior,
+5 diferente, 6 maior ou igual, 7 sempre, isto é, uma máscara de menor (1), igual (2) e maior (4)); o bit 0 não é
+usado. Ao fim de um pixel shader que escreve `oC0`, se o teste está ligado e `oC0.w <função> referência` é falso, o
+pixel é descartado. NaN compara como não ordenado: só "diferente" e "sempre" passam.
+
+**Registradores de exportação do Xenos** (destino da ALU com `export_data`):
+- VS: interpoladores 0..15, posição 62, tamanho de ponto / edge flag / kill de vértice 63;
+- PS: cores 0..3 (`oC0..oC3`), profundidade 61 (componente x);
+- os dois estágios: `eA` = 32 e `eM0..eM4` = 33..37 são exportação de memória. Não é traduzida: a tradução falha com
+  `memexport (eA/eM) is not supported`.
+
+Uma exportação escreve os componentes da máscara vetorial com o resultado vetorial, os da máscara escalar com o
+resultado escalar, os das duas máscaras ao mesmo tempo com 1,0 e, quando `scalar_dest_rel` está ligado, os de nenhuma
+das duas com 0,0. Cada registrador de exportação começa em zero.
+
+**Registradores temporários**: um array local de `vec4` do tamanho `temp_count` do programa (64 quando algum
+temporário é relativo a `aL`). Todos começam em zero, menos:
+- VS: `r0.x` = `float(clamp(gl_VertexIndex + index_offset, min, max))`. A soma é feita com aritmética de 32 bits que
+  dá a volta, e o limite é sem sinal (`umin(umax(v, min), max)`), como os registradores do VGT;
+- PS: `r0..r15` vêm dos interpoladores de mesmo índice;
+- PS com `param_gen`: o registrador `ps_param_gen` recebe x = |floor(FragCoord.x)| com o bit de sinal ligado quando
+  a face é de trás; y = |floor(FragCoord.y)| com o bit de sinal ligado quando o desenho é uma lista de pontos
+  (`ps_point`); z, w = a coordenada do ponto (`PointCoord`, limitada a 0..1) para pontos, senão 0. Esse registrador
+  não é entrada.
+
+**Saídas do VS e entradas do PS (ligação por índice de registrador)**: o VS sempre declara 16 saídas `vec4` nas
+locations 0..15 (64 componentes, o mínimo garantido do Vulkan), zero quando o interpolador não é escrito, sem
+decoração de interpolação. O PS declara uma entrada na location r para cada registrador r < 16 que o programa
+referencia (todas as 16 quando algum temporário é relativo), decorada `Flat` quando o bit r de `flat_mask` está ligado
+e `Centroid` quando o bit r de `centroid_mask` está. O VS escreve `gl_PointSize = 1.0`; o tamanho de ponto exportado
+(63) é descartado e marcado em `ShaderInfo::drops_point_size` (expansão de point sprites fica fora do M3). Saídas do
+PS: `oC0..oC3` nas locations 0..3 (só as escritas) e `FragDepth` (com `DepthReplacing`) quando escreve a
+profundidade.
+
+**Posição**: as flags do VTE valem primeiro, com a semântica do Xenia: sem `vtx_w0_fmt` o W exportado é 1/W e é
+invertido; com `vtx_xy_fmt`, x e y foram divididos por W e são multiplicados por W; com `vtx_z_fmt`, z idem. Depois
+`gl_Position.xyz = p.xyz * ndc_scale.xyz + ndc_offset.xyz * p.w`, com `gl_Position.w = p.w` (os componentes w de
+`ndc_scale`/`ndc_offset` não são usados). O runtime calcula `ndc_scale`/`ndc_offset` a partir de `PA_CL_VPORT_*` e do
+centro do pixel (`PA_SU_VTX_CNTL`), com a inversão de Y incluída.
+
+**Chave e opções**: `ShaderKey{estágio, microcode_hash, dwords, modificadores de 64 bits}`. Modificadores do PS:
+bits 0..7 o registrador `param_gen` (`0xFF` = nenhum), bit 8 a flag de ponto, bits 16..31 a máscara flat
+(`SQ_INTERPOLATOR_CNTL.param_shade`), bits 32..47 a máscara centroid (`sampling_pattern`). O VS não tem
+modificadores no M3. `TranslateOptions` tem exatamente esses campos decodificados.
+
+**Kill e derivadas**: um `kill` liga uma flag local; o `main` termina com `OpKill` só se ela estiver ligada (o alpha
+test usa a mesma flag). Nunca há `OpKill` no meio do shader, então fetches posteriores mantêm as derivadas do quad.
+
+**Limites conhecidos do M3** (falham alto, salvo onde indicado): exportação de memória; o tamanho de ponto exportado
+é descartado (informado em `ShaderInfo`); fetches com LOD implícito dentro de um caso do `switch` de pc alcançado por
+um `cond_jmp` que depende de predicado podem perder as derivadas. Na Tarefa 15.4 o tradutor só aceita `exec` e
+`exec_end` em linha reta e as operações vetoriais `MAX`, `ADD` e `MUL`; o resto (controle de fluxo, demais operações
+da ALU, unidade escalar, fetch, endereçamento relativo, predicados) é um erro `is not supported` até as Tarefas
+15.5 a 15.9.
 
 ## Diagnóstico
 
