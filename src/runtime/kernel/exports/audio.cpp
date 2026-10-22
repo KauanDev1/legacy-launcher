@@ -19,9 +19,9 @@ constexpr uint32_t kDriverHandle = 0x41550000;  // 'AU' << 16 | client index 0
 namespace exports {
 
 // XAudioRegisterRenderDriverClient(callback*, driver*): {callback, argument} is read by a real driver; ours keeps
-// no client and hands out the fixed handle.
-uint32_t XAudioRegisterRenderDriverClient(GuestCall& c, U32Ptr callback, U32Ptr driver_out) {
-  if (!callback.valid_range(8) || !driver_out.valid_range(4)) return X_E_INVALIDARG;
+// no client, never reads it (so, as Xenia, it is not validated) and hands out the fixed handle.
+uint32_t XAudioRegisterRenderDriverClient(GuestCall& c, U32Ptr /*callback*/, U32Ptr driver_out) {
+  if (!driver_out.valid_range(4)) return X_E_INVALIDARG;
   *driver_out.get(c.base) = kDriverHandle;
   return 0;
 }

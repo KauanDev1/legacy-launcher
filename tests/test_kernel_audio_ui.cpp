@@ -59,6 +59,7 @@ uint32_t wstr(KernelFixture& f, const char16_t* s) {
 }
 
 uint32_t rd(KernelFixture& f, uint32_t a) { return *f.mem.translate<be<uint32_t>>(a); }
+void wr32(KernelFixture& f, uint32_t a, uint32_t v) { *f.mem.translate<be<uint32_t>>(a) = v; }
 
 }  // namespace
 
@@ -71,6 +72,11 @@ TEST_CASE("silent audio driver answers like a driver", "[unit][kernel][audio]") 
   CHECK(f.call("XAudioUnregisterRenderDriverClient", 0x41550000u) == 0);
   CHECK(f.call("XAudioGetVoiceCategoryVolume", 1u, vol) == 0);
   CHECK(*f.mem.translate<be<float>>(vol) == 1.0f);
+  // The callback pointer is never read (as Xenia, nothing validates it); only the handle output must be writable.
+  wr32(f, drv, 0);
+  CHECK(f.call("XAudioRegisterRenderDriverClient", 0x1234u, drv) == 0);
+  CHECK(rd(f, drv) == 0x41550000);
+  CHECK(static_cast<uint32_t>(f.call("XAudioRegisterRenderDriverClient", cb, 0u)) == X_E_INVALIDARG);
 }
 
 TEST_CASE("XamShowMessageBoxUI reports to the terminal and presses the first button", "[unit][kernel][xam]") {
