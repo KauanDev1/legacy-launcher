@@ -151,6 +151,7 @@ TEST_CASE("install_fault_handlers reports a guest fault (forked child)", "[unit]
 #include "runtime/func_table.h"
 
 static void dummy_func() {}
+static void dummy_func2() { asm volatile("nop"); }  // a different body: never folded into dummy_func
 
 TEST_CASE("install_function_table writes 8-byte slots per 4-byte instruction", "[unit]") {
   auto r = GuestMemory::reserve(0x1'0000'0000ull);
@@ -162,6 +163,19 @@ TEST_CASE("install_function_table writes 8-byte slots per 4-byte instruction", "
   CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x20) == f);
   CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x28) == f);
   CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x30) == nullptr);
+}
+
+// XenonRecomp lists an import thunk before a function the analysis also found at that address (the thunk is reached
+// through a pointer table, e.g. the CRT's NtReadFile): the first mapping must win, or the thunk bytes run as code.
+TEST_CASE("install_function_table keeps the first mapping of an address", "[unit]") {
+  auto r = GuestMemory::reserve(0x1'0000'0000ull);
+  REQUIRE(r.ok());
+  const uint64_t off = 0x82000000ull + 0x32D0000ull;
+  void* thunk = reinterpret_cast<void*>(&dummy_func);
+  void* other = reinterpret_cast<void*>(&dummy_func2);
+  const FuncMapping maps[] = {{0x82000010, thunk}, {0x82000010, other}};
+  REQUIRE(install_function_table(r.value(), off, 0x82000000, 0x1000, maps).ok());
+  CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x20) == thunk);
 }
 
 TEST_CASE("install_function_table rejects bad mappings", "[unit]") {

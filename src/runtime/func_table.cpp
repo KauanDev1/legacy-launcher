@@ -24,7 +24,9 @@ Result<void> install_function_table(const GuestMemory& mem, uint64_t table_offse
         mem.size() - table_offset - delta < sizeof(void*)) {
       return Error{ErrorCode::InvalidFormat, where + " maps to a table slot outside guest memory", ""};
     }
-    std::memcpy(mem.base() + table_offset + delta, &m.host, sizeof(void*));
+    void* slot = nullptr;
+    std::memcpy(&slot, mem.base() + table_offset + delta, sizeof(void*));
+    if (slot == nullptr) std::memcpy(mem.base() + table_offset + delta, &m.host, sizeof(void*));
   }
   return {};
 }
