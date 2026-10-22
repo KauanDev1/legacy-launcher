@@ -1,0 +1,370 @@
+From 4f2b756a809dd01fadb30dfd56d2a5deebe7bf2c Mon Sep 17 00:00:00 2001
+From: Kauan Turcato Storto <159664484+KauanDev1@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 12:42:33 -0400
+Subject: [PATCH 3/3] feat: LR_LEGACYRECOMP tool mode writes the LegacyRecomp
+ shader cache
+
+XenosRecomp <input file or dir> <shader_cache.cpp> <shader_common.h>
+[--hlsl-dir <dir>] scans for shader containers as upstream does, translates
+each one (in parallel) and writes one C++ source: lr_shader_cache entries
+keyed by microcode hash (stage, SPIR-V offset/size, spec constant mask,
+container hashes in a comment), lr_shader_vertex_inputs, and the raw SPIR-V
+as one zstd blob. It prints "container <hash> microcode <hash> <stage>" per
+translated container and "translated N of M", and exits non-zero (writing
+nothing) unless every container translated: a malformed container, a DXC
+error, or one microcode with two different translations is a failure.
+
+LegacyRecomp patch; same license as XenosRecomp (MIT).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ XenosRecomp/main.cpp | 332 +++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 332 insertions(+)
+
+diff --git a/XenosRecomp/main.cpp b/XenosRecomp/main.cpp
+index d015145..bba91d9 100644
+--- a/XenosRecomp/main.cpp
++++ b/XenosRecomp/main.cpp
+@@ -29,6 +29,8 @@ struct RecompiledShader
+     uint32_t specConstantsMask = 0;
+ };
+ 
++#ifndef LR_LEGACYRECOMP
++
+ int main(int argc, char** argv)
+ {
+ #ifndef XENOS_RECOMP_INPUT
+@@ -217,3 +219,333 @@ int main(int argc, char** argv)
+ 
+     return 0;
+ }
++
++#else
++
++// LegacyRecomp mode (LR_LEGACYRECOMP): translates every shader container found in the input (a file, or every file
++// under a directory) for the emulated Xenos GPU and writes one C++ source with the shader cache the game links:
++// SPIR-V (zstd) keyed by the microcode hash, plus the vertex input table. Prints one line per translated container
++// and "translated N of M"; exits non-zero unless every container translated (a malformed container, an unsupported
++// construct, a DXC error or two containers with the same microcode but different translations all count as
++// failures). Optional --hlsl-dir <dir> dumps the generated HLSL (<microcode hash>.hlsl; failed containers as
++// container-<hash>.hlsl).
++
++struct LrShader
++{
++    const uint8_t* data = nullptr;
++    size_t size = 0;
++    bool ok = false;
++    bool isPixelShader = false;
++    uint64_t microcodeHash = 0;
++    uint32_t specConstantsMask = 0;
++    std::string hlsl;
++    std::vector<uint8_t> spirv;
++    std::vector<LrVertexInput> vertexInputs;
++    std::string error;
++};
++
++static bool lrReadFile(const std::filesystem::path& path, std::vector<uint8_t>& data)
++{
++    FILE* file = fopen(path.string().c_str(), "rb");
++    if (file == nullptr)
++        return false;
++    fseek(file, 0, SEEK_END);
++    long size = ftell(file);
++    fseek(file, 0, SEEK_SET);
++    bool ok = size >= 0;
++    if (ok)
++    {
++        data.resize(size_t(size));
++        ok = fread(data.data(), 1, data.size(), file) == data.size();
++    }
++    fclose(file);
++    return ok;
++}
++
++static bool lrWriteFile(const std::filesystem::path& path, const void* data, size_t size)
++{
++    FILE* file = fopen(path.string().c_str(), "wb");
++    if (file == nullptr)
++        return false;
++    bool ok = fwrite(data, 1, size, file) == size;
++    ok = (fclose(file) == 0) && ok;
++    return ok;
++}
++
++static bool lrVertexInputsEqual(const std::vector<LrVertexInput>& a, const std::vector<LrVertexInput>& b)
++{
++    if (a.size() != b.size())
++        return false;
++    for (size_t i = 0; i < a.size(); i++)
++    {
++        if (a[i].location != b[i].location || a[i].fetchSlot != b[i].fetchSlot || a[i].offsetDwords != b[i].offsetDwords ||
++            a[i].strideDwords != b[i].strideDwords || a[i].format != b[i].format || a[i].flags != b[i].flags ||
++            a[i].expAdjust != b[i].expAdjust)
++            return false;
++    }
++    return true;
++}
++
++int main(int argc, char** argv)
++{
++    if (!(argc == 4 || (argc == 6 && strcmp(argv[4], "--hlsl-dir") == 0)))
++    {
++        fmt::println(stderr, "usage: XenosRecomp <input file or directory> <output shader_cache.cpp> <shader_common.h> [--hlsl-dir <dir>]");
++        return 2;
++    }
++
++    const std::filesystem::path input = argv[1];
++    const std::filesystem::path output = argv[2];
++    const std::filesystem::path hlslDir = argc == 6 ? std::filesystem::path(argv[5]) : std::filesystem::path();
++
++    std::vector<uint8_t> includeData;
++    if (!lrReadFile(argv[3], includeData))
++    {
++        fmt::println(stderr, "error: cannot read {}", argv[3]);
++        return 2;
++    }
++    const std::string include(includeData.begin(), includeData.end());
++
++    std::error_code ec;
++    std::vector<std::filesystem::path> paths;
++    if (std::filesystem::is_directory(input, ec))
++    {
++        for (auto& entry : std::filesystem::recursive_directory_iterator(input, ec))
++        {
++            if (entry.is_regular_file())
++                paths.push_back(entry.path());
++        }
++        std::sort(paths.begin(), paths.end());
++    }
++    else if (std::filesystem::is_regular_file(input, ec))
++    {
++        paths.push_back(input);
++    }
++    else
++    {
++        fmt::println(stderr, "error: {} is not a file or a directory", input.string());
++        return 2;
++    }
++
++    // Same scan as upstream: a container is a 0x102A11xx header whose virtual + physical size fits in the file;
++    // duplicates (same bytes) count once.
++    std::vector<std::vector<uint8_t>> files;
++    std::map<XXH64_hash_t, LrShader> shaders;
++    for (const auto& path : paths)
++    {
++        std::vector<uint8_t> fileData;
++        if (!lrReadFile(path, fileData))
++        {
++            fmt::println(stderr, "error: cannot read {}", path.string());
++            return 2;
++        }
++
++        const size_t fileSize = fileData.size();
++        bool foundAny = false;
++        for (size_t i = 0; fileSize > sizeof(ShaderContainer) && i < fileSize - sizeof(ShaderContainer) - 1;)
++        {
++            auto shaderContainer = reinterpret_cast<const ShaderContainer*>(fileData.data() + i);
++            size_t dataSize = size_t(shaderContainer->virtualSize) + shaderContainer->physicalSize;
++
++            if ((shaderContainer->flags & 0xFFFFFF00) == 0x102A1100 &&
++                dataSize >= sizeof(ShaderContainer) &&
++                dataSize <= (fileSize - i) &&
++                shaderContainer->field1C == 0 &&
++                shaderContainer->field20 == 0)
++            {
++                XXH64_hash_t hash = XXH3_64bits(shaderContainer, dataSize);
++                auto shader = shaders.try_emplace(hash);
++                if (shader.second)
++                {
++                    shader.first->second.data = fileData.data() + i;
++                    shader.first->second.size = dataSize;
++                    foundAny = true;
++                }
++
++                i += dataSize;
++            }
++            else
++            {
++                i += sizeof(uint32_t);
++            }
++        }
++
++        if (foundAny)
++            files.emplace_back(std::move(fileData));
++    }
++
++    if (shaders.empty())
++    {
++        fmt::println(stderr, "error: no shader containers found in {}", input.string());
++        fmt::println("translated 0 of 0");
++        return 1;
++    }
++
++    std::for_each(std::execution::par, shaders.begin(), shaders.end(), [&](auto& hashShaderPair)
++        {
++            auto& shader = hashShaderPair.second;
++            try
++            {
++                ShaderRecompiler recompiler;
++                recompiler.containerSize = shader.size;
++                recompiler.recompile(shader.data, include);
++
++                shader.isPixelShader = recompiler.isPixelShader;
++                shader.microcodeHash = recompiler.microcodeHash;
++                shader.specConstantsMask = recompiler.specConstantsMask;
++                shader.vertexInputs = recompiler.vertexInputs;
++                shader.hlsl = std::move(recompiler.out);
++
++                thread_local DxcCompiler dxcCompiler;
++                IDxcBlob* spirv = dxcCompiler.compile(shader.hlsl, shader.isPixelShader, false, true);
++                if (spirv == nullptr)
++                    throw LrTranslationError("DXC failed:\n" + (dxcCompiler.lastErrors.empty() ? std::string("(no diagnostics)") : dxcCompiler.lastErrors));
++
++                const auto bytes = reinterpret_cast<const uint8_t*>(spirv->GetBufferPointer());
++                shader.spirv.assign(bytes, bytes + spirv->GetBufferSize());
++                spirv->Release();
++                shader.ok = true;
++            }
++            catch (const std::exception& e)
++            {
++                shader.error = e.what();
++            }
++        });
++
++    auto dumpHlsl = [&](const std::string& name, const std::string& hlsl)
++        {
++            if (hlslDir.empty() || hlsl.empty())
++                return;
++            // The prelude (shader_common.h) is replaced by an #include of it.
++            std::string text = "#include \"shader_common.h\"\n";
++            text += hlsl.size() > include.size() ? hlsl.substr(include.size() + 1) : hlsl;
++            std::filesystem::create_directories(hlslDir, ec);
++            lrWriteFile(hlslDir / (name + ".hlsl"), text.data(), text.size());
++        };
++
++    // One cache entry per microcode hash: the runtime looks shaders up by the hash of the microcode the game loads.
++    std::map<uint64_t, std::vector<std::pair<XXH64_hash_t, const LrShader*>>> byMicrocode;
++    uint32_t translated = 0;
++    for (auto& [hash, shader] : shaders)
++    {
++        if (!shader.ok)
++        {
++            fmt::println(stderr, "error: container 0x{:016X}: {}", hash, shader.error);
++            dumpHlsl(fmt::format("container-{:016X}", hash), shader.hlsl);
++            continue;
++        }
++
++        auto& group = byMicrocode[shader.microcodeHash];
++        if (!group.empty())
++        {
++            const LrShader& first = *group.front().second;
++            if (first.hlsl != shader.hlsl || !lrVertexInputsEqual(first.vertexInputs, shader.vertexInputs))
++            {
++                fmt::println(stderr, "error: container 0x{:016X}: microcode 0x{:016X} is also in container 0x{:016X} "
++                    "with a different translation", hash, shader.microcodeHash, group.front().first);
++                dumpHlsl(fmt::format("container-{:016X}", hash), shader.hlsl);
++                continue;
++            }
++        }
++        group.emplace_back(hash, &shader);
++
++        ++translated;
++        fmt::println("container 0x{:016X} microcode 0x{:016X} {}", hash, shader.microcodeHash,
++            shader.isPixelShader ? "pixel" : "vertex");
++    }
++
++    for (auto& [microcodeHash, group] : byMicrocode)
++        dumpHlsl(fmt::format("{:016X}", microcodeHash), group.front().second->hlsl);
++
++    fmt::println("translated {} of {}", translated, shaders.size());
++    if (translated != shaders.size())
++        return 1;
++
++    StringBuffer f;
++    f.println("// Generated by XenosRecomp (LegacyRecomp mode) from shader containers: derived from game data, it lives");
++    f.println("// in work/ only and is never committed. Layout: LegacyRecomp docs/architecture.md (\"Contrato dos shaders\").");
++    f.println("#include <cstddef>");
++    f.println("#include <cstdint>");
++    f.println("");
++    f.println("struct lr_shader_cache_entry");
++    f.println("{{");
++    f.println("    uint64_t microcode_hash;            // XXH3-64 of the microcode as stored (big-endian)");
++    f.println("    uint8_t stage;                      // 0 = vertex, 1 = pixel");
++    f.println("    uint32_t spirv_offset, spirv_size;  // bytes, in the decompressed lr_shader_blob");
++    f.println("    uint32_t spec_mask;                 // bits of spec constant 0 the shader reads");
++    f.println("}};");
++    f.println("");
++    f.println("struct lr_shader_vertex_input");
++    f.println("{{");
++    f.println("    uint64_t microcode_hash;  // vertex shader");
++    f.println("    uint32_t location;        // input location (index of the vertex element in the container)");
++    f.println("    uint32_t fetch_slot;      // vertex fetch constant 0..95");
++    f.println("    uint32_t offset_dwords;");
++    f.println("    uint32_t stride_dwords;");
++    f.println("    uint32_t format;          // Xenos vertex format");
++    f.println("    uint32_t flags;           // 1 = signed, 2 = integer (not normalized), 4 = signed_rf_mode");
++    f.println("    int32_t exp_adjust;");
++    f.println("}};");
++    f.println("");
++
++    std::vector<uint8_t> blob;
++    size_t vertexInputCount = 0;
++    f.println("extern \"C\" const lr_shader_cache_entry lr_shader_cache[] = {{");
++    for (auto& [microcodeHash, group] : byMicrocode)
++    {
++        const LrShader& shader = *group.front().second;
++        f.print("    {{ 0x{:016X}, {}, {}, {}, 0x{:X} }}, // container", microcodeHash, shader.isPixelShader ? 1 : 0,
++            blob.size(), shader.spirv.size(), shader.specConstantsMask);
++        for (auto& [containerHash, member] : group)
++            f.print(" 0x{:016X}", containerHash);
++        f.println("");
++        blob.insert(blob.end(), shader.spirv.begin(), shader.spirv.end());
++        while (blob.size() % 4 != 0)
++            blob.push_back(0);
++        vertexInputCount += shader.vertexInputs.size();
++    }
++    f.println("}};");
++    f.println("extern \"C\" const size_t lr_shader_cache_count = {};", byMicrocode.size());
++    f.println("");
++
++    f.println("extern \"C\" const lr_shader_vertex_input lr_shader_vertex_inputs[] = {{");
++    for (auto& [microcodeHash, group] : byMicrocode)
++    {
++        for (const auto& input : group.front().second->vertexInputs)
++        {
++            f.println("    {{ 0x{:016X}, {}, {}, {}, {}, {}, 0x{:X}, {} }},", microcodeHash, input.location, input.fetchSlot,
++                input.offsetDwords, input.strideDwords, input.format, input.flags, input.expAdjust);
++        }
++    }
++    if (vertexInputCount == 0)
++        f.println("    {{ 0, 0, 0, 0, 0, 0, 0, 0 }}, // placeholder: no vertex inputs");
++    f.println("}};");
++    f.println("extern \"C\" const size_t lr_shader_vertex_input_count = {};", vertexInputCount);
++    f.println("");
++
++    std::vector<uint8_t> compressed(ZSTD_compressBound(blob.size()));
++    const size_t compressedSize = ZSTD_compress(compressed.data(), compressed.size(), blob.data(), blob.size(), ZSTD_maxCLevel());
++    if (ZSTD_isError(compressedSize))
++    {
++        fmt::println(stderr, "error: zstd: {}", ZSTD_getErrorName(compressedSize));
++        return 1;
++    }
++    compressed.resize(compressedSize);
++
++    f.print("extern \"C\" const uint8_t lr_shader_blob[] = {{");
++    for (size_t i = 0; i < compressed.size(); i++)
++        f.print("{}{},", (i % 32) == 0 ? "\n    " : "", compressed[i]);
++    f.println("\n}};");
++    f.println("extern \"C\" const size_t lr_shader_blob_size = {};", compressed.size());
++    f.println("extern \"C\" const size_t lr_shader_blob_uncompressed_size = {};", blob.size());
++
++    if (!lrWriteFile(output, f.out.data(), f.out.size()))
++    {
++        fmt::println(stderr, "error: cannot write {}", output.string());
++        return 1;
++    }
++
++    return 0;
++}
++
++#endif

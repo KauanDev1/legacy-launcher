@@ -44,6 +44,9 @@ if(LR_BUILD_XENOSRECOMP AND LR_DXC_INCLUDE_DIR AND LR_DXC_LIBRARY)
   set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
   add_subdirectory(${LR_XENOSRECOMP_DIR} ${CMAKE_BINARY_DIR}/thirdparty/XenosRecomp EXCLUDE_FROM_ALL)
+  # LegacyRecomp mode of the fork (thirdparty/patches/xenosrecomp): the emulated-GPU shader contract, microcode
+  # hashes and the shader cache format of docs/architecture.md; the Unleashed Recompiled paths are compiled out.
+  target_compile_definitions(XenosRecomp PRIVATE LR_LEGACYRECOMP)
   set(LR_HAVE_XENOSRECOMP ON)
 else()
   set(LR_HAVE_XENOSRECOMP OFF)

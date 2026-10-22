@@ -575,6 +575,114 @@ linha final `gpu trace capped at 64 MiB`.
 processo com código 0. Serve ao teste de integração do M3 (`tests/test_integration_m3.cpp`), que roda o jogo até 60
 swaps e espera saída 0.
 
+## Contrato dos shaders traduzidos (M3)
+
+Os shaders do jogo são traduzidos na instalação pelo XenosRecomp do fork: o submódulo fixado em `990d03b` mais
+`thirdparty/patches/xenosrecomp/`, no modo `LR_LEGACYRECOMP` (o CMake define o símbolo ao compilar a ferramenta; tudo o
+que os patches acrescentam fica atrás dele, e os caminhos do Unleashed Recompiled ficam de fora). Esta seção é o
+contrato entre o SPIR-V gerado e a GPU emulada: o lado do runtime (Tarefa 20) se implementa só a partir dela. Os
+números são as macros `LR_*` e `SPEC_CONSTANT_*` de `XenosRecomp/shader_common.h` (com os patches); o teste
+`shared constants layout matches the documented contract` (`tests/shaders`) confere os valores desta seção.
+
+**Ferramenta.** `XenosRecomp <arquivo ou pasta> <shader_cache.cpp> <xenos_shader_common.h> [--hlsl-dir <pasta>]`.
+Procura contêineres como o upstream (cabeçalho `0x102A11xx`, bit 0 = vertex shader; tamanho virtual + físico cabendo
+no arquivo; `field1C` e `field20` zero; contêineres de bytes idênticos contam uma vez), traduz cada um para HLSL e
+compila com o DXC (`-spirv -T vs_6_0|ps_6_0 -HV 2021 -fvk-use-dx-layout -all-resources-bound`, mais `-fvk-invert-y` no
+VS e `-DLR_LEGACYRECOMP`). Escreve uma linha `container 0x<hash do contêiner> microcode 0x<hash do microcódigo>
+vertex|pixel` por contêiner traduzido, os erros (`error: container 0x...: <motivo>`, com o diagnóstico do DXC) no
+stderr e, no fim, `translated N of M` (M = contêineres distintos encontrados). Saída 0 só com N = M ≥ 1; 1 quando algum
+contêiner falha (tabela fora do contêiner, construção não suportada, erro do DXC, o mesmo microcódigo em dois
+contêineres com traduções diferentes) ou nenhum é encontrado; 2 para uso errado ou arquivo ilegível. Com falha, o
+`.cpp` não é escrito. `--hlsl-dir` grava o HLSL de cada entrada como `<hash do microcódigo>.hlsl` (os que falharam,
+como `container-<hash>.hlsl`), com o prelúdio trocado por `#include "shader_common.h"`.
+
+**Hash do microcódigo.** XXH3-64 (xxHash) dos `size` bytes de microcódigo exatamente como estão no contêiner
+(big-endian), em `virtualSize + shader.physicalOffset`. O runtime calcula o mesmo hash sobre os dwords que o jogo
+carrega com `IM_LOAD`/`IM_LOAD_IMMEDIATE`, lidos da memória do convidado sem troca de bytes. O hash do contêiner
+(XXH3-64 do contêiner inteiro, a chave do upstream) só aparece no log e em comentário no cache.
+
+**Cache gerado** (`shader_cache.cpp`, derivado do jogo: só em `work/`, nunca no repositório):
+
+```
+struct lr_shader_cache_entry { uint64_t microcode_hash; uint8_t stage; uint32_t spirv_offset, spirv_size; uint32_t spec_mask; };
+struct lr_shader_vertex_input { uint64_t microcode_hash; uint32_t location, fetch_slot, offset_dwords, stride_dwords,
+                                format, flags; int32_t exp_adjust; };
+extern "C" const lr_shader_cache_entry lr_shader_cache[];          extern "C" const size_t lr_shader_cache_count;
+extern "C" const lr_shader_vertex_input lr_shader_vertex_inputs[]; extern "C" const size_t lr_shader_vertex_input_count;
+extern "C" const uint8_t lr_shader_blob[];                         extern "C" const size_t lr_shader_blob_size;
+extern "C" const size_t lr_shader_blob_uncompressed_size;
+```
+
+Uma entrada por hash de microcódigo, em ordem crescente de hash (comentário com os contêineres que a geraram).
+`stage`: 0 = vertex, 1 = pixel. `spirv_offset`/`spirv_size`: bytes no blob **descomprimido**; o blob é zstd de
+SPIR-V cru (sem smol-v), cada módulo começando em offset múltiplo de 4. `spec_mask`: bits da constante de
+especialização 0 que o shader lê (0 ou `0x1E` hoje). `lr_shader_vertex_inputs`: zero ou mais linhas por vertex shader
+(quando não há nenhuma, o array tem uma linha de zeros e o contador é 0).
+
+**Push constants** (24 bytes no offset 0, visíveis nos estágios vertex e fragment): offset 0 `uint64`
+`VertexShaderConstants`, offset 8 `uint64` `PixelShaderConstants`, offset 16 `uint64` `SharedConstants`. São
+endereços de dispositivo (`bufferDeviceAddress`) de três buffers lidos com `vk::RawBufferLoad`.
+
+**Constantes float** (`VertexShaderConstants`, `PixelShaderConstants`): 256 `float4` (4096 bytes) por estágio,
+little-endian, alinhados a 16; o elemento i é o registrador de constante i como o microcódigo o endereça. VS: i = a
+constante float i do arquivo de registradores; PS: i = a constante float 256 + i (convenção do D3D do Xbox 360: as
+definições de PS na tabela do contêiner já vêm com registrador ≥ 256). Endereço relativo (`+ a0` ou `+ aL`) fora de
+0..255 lê zero. Constantes definidas na tabela de definições do contêiner viram literais no shader quando o acesso não
+é relativo.
+
+**Bloco compartilhado** (`SharedConstants`, 688 bytes, little-endian, valores de 32 bits alinhados a 4):
+
+| Offset | Tipo | Conteúdo |
+|---|---|---|
+| 0 | `uint[32]` | índice no heap de `Texture2D` para cada texture fetch constant tf0..tf31 |
+| 128 | `uint[32]` | índice no heap de `Texture3D`, por fetch constant |
+| 256 | `uint[32]` | índice no heap de `TextureCube`, por fetch constant |
+| 384 | `uint[32]` | índice no heap de samplers, por fetch constant |
+| 512 | `uint[8]` | 256 booleanos: o booleano b é o bit `b % 32` da palavra `b / 32`; 0..127 = banco do VS, 128..255 = banco do PS (cópia, em ordem, dos 8 registradores `SHADER_CONSTANT_BOOL_000_031` .. `_224_255`) |
+| 544 | `uint[32]` | constantes de laço 0..31 (cópia de `SHADER_CONSTANT_LOOP_00` .. `_31`): bits 0..7 contagem, 8..15 valor inicial de `aL`, 16..23 passo de `aL` com sinal; as mesmas para VS e PS |
+| 672 | `float2` | meio pixel: o VS termina com `oPos.xy += g_HalfPixelOffset * oPos.w` (zero desliga) |
+| 680 | `float` | referência do alpha test (`RB_ALPHA_REF`) |
+| 684 | `uint` | reservado (zero) |
+
+Cada estágio vê 128 booleanos: o tradutor usa o índice `(PS ? 128 : 0) + (endereço de 8 bits do microcódigo % 128)`,
+que vale tanto se o microcódigo do PS endereça 128..255 quanto 0..127. Um laço usa a constante indicada pelo
+microcódigo; se a tabela de definições do contêiner traz um literal inteiro para ela, o literal tem prioridade.
+`cond_exec`, `cond_exec_pred` e `cond_jmp` respeitam a condição; laços aninhados restauram `aL` no fim.
+
+**Texturas e samplers (bindless).** `Texture2D<float4>[]` no set 0, binding 0; `Texture3D<float4>[]` no set 1,
+binding 0; `TextureCube<float4>[]` no set 2, binding 0; `SamplerState[]` no set 3, binding 0. São arrays de tamanho de
+execução: o runtime usa descriptor indexing (partially bound, update-after-bind). Um `tfetch` da fetch constant k lê
+`heap[índice[k]]` com o sampler `samplers[sampler[k]]` (tabela acima). Texturas 1D não são suportadas (a tradução
+falha no DXC).
+
+**Especialização.** Constante de especialização 0 (`uint`): bit 1 liga o alpha test; bits 2..4 são a função de
+comparação do Xenos (`RB_COLORCONTROL.ALPHA_FUNC`: 0 nunca, 1 menor, 2 igual, 3 menor ou igual, 4 maior, 5 diferente,
+6 maior ou igual, 7 sempre). Ao fim de um pixel shader que escreve `oC0`, se o teste está ligado e
+`oC0.w <função> referência` é falso, o pixel é descartado. O bit 0 não é usado.
+
+**Entradas de vértice.** O elemento de vértice i do contêiner (a instrução `vfetch` no endereço que ele indica) é a
+entrada `location = i`, sempre `float4`; elementos que nenhum `vfetch` das cláusulas de exec lê não viram entrada. Para cada
+entrada, `lr_shader_vertex_inputs` diz como alimentá-la: `fetch_slot` = vertex fetch constant 0..95
+(`const_index * 3 + const_index_select`; endereço base e troca de bytes vêm dela), `offset_dwords` e
+`stride_dwords` da instrução (um mini-fetch herda slot e stride do fetch completo anterior), `format` = formato de
+vértice do Xenos (6 bits), `flags` bit 0 = componentes com sinal, bit 1 = inteiro (não normalizado), bit 2 =
+`signed_rf_mode`, e `exp_adjust`. O runtime escolhe o `VkFormat` (normalizado ou "scaled" conforme as flags), faz a
+troca de bytes no upload e converte os formatos sem `VkFormat` equivalente; componentes ausentes valem (0, 0, 0, 1).
+O registrador de índice da instrução é ignorado (o índice é o do desenho); `r0.x` começa com o índice do vértice
+(`SV_VertexID`, isto é, `VertexIndex` do Vulkan, que inclui o `vertexOffset`).
+
+**Saídas do VS e entradas do PS.** O VS sempre declara 18 saídas `float4`: `TEXCOORD0..15` nas locations 0..15,
+`COLOR0` na 16 e `COLOR1` na 17 (mais a posição); o PS declara as mesmas entradas nas mesmas locations, ligadas por
+semântica pelas tabelas de interpoladores dos contêineres. Isso exige `maxVertexOutputComponents` ≥ 72 (acima do
+mínimo de 64 do Vulkan; lavapipe e GPUs de desktop têm 128). O VS sai com Y invertido (`-fvk-invert-y`): o viewport
+usa altura positiva, como no D3D. O registrador de posição do PS (campo do contêiner) recebe
+`((iPos.xy - 0.5) * (frente ? 1 : -1, 1), 0, 0)`. Saídas do PS: `SV_Target0..3` nas locations 0..3 (só as que o
+contêiner declara) e `SV_Depth`.
+
+**Limites conhecidos** (falham alto, nunca em silêncio, salvo onde indicado): texturas 1D; laço aninhado num shader com
+saltos (`switch` de pc); exportação de memória (registradores 32..37); o tamanho de ponto exportado pelo VS é
+descartado em silêncio; `loop_end` com quebra por predicado é tratado como `loop_end` comum (como no upstream).
+
 ## Diagnóstico
 
 Os modos de falha do ciclo "rodar, ver onde para, implementar" são importação faltando (saída 3), falha (4), erro

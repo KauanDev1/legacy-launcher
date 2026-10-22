@@ -53,9 +53,21 @@ O `XenosRecomp` (microcódigo de shader do Xenos para HLSL e SPIR-V) precisa do 
 `Microsoft::DirectXShaderCompiler` antes de adicionar o submódulo (use `-DLR_DXC_ROOT=<prefixo>` para um DXC fora dos
 caminhos do sistema) e o `lr_resources` copia o executável para `share/legacyrecomp/tools/XenosRecomp`. Sem o DXC o
 configure só avisa e não compila o XenosRecomp; `-DLR_BUILD_XENOSRECOMP=OFF` o desliga de propósito (o AppImage ainda
-não leva o DXC, `docs/packaging.md`). Os patches do XenosRecomp, quando houver, ficam em
-`thirdparty/patches/xenosrecomp/` e valem as mesmas regras do XenonRecomp abaixo, com
-`-DLR_XENOSRECOMP_APPLY_PATCHES=OFF` para editar o submódulo direto. O teste `submodule_patches_mechanism` cobre o
+não leva o DXC, `docs/packaging.md`). O `lr_resources` também copia o prelúdio HLSL dos shaders traduzidos
+(`XenosRecomp/shader_common.h` já com os patches) para `share/legacyrecomp/tools/xenos_shader_common.h`, o terceiro
+argumento da ferramenta.
+
+Os patches do XenosRecomp ficam em `thirdparty/patches/xenosrecomp/` (gerados da branch local `legacyrecomp`,
+`990d03b` + patches) e valem as mesmas regras do XenonRecomp abaixo (troque `ddd128b` por `990d03b` e
+`xenonrecomp` por `xenosrecomp`), com `-DLR_XENOSRECOMP_APPLY_PATCHES=OFF` para editar o submódulo direto. Tudo o que
+eles acrescentam fica atrás de `#ifdef LR_LEGACYRECOMP`, que o CMake define ao compilar a ferramenta (o contrato com a
+GPU emulada, em `docs/architecture.md`, "Contrato dos shaders traduzidos"); sem o define o XenosRecomp se comporta como
+o upstream. Uma alternativa a trocar a branch do submódulo é um `git worktree` dele fora do repositório
+(`git -C thirdparty/XenosRecomp worktree add <pasta> legacyrecomp`): o checkout do submódulo fica em `990d03b` e os
+patches regenerados (`git format-patch --no-signature -o <repo>/thirdparty/patches/xenosrecomp 990d03b..legacyrecomp`)
+são aplicados normalmente no build. O harness `tests/shaders` (contêineres sintéticos de
+`tests/support/xenos_shader_builder.h`, traduzidos no build; `ctest --preset dev -L shaders`) cobre o modo
+LegacyRecomp. O teste `submodule_patches_mechanism` cobre o
 mecanismo (`cmake/LrSubmodulePatches.cmake`) para os dois submódulos.
 
 ## ISO do jogo

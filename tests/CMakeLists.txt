@@ -65,6 +65,10 @@ add_test(NAME no_gpl_disassembler_in_binaries
           -P ${CMAKE_CURRENT_SOURCE_DIR}/support/check_no_gpl_disassembler.cmake)
 set_tests_properties(no_gpl_disassembler_in_binaries PROPERTIES LABELS unit)
 add_subdirectory(recomp)
+# XenosRecomp harness (synthetic Xenos shader containers), only when the tool is built (needs the system DXC).
+if(LR_HAVE_XENOSRECOMP)
+  add_subdirectory(shaders)
+endif()
 
 # --- patch mechanism (cmake/LrSubmodulePatches.cmake), parameterised over XenonRecomp and XenosRecomp inside the script ---
 add_test(NAME submodule_patches_mechanism

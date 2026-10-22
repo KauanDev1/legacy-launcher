@@ -1,0 +1,1014 @@
+From 7c9cd8c1be22cc93ca92b974f2ac9676e4cf5444 Mon Sep 17 00:00:00 2001
+From: Kauan Turcato Storto <159664484+KauanDev1@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 12:42:32 -0400
+Subject: [PATCH 2/3] feat: translate for an emulated Xenos GPU under
+ LR_LEGACYRECOMP
+
+With LR_LEGACYRECOMP the translator targets LegacyRecomp's emulated GPU,
+which knows Xenos registers, not D3D constant names:
+
+- float constants by register index from the stage buffer (BDA, unchanged
+  push constants), with relative addressing for any constant and literals
+  from the definition table as locals;
+- 128 boolean constants per stage (cond_exec, cond_exec_pred and cond_jmp,
+  all honoured; upstream ignored the cond_exec conditions) and 32 loop
+  constants (count, start and step; nested aL restored) in the shared block;
+- texture and sampler heap indices per texture fetch constant (0..31);
+- vertex inputs: vertex element i of the container is input location i
+  (float4), with its vertex fetch slot, offset, stride and format recorded
+  for the runtime; no usage location table;
+- alpha test with all eight Xenos compare functions via spec constant 0
+  (enable bit 1, function in bits 2..4); g_HalfPixelOffset kept;
+- r0.x starts as the vertex index; oPos is zeroed; point-size exports go to
+  a local;
+- the microcode hash (XXH3-64 of the big-endian microcode) is computed and
+  every table read is bounds-checked: malformed containers and unsupported
+  constructs throw LrTranslationError instead of asserting;
+- the Unleashed Recompiled specifics (usage location table, swapped
+  texcoords, R11G11B10 normals, bicubic GI, alpha to coverage, reverse Z)
+  are compiled out, and UNLEASHED_RECOMP together with LR_LEGACYRECOMP is
+  an error.
+
+The layout is in the LR_* macros of shader_common.h. Without
+LR_LEGACYRECOMP nothing changes.
+
+LegacyRecomp patch; same license as XenosRecomp (MIT).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ XenosRecomp/pch.h                 |   6 +
+ XenosRecomp/shader_common.h       |  94 +++++-
+ XenosRecomp/shader_recompiler.cpp | 505 +++++++++++++++++++++++++++++-
+ XenosRecomp/shader_recompiler.h   |  39 +++
+ 4 files changed, 641 insertions(+), 3 deletions(-)
+
+diff --git a/XenosRecomp/pch.h b/XenosRecomp/pch.h
+index e59682c..76a8dfb 100644
+--- a/XenosRecomp/pch.h
++++ b/XenosRecomp/pch.h
+@@ -16,6 +16,12 @@
+ #include <fmt/core.h>
+ #include <string>
+ #include <unordered_map>
++#ifdef LR_LEGACYRECOMP
++#include <algorithm>
++#include <cstring>
++#include <stdexcept>
++#include <vector>
++#endif
+ #include <xxhash.h>
+ #include <zstd.h>
+ 
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index 1c74034..e530ffc 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -1,6 +1,10 @@
+ #ifndef SHADER_COMMON_H_INCLUDED
+ #define SHADER_COMMON_H_INCLUDED
+ 
++#if defined(LR_LEGACYRECOMP) && defined(UNLEASHED_RECOMP)
++#error "LR_LEGACYRECOMP (LegacyRecomp emulated GPU) and UNLEASHED_RECOMP are mutually exclusive"
++#endif
++
+ #define SPEC_CONSTANT_R11G11B10_NORMAL  (1 << 0)
+ #define SPEC_CONSTANT_ALPHA_TEST        (1 << 1)
+ 
+@@ -10,6 +14,31 @@
+     #define SPEC_CONSTANT_REVERSE_Z         (1 << 4)
+ #endif
+ 
++#ifdef LR_LEGACYRECOMP
++    // LegacyRecomp: the contract between the emulated Xenos GPU and the translated shaders (documented in
++    // LegacyRecomp's docs/architecture.md). Spec constant 0 (g_SpecConstants): bit 1 enables the alpha test, bits
++    // 2..4 hold the Xenos alpha compare function (RB_COLORCONTROL.ALPHA_FUNC: 0 never, 1 less, 2 equal,
++    // 3 less-equal, 4 greater, 5 not-equal, 6 greater-equal, 7 always). Bit 0 (R11G11B10 normals) is not used.
++    #define SPEC_CONSTANT_ALPHA_FUNC_SHIFT  2
++    #define SPEC_CONSTANT_ALPHA_FUNC_MASK   (7 << 2)
++
++    // Shared constants block (bytes, little-endian, addressed by g_PushConstants.SharedConstants).
++    #define LR_SHARED_TEXTURE_2D_OFFSET       0   // uint[32]: Texture2D heap index per texture fetch constant
++    #define LR_SHARED_TEXTURE_3D_OFFSET       128 // uint[32]: Texture3D heap index per texture fetch constant
++    #define LR_SHARED_TEXTURE_CUBE_OFFSET     256 // uint[32]: TextureCube heap index per texture fetch constant
++    #define LR_SHARED_SAMPLER_OFFSET          384 // uint[32]: sampler heap index per texture fetch constant
++    #define LR_SHARED_BOOLEANS_OFFSET         512 // uint[8]: 256 bits, vertex bank 0..127, pixel bank 128..255
++    #define LR_SHARED_LOOPS_OFFSET            544 // uint[32]: raw loop constants (count 0..7, start 8..15, step 16..23)
++    #define LR_SHARED_HALF_PIXEL_OFFSET       672 // float2
++    #define LR_SHARED_ALPHA_REFERENCE_OFFSET  680 // float
++    #define LR_SHARED_CONSTANTS_SIZE          688 // 684..687 reserved (zero)
++
++    #define LR_FLOAT_CONSTANT_COUNT   256 // float4 per stage buffer (VertexShaderConstants, PixelShaderConstants)
++    #define LR_STAGE_BOOLEAN_COUNT    128 // booleans per stage
++    #define LR_LOOP_CONSTANT_COUNT    32
++    #define LR_FETCH_CONSTANT_COUNT   32  // texture fetch constants
++#endif
++
+ #if !defined(__cplusplus) || defined(__INTELLISENSE__)
+ 
+ #define FLT_MIN asfloat(0xff7fffff)
+@@ -26,11 +55,60 @@ struct PushConstants
+ 
+ [[vk::push_constant]] ConstantBuffer<PushConstants> g_PushConstants;
+ 
++#ifdef LR_LEGACYRECOMP
++
++#define g_SharedUint(OFFSET)       vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + (OFFSET), 4)
++#define g_HalfPixelOffset          vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + LR_SHARED_HALF_PIXEL_OFFSET, 8)
++#define g_AlphaThreshold           vk::RawBufferLoad<float>(g_PushConstants.SharedConstants + LR_SHARED_ALPHA_REFERENCE_OFFSET, 4)
++
++#define g_Texture2DIndex(SLOT)     g_SharedUint(LR_SHARED_TEXTURE_2D_OFFSET + (SLOT) * 4)
++#define g_Texture3DIndex(SLOT)     g_SharedUint(LR_SHARED_TEXTURE_3D_OFFSET + (SLOT) * 4)
++#define g_TextureCubeIndex(SLOT)   g_SharedUint(LR_SHARED_TEXTURE_CUBE_OFFSET + (SLOT) * 4)
++#define g_SamplerIndex(SLOT)       g_SharedUint(LR_SHARED_SAMPLER_OFFSET + (SLOT) * 4)
++
++// INDEX: 0..255 (vertex shaders use 0..127, pixel shaders 128..255).
++#define g_Bool(INDEX)              ((g_SharedUint(LR_SHARED_BOOLEANS_OFFSET + ((INDEX) >> 5) * 4) >> ((INDEX) & 31)) & 1)
++#define g_LoopConstant(INDEX)      g_SharedUint(LR_SHARED_LOOPS_OFFSET + (INDEX) * 4)
++
++// Float constants by register index; out-of-range (relative addressing) reads 0 like the hardware's clamp.
++float4 lrFloatConstant(uint64_t base, int index)
++{
++    float4 value = vk::RawBufferLoad<float4>(base + uint(clamp(index, 0, LR_FLOAT_CONSTANT_COUNT - 1)) * 16, 16);
++    return (index >= 0 && index < LR_FLOAT_CONSTANT_COUNT) ? value : float4(0.0, 0.0, 0.0, 0.0);
++}
++
++#define g_VSConstant(INDEX)        lrFloatConstant(g_PushConstants.VertexShaderConstants, (INDEX))
++#define g_PSConstant(INDEX)        lrFloatConstant(g_PushConstants.PixelShaderConstants, (INDEX))
++
++// Loop constant fields: iteration count, initial aL, signed aL step.
++uint lrLoopCount(uint value) { return value & 0xFF; }
++int lrLoopStart(uint value) { return int((value >> 8) & 0xFF); }
++int lrLoopStep(uint value) { return asint(value << 8) >> 24; }
++
++bool alphaTestPasses(float alpha, float reference, uint func)
++{
++    switch (func)
++    {
++    case 0: return false;
++    case 1: return alpha < reference;
++    case 2: return alpha == reference;
++    case 3: return alpha <= reference;
++    case 4: return alpha > reference;
++    case 5: return alpha != reference;
++    case 6: return alpha >= reference;
++    default: return true;
++    }
++}
++
++#else
++
+ #define g_Booleans                 vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 256)
+ #define g_SwappedTexcoords         vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 260)
+ #define g_HalfPixelOffset          vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 264)
+ #define g_AlphaThreshold           vk::RawBufferLoad<float>(g_PushConstants.SharedConstants + 272)
+ 
++#endif
++
+ [[vk::constant_id(0)]] const uint g_SpecConstants = 0;
+ 
+ #define g_SpecConstants() g_SpecConstants
+@@ -71,6 +149,8 @@ float2 getWeights2D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, f
+     return select(isnan(texCoord), 0.0, frac(texCoord * getTexture2DDimensions(texture) + offset - 0.5));
+ }
+ 
++#ifndef LR_LEGACYRECOMP
++
+ float w0(float a)
+ {
+     return (1.0f / 6.0f) * (a * (a * (-a + 3.0f) - 3.0f) + 1.0f);
+@@ -116,7 +196,7 @@ float4 tfetch2DBicubic(uint resourceDescriptorIndex, uint samplerDescriptorIndex
+     Texture2D<float4> texture = g_Texture2DDescriptorHeap[resourceDescriptorIndex];
+     SamplerState samplerState = g_SamplerDescriptorHeap[samplerDescriptorIndex];
+     uint2 dimensions = getTexture2DDimensions(texture);
+-    
++
+     float x = texCoord.x * dimensions.x + offset.x;
+     float y = texCoord.y * dimensions.y + offset.y;
+ 
+@@ -143,6 +223,8 @@ float4 tfetch2DBicubic(uint resourceDescriptorIndex, uint samplerDescriptorIndex
+     return r;
+ }
+ 
++#endif
++
+ float4 tfetch3D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float3 texCoord)
+ {
+     return g_Texture3DDescriptorHeap[resourceDescriptorIndex].Sample(g_SamplerDescriptorHeap[samplerDescriptorIndex], texCoord);
+@@ -159,6 +241,8 @@ float4 tfetchCube(uint resourceDescriptorIndex, uint samplerDescriptorIndex, flo
+     return g_TextureCubeDescriptorHeap[resourceDescriptorIndex].Sample(g_SamplerDescriptorHeap[samplerDescriptorIndex], cubeMapData.cubeMapDirections[texCoord.z]);
+ }
+ 
++#ifndef LR_LEGACYRECOMP
++
+ float4 tfetchR11G11B10(uint4 value)
+ {
+     if (g_SpecConstants() & SPEC_CONSTANT_R11G11B10_NORMAL)
+@@ -180,12 +264,14 @@ float4 tfetchTexcoord(uint swappedTexcoords, float4 value, uint semanticIndex)
+     return (swappedTexcoords & (1ull << semanticIndex)) != 0 ? value.yxwz : value;
+ }
+ 
++#endif
++
+ float4 cube(float4 value, inout CubeMapData cubeMapData)
+ {
+     uint index = cubeMapData.cubeMapIndex;
+     cubeMapData.cubeMapDirections[index] = value.xyz;
+     ++cubeMapData.cubeMapIndex;
+-    
++
+     return float4(0.0, 0.0, 0.0, index);
+ }
+ 
+@@ -204,6 +290,8 @@ float4 max4(float4 src0)
+     return max(max(src0.x, src0.y), max(src0.z, src0.w));
+ }
+ 
++#ifndef LR_LEGACYRECOMP
++
+ float2 getPixelCoord(uint resourceDescriptorIndex, float2 texCoord)
+ {
+     return getTexture2DDimensions(g_Texture2DDescriptorHeap[resourceDescriptorIndex]) * texCoord;
+@@ -220,3 +308,5 @@ float computeMipLevel(float2 pixelCoord)
+ #endif
+ 
+ #endif
++
++#endif
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 698a418..462a5dc 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -74,6 +74,7 @@ struct DeclUsageLocation
+     uint32_t location;
+ };
+ 
++#ifndef LR_LEGACYRECOMP
+ // NOTE: These are specialized Vulkan locations for Unleashed Recompiled. Change as necessary. Likely not going to work with other games.
+ static constexpr DeclUsageLocation USAGE_LOCATIONS[] =
+ {
+@@ -95,6 +96,24 @@ static constexpr DeclUsageLocation USAGE_LOCATIONS[] =
+     { DeclUsage::TexCoord, 7, 15 },
+     { DeclUsage::Position, 1, 15 },
+ };
++#endif
++
++#ifdef LR_LEGACYRECOMP
++// LegacyRecomp: a malformed container or an unsupported construct fails the translation of this shader.
++#define LR_CHECK(condition, ...) \
++    do \
++    { \
++        if (!(condition)) \
++            throw LrTranslationError(fmt::format(__VA_ARGS__)); \
++    } while (0)
++
++// Bool constant index as the emulated GPU stores it: vertex shaders see bank 0..127, pixel shaders 128..255.
++// The 8-bit microcode address is taken modulo 128 within the stage's bank.
++static uint32_t lrBoolIndex(bool isPixelShader, uint32_t boolAddress)
++{
++    return (isPixelShader ? 128u : 0u) + (boolAddress & 127u);
++}
++#endif
+ 
+ static constexpr std::pair<DeclUsage, size_t> INTERPOLATORS[] =
+ {
+@@ -176,6 +195,13 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
+ 
+     out += " = ";
+ 
++#ifdef LR_LEGACYRECOMP
++    // Each vertex element of the container is a vertex input; the emulated GPU binds it from the vertex fetch
++    // constant the instruction names (see vertexInputs).
++    auto location = vertexInputLocations.find(address);
++    LR_CHECK(location != vertexInputLocations.end(), "vertex fetch at instruction {} has no vertex element", address);
++    print("iFetch{}", location->second);
++#else
+     auto findResult = vertexElements.find(address);
+     assert(findResult != vertexElements.end());
+ 
+@@ -207,6 +233,7 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
+         print(", {})", uint32_t(findResult->second.usageIndex));
+         break;
+     }
++#endif
+ 
+     out += '.';
+     printDstSwizzle(instr.dstSwizzle, true);
+@@ -331,7 +358,12 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, bool bicu
+         out += "Bicubic";
+ #endif
+ 
++#ifdef LR_LEGACYRECOMP
++    // Descriptor heap indices per texture fetch constant (0..31), filled by the emulated GPU.
++    print("(g_Texture{1}Index({0}), g_SamplerIndex({0}), ", uint32_t(instr.constIndex), dimension);
++#else
+     print("({0}_Texture{1}DescriptorIndex, {0}_SamplerDescriptorIndex, ", constNamePtr, dimension);
++#endif
+     printSrcRegister(componentCount);
+ 
+     switch (instr.dimension)
+@@ -453,6 +485,23 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+             {
+                 regFormatted = fmt::format("r{}", reg);
+             }
++#ifdef LR_LEGACYRECOMP
++            else
++            {
++                // Float constants come from the stage's buffer by register index (the emulated GPU copies the
++                // register file), except literals from the definition table, which are locals named c<N>.
++                const bool relative = instr.const0Relative;
++                if (!relative && definedFloatConstants.find(reg) != definedFloatConstants.end())
++                {
++                    regFormatted = fmt::format("c{}", reg);
++                }
++                else
++                {
++                    regFormatted = fmt::format("g_{}Constant({}{})", isPixelShader ? "PS" : "VS", reg,
++                        relative ? (instr.constAddressRegisterRelative ? " + a0" : " + aL") : "");
++                }
++            }
++#else
+             else
+             {
+                 auto findResult = float4Constants.find(reg);
+@@ -486,6 +535,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+                     regFormatted = fmt::format("c{}", reg);
+                 }
+             }
++#endif
+ 
+             std::string result;
+ 
+@@ -600,6 +650,10 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+                 exportRegister = "oDepth";
+                 break;
+             }
++
++        #ifdef LR_LEGACYRECOMP
++            LR_CHECK(!exportRegister.empty(), "unsupported pixel shader export register {}", uint32_t(instr.vectorDest));
++        #endif
+         }
+         else
+         {
+@@ -623,9 +677,20 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+ 
+                 break;
+ 
++        #ifdef LR_LEGACYRECOMP
++            case ExportRegister::VSPointSizeEdgeFlagKillVertex:
++                // Point size / edge flag / kill vertex: not consumed by the emulated GPU yet (a local sink).
++                exportRegister = "oPointSize";
++                break;
++        #endif
++
+             default:
+             {
+                 auto findResult = interpolators.find(instr.vectorDest);
++            #ifdef LR_LEGACYRECOMP
++                LR_CHECK(findResult != interpolators.end(), "vertex shader exports to register {} with no interpolator",
++                    uint32_t(instr.vectorDest));
++            #endif
+                 assert(findResult != interpolators.end());
+                 exportRegister = findResult->second;
+                 break;
+@@ -1098,12 +1163,128 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+     }
+ }
+ 
++#ifdef LR_LEGACYRECOMP
++struct LrExecClause
++{
++    uint32_t address;
++    uint32_t count;
++    uint32_t sequence;
++};
++
++// The exec-type control flow clauses of a microcode block, in control flow order (the same walk as the translator:
++// control flow pairs up to the first instruction address).
++static std::vector<LrExecClause> lrCollectExecClauses(const be<uint32_t>* code, uint32_t size)
++{
++    std::vector<LrExecClause> clauses;
++    uint32_t instrSize = size;
++    for (uint32_t instrAddress = 0; instrAddress < instrSize; instrAddress += 12, code += 3)
++    {
++        union
++        {
++            ControlFlowInstruction controlFlow[2];
++            struct
++            {
++                uint32_t code0;
++                uint32_t code1;
++                uint32_t code2;
++                uint32_t code3;
++            };
++        };
++
++        code0 = code[0];
++        code1 = code[1] & 0xFFFF;
++        code2 = (code[1] >> 16) | (code[2] << 16);
++        code3 = code[2] >> 16;
++
++        for (auto& cfInstr : controlFlow)
++        {
++            switch (cfInstr.opcode)
++            {
++            case ControlFlowOpcode::Exec:
++            case ControlFlowOpcode::ExecEnd:
++            case ControlFlowOpcode::CondExec:
++            case ControlFlowOpcode::CondExecEnd:
++            case ControlFlowOpcode::CondExecPred:
++            case ControlFlowOpcode::CondExecPredEnd:
++            case ControlFlowOpcode::CondExecPredClean:
++            case ControlFlowOpcode::CondExecPredCleanEnd:
++                // The exec layouts share address, count and sequence.
++                clauses.push_back({ cfInstr.exec.address, cfInstr.exec.count, cfInstr.exec.sequence });
++                if (cfInstr.exec.address != 0)
++                    instrSize = std::min<uint32_t>(instrSize, cfInstr.exec.address * 12);
++                break;
++            }
++        }
++    }
++    return clauses;
++}
++#endif
++
+ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_view& include)
+ {
+     const auto shaderContainer = reinterpret_cast<const ShaderContainer*>(shaderData);
+ 
++#ifndef LR_LEGACYRECOMP
+     assert((shaderContainer->flags & 0xFFFFFF00) == 0x102A1100);
+     assert(shaderContainer->constantTableOffset != NULL);
++#else
++    // Every table the translation reads must lie inside the container (containerSize bytes from shaderData).
++    auto inRange = [&](size_t offset, size_t size)
++        {
++            return offset <= containerSize && size <= containerSize - offset;
++        };
++
++    LR_CHECK(containerSize >= sizeof(ShaderContainer), "container is smaller than its header");
++    LR_CHECK((shaderContainer->flags & 0xFFFFFF00) == 0x102A1100, "not a shader container");
++    const size_t lrVirtualSize = shaderContainer->virtualSize;
++    LR_CHECK(lrVirtualSize <= containerSize, "virtual size {} exceeds the container ({} bytes)", lrVirtualSize, containerSize);
++
++    const size_t lrConstantTableOffset = shaderContainer->constantTableOffset;
++    LR_CHECK(lrConstantTableOffset != 0 && inRange(lrConstantTableOffset, sizeof(ConstantTableContainer)),
++        "constant table at {} is outside the container", lrConstantTableOffset);
++    {
++        const auto table = reinterpret_cast<const ConstantTableContainer*>(shaderData + lrConstantTableOffset);
++        const size_t tableStart = lrConstantTableOffset + offsetof(ConstantTableContainer, constantTable);
++        const size_t infoStart = tableStart + table->constantTable.constantInfo;
++        LR_CHECK(inRange(infoStart, size_t(table->constantTable.constants) * sizeof(ConstantInfo)),
++            "constant infos are outside the container");
++        for (uint32_t i = 0; i < table->constantTable.constants; i++)
++        {
++            const auto info = reinterpret_cast<const ConstantInfo*>(shaderData + infoStart + i * sizeof(ConstantInfo));
++            const size_t name = tableStart + info->name;
++            LR_CHECK(inRange(name, 1) && memchr(shaderData + name, 0, containerSize - name) != nullptr,
++                "constant {} has its name outside the container", i);
++        }
++    }
++
++    const size_t lrShaderOffset = shaderContainer->shaderOffset;
++    const bool lrIsPixelShader = (shaderContainer->flags & 0x1) == 0;
++    LR_CHECK(inRange(lrShaderOffset, lrIsPixelShader ? sizeof(PixelShader) : sizeof(VertexShader)),
++        "shader header at {} is outside the container", lrShaderOffset);
++    {
++        const auto lrShader = reinterpret_cast<const Shader*>(shaderData + lrShaderOffset);
++        const size_t interpolatorCount = (lrShader->interpolatorInfo >> 5) & 0x1F;
++        if (lrIsPixelShader)
++        {
++            LR_CHECK(inRange(lrShaderOffset + sizeof(PixelShader), interpolatorCount * 4),
++                "pixel shader interpolators are outside the container");
++        }
++        else
++        {
++            const auto vs = reinterpret_cast<const VertexShader*>(lrShader);
++            LR_CHECK(inRange(lrShaderOffset + sizeof(VertexShader),
++                (size_t(vs->field18) + vs->vertexElementCount + interpolatorCount) * 4),
++                "vertex elements and interpolators are outside the container");
++        }
++
++        const size_t microcodeOffset = lrVirtualSize + lrShader->physicalOffset;
++        LR_CHECK(inRange(microcodeOffset, lrShader->size), "microcode ({} bytes at {}) is outside the container",
++            uint32_t(lrShader->size), microcodeOffset);
++        LR_CHECK(lrShader->size != 0 && lrShader->size % 12 == 0, "microcode size {} is not a whole number of instructions",
++            uint32_t(lrShader->size));
++        microcodeHash = XXH3_64bits(shaderData + microcodeOffset, lrShader->size);
++    }
++#endif
+ 
+     out += include;
+     out += '\n';
+@@ -1113,6 +1294,10 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     const auto constantTableContainer = reinterpret_cast<const ConstantTableContainer*>(shaderData + shaderContainer->constantTableOffset);
+     constantTableData = reinterpret_cast<const uint8_t*>(&constantTableContainer->constantTable);
+ 
++#ifndef LR_LEGACYRECOMP
++    // LegacyRecomp emits no per-shader constant declarations: float constants, booleans, loop constants and texture
++    // descriptors are read by register index through the shared_common.h macros (the emulated GPU knows registers,
++    // not the names in the constant table).
+     out += "#ifdef __spirv__\n\n";
+ 
+ #ifdef UNLEASHED_RECOMP
+@@ -1258,6 +1443,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+             boolConstants.emplace(constantInfo->registerIndex, constantName);
+         }
+     }
++#endif
+ 
+     out += '\n';
+ 
+@@ -1302,6 +1488,89 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     else
+     {
+         auto vertexShader = reinterpret_cast<const VertexShader*>(shader);
++#ifdef LR_LEGACYRECOMP
++        // Vertex inputs per vertex fetch: vertex element i of the container (the vfetch at its instruction address)
++        // is input location i, a float4 the emulated GPU feeds from the instruction's vertex fetch constant with the
++        // instruction's format, offset and stride (vertexInputs). No usage table: usages are not looked at.
++        {
++            std::unordered_map<uint32_t, uint32_t> elementLocations;
++            for (uint32_t i = 0; i < vertexShader->vertexElementCount; i++)
++            {
++                union
++                {
++                    VertexElement vertexElement;
++                    uint32_t value;
++                };
++
++                value = vertexShader->vertexElementsAndInterpolators[vertexShader->field18 + i];
++                LR_CHECK(elementLocations.emplace(uint32_t(vertexElement.address), i).second,
++                    "two vertex elements read instruction {}", uint32_t(vertexElement.address));
++            }
++
++            const auto lrCode = reinterpret_cast<const be<uint32_t>*>(shaderData + shaderContainer->virtualSize + shader->physicalOffset);
++            VertexFetchInstruction lastFullFetch{};
++            bool haveFullFetch = false;
++            std::map<uint32_t, LrVertexInput> inputs;
++
++            for (const auto& clause : lrCollectExecClauses(lrCode, shader->size))
++            {
++                LR_CHECK((size_t(clause.address) + clause.count) * 12 <= shader->size,
++                    "exec clause at instruction {} runs past the microcode", clause.address);
++
++                for (uint32_t i = 0; i < clause.count; i++)
++                {
++                    if (((clause.sequence >> (i * 2)) & 0x1) == 0)
++                        continue;
++
++                    // Host-order copy (the microcode words are big-endian).
++                    union
++                    {
++                        VertexFetchInstruction instr;
++                        uint32_t words[3];
++                    } current;
++                    for (size_t w = 0; w < 3; w++)
++                        current.words[w] = lrCode[(clause.address + i) * 3 + w];
++
++                    if (current.instr.opcode != FetchOpcode::VertexFetch)
++                        continue;
++
++                    // A mini fetch reuses the fetch constant and stride of the last full fetch.
++                    if (!current.instr.isMiniFetch)
++                    {
++                        lastFullFetch = current.instr;
++                        haveFullFetch = true;
++                    }
++                    LR_CHECK(haveFullFetch, "mini vertex fetch at instruction {} has no full fetch before it",
++                        clause.address + i);
++
++                    const uint32_t address = clause.address + i;
++                    auto element = elementLocations.find(address);
++                    LR_CHECK(element != elementLocations.end(), "vertex fetch at instruction {} has no vertex element", address);
++
++                    LrVertexInput input;
++                    input.location = element->second;
++                    input.fetchSlot = lastFullFetch.constIndex * 3 + lastFullFetch.constIndexSelect;
++                    input.offsetDwords = uint32_t(current.instr.offset);
++                    input.strideDwords = lastFullFetch.stride;
++                    input.format = current.instr.format;
++                    input.flags = (current.instr.formatCompAll ? LR_VERTEX_INPUT_SIGNED : 0) |
++                        (current.instr.numFormatAll ? LR_VERTEX_INPUT_INTEGER : 0) |
++                        (current.instr.signedRfModeAll ? LR_VERTEX_INPUT_SIGNED_RF_MODE : 0);
++                    input.expAdjust = current.instr.expAdjust;
++                    inputs.emplace(input.location, input);
++                    vertexInputLocations.emplace(address, input.location);
++                }
++            }
++
++            for (auto& [location, input] : inputs)
++            {
++                println("\t[[vk::location({0})]] in float4 iFetch{0} : ATTRIB{0},", location);
++                vertexInputs.push_back(input);
++            }
++        }
++
++        out += "\tin uint iVertexId : SV_VertexID,\n";
++#else
+         for (uint32_t i = 0; i < vertexShader->vertexElementCount; i++)
+         {
+             union
+@@ -1338,6 +1607,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+             vertexElements.emplace(uint32_t(vertexElement.address), vertexElement);
+         }
++#endif
+ 
+     #ifdef UNLEASHED_RECOMP
+         if (hasIndexCount)
+@@ -1371,6 +1641,49 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     }
+ #endif
+ 
++#ifdef LR_LEGACYRECOMP
++    if (shaderContainer->definitionTableOffset != NULL)
++    {
++        // Literal constants of the shader: float4 definitions become locals c<N>; int definitions are loop
++        // constants used instead of the shared block. Same layout walk as upstream, with bounds checks.
++        auto word = [&](size_t offset) -> uint32_t
++            {
++                LR_CHECK(inRange(offset, 4), "definition table runs past the container");
++                return reinterpret_cast<const be<uint32_t>*>(shaderData + offset)->get();
++            };
++
++        size_t at = shaderContainer->definitionTableOffset + offsetof(DefinitionTable, definitions);
++        while (word(at) != 0)
++        {
++            const uint32_t registerIndex = word(at) >> 16;
++            const uint32_t count = word(at) & 0xFFFF;
++            const size_t values = shaderContainer->virtualSize + word(at + 4);
++            for (uint32_t i = 0; i < (count + 3) / 4; i++)
++            {
++                const int32_t reg = int32_t(registerIndex + i) - (isPixelShader ? 256 : 0);
++                LR_CHECK(reg >= 0, "float definition for register {} in a pixel shader", registerIndex + i);
++                println("\tfloat4 c{} = asfloat(uint4(0x{:X}, 0x{:X}, 0x{:X}, 0x{:X}));", reg,
++                    word(values + i * 16), word(values + i * 16 + 4), word(values + i * 16 + 8), word(values + i * 16 + 12));
++                definedFloatConstants.emplace(uint32_t(reg), 1);
++            }
++            at += 8;
++        }
++        at += 4;
++        while (word(at) != 0)
++        {
++            const uint32_t registerIndex = word(at) >> 16;
++            const uint32_t count = word(at) & 0xFFFF;
++            for (uint32_t i = 0; i < count; i++)
++            {
++                if (registerIndex >= 8992 && (registerIndex - 8992) / 4 + i < LR_LOOP_CONSTANT_COUNT)
++                    definedLoopConstants[(registerIndex - 8992) / 4 + i] = word(at + 4 + i * 4);
++            }
++            at += 8 + size_t(count) * 4;
++        }
++
++        out += "\n";
++    }
++#else
+     if (shaderContainer->definitionTableOffset != NULL)
+     {
+         auto definitionTable = reinterpret_cast<const DefinitionTable*>(shaderData + shaderContainer->definitionTableOffset);
+@@ -1417,6 +1730,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+         out += "\n";
+     }
++#endif
+ 
+     bool printedRegisters[32]{};
+ 
+@@ -1433,6 +1747,10 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         if (isPixelShader)
+         {
+             value = reinterpret_cast<const PixelShader*>(shader)->interpolators[i];
++        #ifdef LR_LEGACYRECOMP
++            LR_CHECK(uint32_t(interpolator.usage) < std::size(USAGE_VARIABLES), "interpolator {} has usage {}", i,
++                uint32_t(interpolator.usage));
++        #endif
+             println("\tfloat4 r{} = i{}{};", uint32_t(interpolator.reg), USAGE_VARIABLES[uint32_t(interpolator.usage)], uint32_t(interpolator.usageIndex));
+             printedRegisters[interpolator.reg] = true;
+         }
+@@ -1440,6 +1758,10 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         {
+             auto vertexShader = reinterpret_cast<const VertexShader*>(shader);
+             value = vertexShader->vertexElementsAndInterpolators[vertexShader->field18 + vertexShader->vertexElementCount + i];
++        #ifdef LR_LEGACYRECOMP
++            LR_CHECK(uint32_t(interpolator.usage) < std::size(USAGE_VARIABLES), "interpolator {} has usage {}", i,
++                uint32_t(interpolator.usage));
++        #endif
+             interpolators.emplace(i, fmt::format("o{}{}", USAGE_VARIABLES[uint32_t(interpolator.usage)], uint32_t(interpolator.usageIndex)));
+         }
+     }
+@@ -1450,6 +1772,10 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         if (!hasMtxProjection)
+             out += "\toPos = 0.0;\n";
+     #endif
++    #ifdef LR_LEGACYRECOMP
++        out += "\toPos = 0.0;\n";
++        out += "\tfloat4 oPointSize = 0.0;\n";
++    #endif
+ 
+         for (auto& [usage, usageIndex] : INTERPOLATORS)
+             println("\to{}{} = 0.0;", USAGE_VARIABLES[uint32_t(usage)], usageIndex);
+@@ -1471,6 +1797,13 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+             {
+                 out += "float4(iVertexId + g_IndexCount.x * iInstanceId, 0.0, 0.0, 0.0);\n";
+             }
++        #endif
++        #ifdef LR_LEGACYRECOMP
++            else if (!isPixelShader && i == 0)
++            {
++                // The Xenos vertex shader starts with the vertex index in r0.x.
++                out += "float4(float(iVertexId), 0.0, 0.0, 0.0);\n";
++            }
+         #endif
+             else
+             {
+@@ -1490,6 +1823,11 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ #endif
+         out += "\tCubeMapData cubeMapData = (CubeMapData)0;\n";
+     }
++#ifdef LR_LEGACYRECOMP
++    // Loop state for shaders with jumps (pc switch); structured shaders use per-loop locals.
++    out += "\tuint lrLoopValue = 0;\n";
++    out += "\tuint lrIteration = 0;\n";
++#endif
+ 
+     const be<uint32_t>* code = reinterpret_cast<const be<uint32_t>*>(shaderData + shaderContainer->virtualSize + shader->physicalOffset);
+ 
+@@ -1630,7 +1968,11 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                 address = cfInstr.condExec.address;
+                 count = cfInstr.condExec.count;
+                 sequence = cfInstr.condExec.sequence;
++            #ifdef LR_LEGACYRECOMP
++                shouldReturn = (cfInstr.opcode == ControlFlowOpcode::CondExecEnd || cfInstr.opcode == ControlFlowOpcode::CondExecPredCleanEnd);
++            #else
+                 shouldReturn = (cfInstr.opcode == ControlFlowOpcode::CondExecEnd || cfInstr.opcode == ControlFlowOpcode::CondExecEnd);
++            #endif
+                 break;
+ 
+             case ControlFlowOpcode::CondExecPred:
+@@ -1641,6 +1983,74 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                 shouldReturn = (cfInstr.opcode == ControlFlowOpcode::CondExecPredEnd);
+                 break;
+ 
++#ifdef LR_LEGACYRECOMP
++            case ControlFlowOpcode::LoopStart:
++            {
++                // Loop constant (a definition-table literal, or the shared block): count in bits 0..7, initial aL in
++                // 8..15, signed aL step in 16..23. aL is restored when the loop ends (the hardware keeps a stack).
++                const uint32_t loopId = cfInstr.loopStart.loopId;
++                auto literal = definedLoopConstants.find(loopId);
++                const std::string source = literal != definedLoopConstants.end() ?
++                    fmt::format("0x{:X}u", literal->second) : fmt::format("g_LoopConstant({})", loopId);
++
++                if (simpleControlFlow)
++                {
++                    const uint32_t n = loopCounter++;
++                    loopStack.push_back(n);
++                    indent();
++                    println("int lrSavedAL{} = aL;", n);
++                    indent();
++                    println("uint lrLoop{} = {};", n, source);
++                    indent();
++                    println("aL = lrLoopStart(lrLoop{});", n);
++                    indent();
++                    println("[loop] for (uint lrIteration{0} = 0; lrIteration{0} < lrLoopCount(lrLoop{0}); lrIteration{0}++)", n);
++                    indent();
++                    out += "{\n";
++                    ++indentation;
++                }
++                else
++                {
++                    LR_CHECK(loopStack.empty(), "nested loops in a shader with jumps are not supported");
++                    loopStack.push_back(0);
++                    println("\t\t\tlrLoopValue = {};", source);
++                    out += "\t\t\taL = lrLoopStart(lrLoopValue);\n";
++                    out += "\t\t\tlrIteration = 0;\n";
++                    out += "\t\t\tif (lrLoopCount(lrLoopValue) == 0)\n";
++                    out += "\t\t\t{\n";
++                    println("\t\t\t\tpc = {};", uint32_t(cfInstr.loopStart.address));
++                    out += "\t\t\t\tcontinue;\n";
++                    out += "\t\t\t}\n";
++                }
++                break;
++            }
++
++            case ControlFlowOpcode::LoopEnd:
++                LR_CHECK(!loopStack.empty(), "loop_end without loop_start");
++                if (simpleControlFlow)
++                {
++                    const uint32_t n = loopStack.back();
++                    indent();
++                    println("aL += lrLoopStep(lrLoop{});", n);
++                    --indentation;
++                    indent();
++                    out += "}\n";
++                    indent();
++                    println("aL = lrSavedAL{};", n);
++                }
++                else
++                {
++                    out += "\t\t\t++lrIteration;\n";
++                    out += "\t\t\taL += lrLoopStep(lrLoopValue);\n";
++                    out += "\t\t\tif (lrIteration < lrLoopCount(lrLoopValue))\n";
++                    out += "\t\t\t{\n";
++                    println("\t\t\t\tpc = {};", uint32_t(cfInstr.loopEnd.address));
++                    out += "\t\t\t\tcontinue;\n";
++                    out += "\t\t\t}\n";
++                }
++                loopStack.pop_back();
++                break;
++#else
+             case ControlFlowOpcode::LoopStart:
+                 if (simpleControlFlow)
+                 {
+@@ -1676,6 +2086,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                     out += "\t\t\t}\n";
+                 }
+                 break;
++#endif
+ 
+             case ControlFlowOpcode::CondJmp:
+             {
+@@ -1694,11 +2105,16 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                     }
+                     else
+                     {
++                    #ifdef LR_LEGACYRECOMP
++                        println("if (g_Bool({}) {}= 0)", lrBoolIndex(isPixelShader, cfInstr.condJmp.boolAddress),
++                            cfInstr.condJmp.condition ^ simpleControlFlow ? "!" : "=");
++                    #else
+                         auto findResult = boolConstants.find(cfInstr.condJmp.boolAddress);
+                         if (findResult != boolConstants.end())
+                             println("if ((g_Booleans & {}) {}= 0)", findResult->second, cfInstr.condJmp.condition ^ simpleControlFlow ? "!" : "=");
+                         else
+                             println("if (b{} {}= 0)", uint32_t(cfInstr.condJmp.boolAddress), cfInstr.condJmp.condition ^ simpleControlFlow ? "!" : "=");
++                    #endif
+                     }
+ 
+                     if (simpleControlFlow)
+@@ -1720,7 +2136,45 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+             }
+ 
+             auto instructionCode = code + address * 3;
+-            
++
++#ifdef LR_LEGACYRECOMP
++            LR_CHECK((size_t(address) + count) * 12 <= shader->size, "exec clause at instruction {} runs past the microcode",
++                address);
++
++            // cond_exec*: the clause runs only when its bool constant (or the predicate) matches the condition;
++            // the "end" of a conditional clause still ends the shader.
++            bool guarded = false;
++            if (count != 0)
++            {
++                switch (cfInstr.opcode)
++                {
++                case ControlFlowOpcode::CondExec:
++                case ControlFlowOpcode::CondExecEnd:
++                case ControlFlowOpcode::CondExecPredClean:
++                case ControlFlowOpcode::CondExecPredCleanEnd:
++                    indent();
++                    println("if (g_Bool({}) == {})", lrBoolIndex(isPixelShader, cfInstr.condExec.boolAddress),
++                        uint32_t(cfInstr.condExec.condition));
++                    guarded = true;
++                    break;
++
++                case ControlFlowOpcode::CondExecPred:
++                case ControlFlowOpcode::CondExecPredEnd:
++                    indent();
++                    println("if ({}p0)", cfInstr.condExecPred.condition ? "" : "!");
++                    guarded = true;
++                    break;
++                }
++
++                if (guarded)
++                {
++                    indent();
++                    out += "{\n";
++                    ++indentation;
++                }
++            }
++#endif
++
+             for (uint32_t i = 0; i < count; i++)
+             {
+                 union
+@@ -1792,6 +2246,54 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                 instructionCode += 3;
+             }
+ 
++#ifdef LR_LEGACYRECOMP
++            if (guarded)
++            {
++                --indentation;
++                indent();
++                out += "}\n";
++            }
++
++            if (shouldReturn && isPixelShader)
++            {
++                // Alpha test against RB_COLORCONTROL: enable bit and compare function come from spec constant 0,
++                // the reference value from the shared block.
++                if (reinterpret_cast<const PixelShader*>(shader)->outputs & PIXEL_SHADER_OUTPUT_COLOR0)
++                {
++                    specConstantsMask |= SPEC_CONSTANT_ALPHA_TEST | SPEC_CONSTANT_ALPHA_FUNC_MASK;
++
++                    indent();
++                    out += "[branch] if (g_SpecConstants() & SPEC_CONSTANT_ALPHA_TEST)\n";
++                    indent();
++                    out += "{\n";
++                    indent();
++                    out += "\tif (!alphaTestPasses(oC0.w, g_AlphaThreshold, (g_SpecConstants() & SPEC_CONSTANT_ALPHA_FUNC_MASK) >> SPEC_CONSTANT_ALPHA_FUNC_SHIFT))\n";
++                    indent();
++                    out += "\t\tdiscard;\n";
++                    indent();
++                    out += "}\n";
++                }
++            }
++            else if (shouldReturn)
++            {
++                indent();
++                out += "oPos.xy += g_HalfPixelOffset * oPos.w;\n";
++            }
++
++            if (shouldReturn)
++            {
++                if (simpleControlFlow)
++                {
++                    indent();
++                    out += "return;\n";
++                }
++                else
++                {
++                    out += "\t\t\tbreak;\n";
++                }
++            }
++
++#else
+             if (shouldReturn)
+             {
+                 if (isPixelShader)
+@@ -1855,6 +2357,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                     out += "\t\t\tbreak;\n";
+                 }
+             }
++#endif
+ 
+             if (shouldCloseCurlyBracket)
+             {
+diff --git a/XenosRecomp/shader_recompiler.h b/XenosRecomp/shader_recompiler.h
+index b2e317d..ed633cc 100644
+--- a/XenosRecomp/shader_recompiler.h
++++ b/XenosRecomp/shader_recompiler.h
+@@ -21,6 +21,31 @@ struct StringBuffer
+     }
+ };
+ 
++#ifdef LR_LEGACYRECOMP
++// A malformed container or an unsupported construct: the shader is not translated (the tool reports it and
++// exits non-zero). Thrown and caught inside XenosRecomp only.
++struct LrTranslationError : std::runtime_error
++{
++    using std::runtime_error::runtime_error;
++};
++
++// How the emulated GPU feeds one vertex shader input (written to the shader cache as lr_shader_vertex_input).
++struct LrVertexInput
++{
++    uint32_t location = 0;
++    uint32_t fetchSlot = 0;     // vertex fetch constant 0..95 (const_index * 3 + const_index_select)
++    uint32_t offsetDwords = 0;
++    uint32_t strideDwords = 0;
++    uint32_t format = 0;        // Xenos vertex format (6 bits)
++    uint32_t flags = 0;         // LR_VERTEX_INPUT_*
++    int32_t expAdjust = 0;
++};
++
++#define LR_VERTEX_INPUT_SIGNED         0x1 // format_comp_all: components are signed
++#define LR_VERTEX_INPUT_INTEGER        0x2 // num_format_all: integer (not normalized)
++#define LR_VERTEX_INPUT_SIGNED_RF_MODE 0x4 // signed_rf_mode_all
++#endif
++
+ struct ShaderRecompiler : StringBuffer
+ {
+     uint32_t indentation = 0;
+@@ -39,6 +64,20 @@ struct ShaderRecompiler : StringBuffer
+     bool hasMtxPrevInvViewProjection = false;
+ #endif
+ 
++#ifdef LR_LEGACYRECOMP
++    // Input: bytes available from shaderData (virtual + physical part); every table read is checked against it.
++    size_t containerSize = 0;
++    // Output: XXH3-64 of the microcode exactly as stored in the container (big-endian).
++    uint64_t microcodeHash = 0;
++    // Output: one entry per vertex shader input, location = index of the vertex element in the container.
++    std::vector<LrVertexInput> vertexInputs;
++    std::unordered_map<uint32_t, uint32_t> vertexInputLocations; // vfetch instruction address -> location
++    std::unordered_map<uint32_t, uint32_t> definedFloatConstants; // registers with a literal (definition table)
++    std::unordered_map<uint32_t, uint32_t> definedLoopConstants;  // loop constant -> literal value
++    uint32_t loopCounter = 0;            // unique names for loop locals
++    std::vector<uint32_t> loopStack;     // open loops (their counter values)
++#endif
++
+     void indent()
+     {
+         for (uint32_t i = 0; i < indentation; i++)

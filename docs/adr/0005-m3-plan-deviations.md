@@ -46,3 +46,40 @@ Formato: o quê, por quê, custo se estiver errada.
   ficar caro demais, a alternativa é subir o piso de glibc do AppImage para 2.38, o que corta distribuições LTS
   anteriores a 2023. Dependemos também de a versão do sistema continuar compatível com o `dxcapi.h` que o
   XenosRecomp espera: ele foi testado aqui com 1.10.2605.37.
+
+### M3. O fork do XenosRecomp escreve o cache no formato da Tarefa 14 e uma tabela de entradas de vértice (Tarefa 13)
+- O quê: no modo `LR_LEGACYRECOMP` a própria ferramenta escreve o `shader_cache.cpp` com a struct
+  `lr_shader_cache_entry` do plano (Tarefa 14), o blob `lr_shader_blob` (zstd de SPIR-V cru, sem o smol-v do upstream)
+  e, além do plano, `lr_shader_vertex_inputs` (uma linha por entrada de vértice: fetch constant, offset, stride,
+  formato, flags) e os tamanhos do blob. A entrada de vértice `location = i` é o elemento de vértice i do contêiner.
+  O hash do contêiner aparece no log e em comentário, não na struct. O prelúdio HLSL é copiado para
+  `share/legacyrecomp/tools/xenos_shader_common.h`. Contrato completo em `docs/architecture.md`.
+- Por quê: o plano pede locais de entrada "por slot de vertex fetch" mas a struct da Tarefa 14 não tem onde dizer
+  qual fetch constant, offset e formato alimentam cada local; o tradutor já decodifica isso e o runtime não deveria
+  decodificar o microcódigo de novo. Gerar o `.cpp` na ferramenta deixa a etapa `shaders` só com
+  executar, conferir `translated N of M` e compilar.
+- Custo se errado: se a Tarefa 20 preferir derivar o layout do microcódigo, a tabela fica sem uso (custo zero); se o
+  formato precisar mudar, muda num patch do fork e no teste `tests/shaders`.
+
+### M4. Booleanos: dois bancos de 128 no bloco compartilhado (Tarefa 13)
+- O quê: o plano fala em "128 booleanos" no bloco compartilhado. Como o bloco é um só por desenho (VS e PS), ele guarda
+  os 256 bits dos 8 registradores de booleanos do Xenos, em ordem: o VS lê o banco 0..127 e o PS o banco 128..255, com
+  índice `banco + (endereço do microcódigo % 128)`. As 32 constantes de laço são as mesmas para os dois estágios (como
+  no Xenia, que também usa um único buffer de booleanos e laços).
+- Por quê: não confirmamos se o microcódigo de PS endereça os booleanos de 0..127 ou de 128..255 (o upstream supõe
+  0..15 por estágio; o Xenia indexa os 256 direto). O módulo 128 dentro do banco do estágio dá o resultado certo nos
+  dois casos.
+- Custo se errado: se o D3D do 360 mapear booleanos de outro jeito (por exemplo, um único banco compartilhado), um
+  desvio condicional de PS lê o bit errado; a correção é o índice em `lrBoolIndex` (patch 0002) e a cópia no runtime.
+
+### M5. Tradução mais estrita que o upstream (Tarefa 13)
+- O quê: no modo LegacyRecomp, `cond_exec*` e `cond_exec_pred*` respeitam a condição (o upstream executava a cláusula
+  sempre), os laços usam início e passo da constante (o upstream contava de 0 com passo 1 e exigia um literal `i<N>`),
+  `aL` é restaurado ao fim de laços aninhados, `r0.x` começa com o índice do vértice e `oPos` começa zerado. Todo
+  acesso a tabela do contêiner é conferido contra o tamanho dele; contêiner malformado, exportação sem destino,
+  laço aninhado num shader com saltos e o mesmo microcódigo com traduções diferentes falham a tradução em vez de
+  `assert`. Ficam de fora (falham alto): texturas 1D e exportação de memória; o tamanho de ponto é descartado.
+- Por quê: o jogo não é o Unleashed; o que o upstream supunha só valia para os shaders dele, e a etapa `shaders` precisa
+  falhar alto (spec, seção 7).
+- Custo se errado: shaders reais que usem as construções recusadas param a etapa com a mensagem; o portão da Tarefa 15
+  mede quantos.
