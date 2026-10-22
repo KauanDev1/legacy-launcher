@@ -1,6 +1,6 @@
 # Pipeline de instalação
 
-`legacyrecomp install --iso <arquivo>` (ou o botão **Instalar** da GUI, ver `docs/gui.md`) executa sete
+`legacyrecomp install --iso <arquivo>` (ou o botão **Instalar** da GUI, ver `docs/gui.md`) executa oito
 etapas em ordem. Cada etapa tem um *fingerprint* (hash das suas entradas) e uma lista de saídas; o estado
 fica em `work/state.toml`. Tudo roda na máquina do usuário e nada do jogo sai dela.
 
@@ -14,10 +14,15 @@ fica em `work/state.toml`. Tudo roda na máquina do usuário e nada do jogo sai 
 | 4 | `patch` | Aplica o `.xexp` ao XEX (XenonUtils `XexPatcher`), gerando um XEX2 sem criptografia e sem compressão | `work/image/default_tu1.xex` |
 | 5 | `analyse` | Roda o XenonAnalyse e a varredura de `switch` própria (jump tables) | `work/analysis/switch_tables.toml`, `work/analysis/functions.toml` |
 | 6 | `recompile` | Roda o XenonRecomp com `config/minecraft-tu1/recomp.toml`; falha se houver qualquer linha `ERROR:` (o XenonRecomp sai com 0 mesmo gerando código errado) | `work/generated/ppc_recomp_shared.h`, `ppc_func_mapping.cpp`, `ppc_config.h` (mais ~215 `ppc_recomp.*.cpp`) |
-| 7 | `build` | Gera os thunks de importação (`import_stubs.cpp`, ver `docs/architecture.md`, "Kernel"), compila o C++ gerado com o `main.cpp` e as bibliotecas do runtime (template CMake/Ninja) e instala o binário. Usa o clang++/cmake/ninja do sistema ou, no AppImage, o toolchain embutido (ver "Toolchain") | `bin/legacyrecomp-game` |
+| 7 | `shaders` | Copia `work/image/default_tu1.xex` para `work/shaders/in/` e roda o XenosRecomp (patcheado, `tools/XenosRecomp`, com o DXC do sistema) sobre ele, passando o prelúdio HLSL `tools/xenos_shader_common.h`; o `translated N of M` impresso pela ferramenta precisa ter N == M ≥ 1, senão a etapa falha com `ToolFailed` e nenhum arquivo é deixado. Fingerprint: sha256 da imagem, commit do XenosRecomp (com o hash dos patches) e versão do DXC. O cache é lido em tempo de execução pelo hash do microcódigo (ver `docs/architecture.md`, "Contrato dos shaders traduzidos") | `work/generated/shader_cache.cpp` (tabela `lr_shader_cache`, SPIR-V comprimido com zstd; derivado do jogo, nunca vai para o git); `work/shaders/hlsl/` (HLSL de depuração) |
+| 8 | `build` | Gera os thunks de importação (`import_stubs.cpp`, ver `docs/architecture.md`, "Kernel"), compila o C++ gerado com o `main.cpp` e as bibliotecas do runtime (template CMake/Ninja) e instala o binário. Usa o clang++/cmake/ninja do sistema ou, no AppImage, o toolchain embutido (ver "Toolchain") | `bin/legacyrecomp-game` |
 
-O código gerado tem cerca de 160 MB, o `recompile` + `build` levam alguns minutos e usam bastante RAM por
+O código gerado tem cerca de 160 MB, o `recompile` + `shaders` + `build` levam alguns minutos e usam bastante RAM por
 job (use `--jobs <n>` para limitar).
+
+Sem o XenosRecomp no pacote (AppImage sem DXC, ver `docs/adr/0005-m3-plan-deviations.md`), a etapa `shaders` falha
+com `ToolMissing` dizendo qual ferramenta falta e apontando o aviso do `doctor`; o `doctor` só falha por falta de
+DXC quando o XenosRecomp está presente. O log fica em `work/logs/shaders.log`.
 
 O `analyse` também procura funções sem entrada no `.pdata` que só são alcançadas por ponteiro (vtables, tabelas
 de callbacks, o comparador de um `qsort`), que o XenonRecomp nunca recompilaria
@@ -69,7 +74,8 @@ Precedência: `--root` > variável `LEGACYRECOMP_ROOT` > `$XDG_DATA_HOME/legacyr
     input/               package.xex, tu.xexp
     image/               default_tu1.xex (imagem final)
     analysis/            switch_tables.toml, functions.toml
-    generated/           C++ gerado pelo XenonRecomp
+    generated/           C++ gerado pelo XenonRecomp e shader_cache.cpp (etapa shaders)
+    shaders/             entrada (in/) e HLSL (hlsl/) do XenosRecomp
     build/               árvore de build do jogo
 ```
 
@@ -89,16 +95,16 @@ fingerprint = "..."
   existem. Segunda execução de `install` sem mudanças não roda nenhuma etapa.
 - Ao começar uma etapa, ela é marcada como não completa; só `mark_complete` depois do sucesso. Falha ou
   cancelamento nunca deixa uma etapa "pronta".
-- Uma etapa suja (re-executada) suja todas as seguintes: `--force recompile` roda `recompile` e `build`;
+- Uma etapa suja (re-executada) suja todas as seguintes: `--force recompile` roda `recompile`, `shaders` e `build`;
   `--force extract` roda tudo depois do `doctor`.
 - `--force <etapa[,etapa]>` pode ser repetido. Nomes: `doctor`, `extract`, `verify`, `patch`, `analyse`,
-  `recompile`, `build`.
+  `recompile`, `shaders`, `build`.
 - O carregamento é tolerante: chave ausente ou com tipo errado significa "não completo" e só causa
   re-execução. TOML ilegível é `InvalidFormat`.
 - O fingerprint do `doctor` é constante (`doctor-1`): ele é cacheado como as outras etapas, então mudanças
   no ambiente (instalar/remover clang) só são notadas se uma etapa posterior rodar e falhar, ou com
   `--force doctor`. `legacyrecomp doctor` sempre confere o sistema.
-- `legacyrecomp build` roda `recompile` + `build` sem ISO. Sem `--iso`, o `extract` só vale se já estiver
+- `legacyrecomp build` roda `recompile` + `shaders` + `build` sem ISO. Sem `--iso`, o `extract` só vale se já estiver
   completo com as saídas presentes; senão o erro pede `legacyrecomp install --iso <arquivo>`.
   `--force extract` sem `--iso` é erro de uso.
 

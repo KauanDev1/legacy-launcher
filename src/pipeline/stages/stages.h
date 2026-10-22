@@ -5,6 +5,7 @@
 
 #include "pipeline/doctor.h"
 #include "pipeline/stage.h"
+#include "pipeline/stages/shaders_stage.h"
 
 namespace lr::pipeline {
 

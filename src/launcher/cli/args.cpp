@@ -15,7 +15,7 @@ Error usage_error(std::string msg, std::string hint = "run `legacyrecomp --help`
 }
 
 constexpr StageId kAllStages[] = {StageId::Doctor,  StageId::Extract,   StageId::Verify, StageId::Patch,
-                                  StageId::Analyse, StageId::Recompile, StageId::Build};
+                                  StageId::Analyse, StageId::Recompile, StageId::Shaders, StageId::Build};
 
 std::string valid_stage_names() {
   std::string s;
@@ -35,9 +35,9 @@ std::string_view usage_text() {
          "\n"
          "commands:\n"
          "  doctor                     check the toolchain, CPU and disk space\n"
-         "  install --iso <file>       run the whole pipeline (extract, verify, patch, analyse, recompile, build);\n"
+         "  install --iso <file>       run the whole pipeline (extract, verify, patch, analyse, recompile, shaders, build);\n"
          "                             finished stages are skipped\n"
-         "  build                      rebuild from the already extracted game (recompile + build); no --iso needed\n"
+         "  build                      rebuild from the already extracted game (recompile + shaders + build); no --iso needed\n"
          "  run [-- <game args>]       start the built game; arguments after -- go to the game\n"
          "  inspect --iso <file>       dump the ISO tree and XEX headers\n"
          "  inspect --sections <xex>   print the sections of a loaded XEX\n"
@@ -48,7 +48,7 @@ std::string_view usage_text() {
          "  --iso <file>               game ISO (install)\n"
          "  --root <dir>               data root; precedence: --root, $LEGACYRECOMP_ROOT, $XDG_DATA_HOME/legacyrecomp\n"
          "  --force <stage[,stage]>    re-run a stage and everything after it (doctor, extract, verify, patch,\n"
-         "                             analyse, recompile, build); may be repeated\n"
+         "                             analyse, recompile, shaders, build); may be repeated\n"
          "  --jobs <n>                 parallel jobs (default: hardware concurrency)\n"
          "  --help                     show this text\n"
          "\n"

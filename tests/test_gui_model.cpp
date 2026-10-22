@@ -22,9 +22,10 @@ TEST_CASE("stage_text gives every stage a Portuguese title and description", "[u
   CHECK(stage_text(StageId::Doctor).title == "Verificar o sistema");
   CHECK(stage_text(StageId::Patch).title == "Aplicar a atualização");
   CHECK(stage_text(StageId::Recompile).title == "Gerar o código C++");
+  CHECK(stage_text(StageId::Shaders).title == "Traduzir os shaders");
   CHECK(stage_text(StageId::Build).title == "Compilar o jogo");
   for (auto id : {StageId::Doctor, StageId::Extract, StageId::Verify, StageId::Patch, StageId::Analyse,
-                  StageId::Recompile, StageId::Build}) {
+                  StageId::Recompile, StageId::Shaders, StageId::Build}) {
     CHECK_FALSE(stage_text(id).title.empty());
     CHECK_FALSE(stage_text(id).description.empty());
   }
@@ -111,6 +112,7 @@ TEST_CASE("stage_message translates the pipeline's progress messages", "[unit]")
         "Procurando tabelas de salto (LegacyRecomp)");
   CHECK(stage_message(StageId::Recompile, "Recompiling functions... 42%") == "Recompilando funções… 42%");
   CHECK(stage_message(StageId::Recompile, "[x] Recompiling functions... 7.5%") == "Recompilando funções… 7.5%");
+  CHECK(stage_message(StageId::Shaders, "translated 12 of 34") == "12 de 34 shaders traduzidos");
   CHECK(stage_message(StageId::Build, "wrote 812 import thunks") == "812 thunks de importação gerados");
   CHECK(stage_message(StageId::Build, "configuring the game build") == "Configurando a compilação do jogo");
   CHECK(stage_message(StageId::Build, "compiling with 16 jobs") == "Compilando com 16 processos");

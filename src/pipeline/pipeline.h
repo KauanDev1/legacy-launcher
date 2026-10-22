@@ -12,7 +12,7 @@
 
 namespace lr::pipeline {
 
-// doctor, extract, verify, patch, analyse, recompile, build (StageId order).
+// doctor, extract, verify, patch, analyse, recompile, shaders, build (StageId order).
 std::vector<std::unique_ptr<Stage>> default_stages(DoctorProbe& probe);
 
 // Resources dir: $LEGACYRECOMP_RESOURCES, else <dir of this executable>/../share/legacyrecomp.

@@ -6,7 +6,7 @@
 flowchart TD
   cli[launcher/cli<br/>legacyrecomp]
   gui[launcher/gui<br/>legacyrecomp-gui]
-  pipeline[pipeline<br/>doctor, extract, verify, patch,<br/>analyse, recompile, build]
+  pipeline[pipeline<br/>doctor, extract, verify, patch,<br/>analyse, recompile, shaders, build]
   runtime[runtime<br/>memória do convidado, loader,<br/>kernel/, threads, falhas]
   formats[formats<br/>xdvdfs, stfs, xex2]
   common[common<br/>Result/Error, log, sha256, paths, fs_util]

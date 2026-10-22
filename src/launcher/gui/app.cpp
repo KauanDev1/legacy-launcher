@@ -30,7 +30,8 @@ using theme::rgb;
 constexpr size_t kMaxLogLines = 2000;
 constexpr pipeline::StageId kAllStages[] = {
     pipeline::StageId::Doctor,  pipeline::StageId::Extract,   pipeline::StageId::Verify, pipeline::StageId::Patch,
-    pipeline::StageId::Analyse, pipeline::StageId::Recompile, pipeline::StageId::Build};
+    pipeline::StageId::Analyse, pipeline::StageId::Recompile, pipeline::StageId::Shaders,
+    pipeline::StageId::Build};
 
 std::string trim(std::string s) {
   while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();

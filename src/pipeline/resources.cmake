@@ -141,3 +141,18 @@ if(LR_HAVE_XENOSRECOMP)
     COMMENT "Staging XenosRecomp")
   add_dependencies(lr_resources lr_resources_xenosrecomp)
 endif()
+
+# Commit of the XenosRecomp submodule (+ its patches hash): part of the shaders stage fingerprint, like the
+# XenonRecomp one above.
+execute_process(COMMAND git -C "${_lr_src_root}/thirdparty/XenosRecomp" rev-parse HEAD
+  OUTPUT_VARIABLE LR_XENOSRECOMP_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE
+  RESULT_VARIABLE _lr_git_rc ERROR_QUIET)
+if(NOT _lr_git_rc EQUAL 0 OR LR_XENOSRECOMP_COMMIT STREQUAL "")
+  set(LR_XENOSRECOMP_COMMIT "unknown")
+  message(WARNING "Could not read the XenosRecomp submodule commit (git -C thirdparty/XenosRecomp rev-parse HEAD). "
+                  "The shaders stage cache will not notice a XenosRecomp update; use --force shaders.")
+endif()
+if(NOT LR_XENOSRECOMP_PATCH_HASH STREQUAL "none")
+  string(SUBSTRING "${LR_XENOSRECOMP_PATCH_HASH}" 0 16 _lr_xenos_patch_hash)
+  string(APPEND LR_XENOSRECOMP_COMMIT "+patches:${_lr_xenos_patch_hash}")
+endif()

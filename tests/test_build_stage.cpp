@@ -133,7 +133,7 @@ TEST_CASE("reset_stale_build_dir wipes a build dir configured from another templ
 TEST_CASE("default_stages lists every stage in order", "[unit]") {
   SystemDoctorProbe probe;
   auto stages = default_stages(probe);
-  REQUIRE(stages.size() == 7);
+  REQUIRE(stages.size() == 8);
   for (size_t i = 0; i < stages.size(); ++i) CHECK(static_cast<size_t>(stages[i]->id()) == i);
 }
 
