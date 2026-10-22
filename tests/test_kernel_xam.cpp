@@ -393,6 +393,17 @@ TEST_CASE("XamUserCheckPrivilege grants the local profile everything", "[unit][k
   CHECK(f.call("XamUserCheckPrivilege", 0u, 0xFCu, 0u) == ERROR_INVALID_PARAMETER);
 }
 
+TEST_CASE("XamUserGetDeviceContext gives the local profile a zero context", "[unit][kernel][xam]") {
+  KernelFixture f;
+  const uint32_t out = f.alloc(4);
+  *f.mem.translate<be<uint32_t>>(out) = 7;
+  CHECK(f.call("XamUserGetDeviceContext", 0u, 0u, out) == ERROR_SUCCESS);
+  CHECK(*f.mem.translate<be<uint32_t>>(out) == 0u);
+  *f.mem.translate<be<uint32_t>>(out) = 7;
+  CHECK(static_cast<uint32_t>(f.call("XamUserGetDeviceContext", 2u, 0u, out)) == X_E_INVALIDARG);
+  CHECK(*f.mem.translate<be<uint32_t>>(out) == 0u);
+}
+
 TEST_CASE("XMsg requests to the XAM app (0xFE) complete at once", "[unit][kernel][xam]") {
   KernelFixture f;
   constexpr uint32_t kXamApp = 0xFE, kXFail = 0x80004005, kXNotFound = 0x80070490;

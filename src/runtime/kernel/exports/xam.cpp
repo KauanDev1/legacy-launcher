@@ -367,6 +367,13 @@ uint32_t XamUserCheckPrivilege(GuestCall& c, uint32_t user_index, uint32_t /*pri
   return ERROR_SUCCESS;
 }
 
+// XamUserGetDeviceContext(user_index, unknown, context*): *context = 0 always (games treat a failure as 0 too);
+// success for the local profile (0) or any user (0xFF), X_E_INVALIDARG otherwise, as Xenia.
+uint32_t XamUserGetDeviceContext(GuestCall& c, uint32_t user_index, uint32_t /*unknown*/, U32Ptr context_out) {
+  if (context_out.valid_range(4)) *context_out.get(c.base) = 0;
+  return (user_index == 0 || (user_index & 0xFF) == 0xFF) ? ERROR_SUCCESS : X_E_INVALIDARG;
+}
+
 // XamUserGetXUID(user_index, type_mask, xuid*): the local XUID for any offline/online type bit.
 uint32_t XamUserGetXUID(GuestCall& c, uint32_t user_index, uint32_t type_mask, U64Ptr xuid_out) {
   if (!xuid_out.valid_range(8)) return X_E_INVALIDARG;
@@ -511,6 +518,7 @@ LR_KERNEL_STUB(XNotifyPositionUI, 0);  // no system UI to position (void import;
 LR_KERNEL(XamUserGetSigninState);
 LR_KERNEL(XamUserGetXUID);
 LR_KERNEL(XamUserCheckPrivilege);
+LR_KERNEL(XamUserGetDeviceContext);
 LR_KERNEL(XamUserGetName);
 LR_KERNEL(XamUserGetSigninInfo);
 LR_KERNEL(XamUserReadProfileSettings);
