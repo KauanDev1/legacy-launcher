@@ -129,7 +129,7 @@ class GpuSystem::BackendProxy final : public Backend {
       owner_.trace_->line("swap %llu fb=0x%08X %ux%u\n", static_cast<unsigned long long>(n), frontbuffer_phys, width,
                           height);
     }
-    owner_.on_swap();
+    owner_.on_swap(n);
   }
   void wait_idle() override {
     Busy b(owner_);
@@ -410,10 +410,13 @@ void GpuSystem::gpu_main() {
   }
 }
 
-void GpuSystem::on_swap() {
-  std::lock_guard<std::mutex> lock(thread_mutex_);
-  ++swap_vblanks_owed_;
-  vblank_cv_.notify_all();
+void GpuSystem::on_swap(uint64_t swaps) {
+  {
+    std::lock_guard<std::mutex> lock(thread_mutex_);
+    ++swap_vblanks_owed_;
+    vblank_cv_.notify_all();
+  }
+  if (hooks_.on_swap) hooks_.on_swap(swaps);
 }
 
 void GpuSystem::vblank_main() {

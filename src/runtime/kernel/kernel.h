@@ -48,6 +48,9 @@ struct KernelConfig {
   std::optional<std::filesystem::path> gpu_trace_file;
   // Vblank pacing: true (headless runs) = GpuSystem PacedBySwap, false (window) = Realtime60Hz.
   bool vblank_paced_by_swap = false;
+  // --exit-after-swaps N: once the GPU has processed N swaps the process ends with exit code 0 (after a
+  // "[gpu] exit after N swaps" line on stderr and the trace flushes). 0 = never.
+  uint64_t exit_after_swaps = 0;
 };
 
 class Kernel {

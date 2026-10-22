@@ -89,6 +89,8 @@ struct GpuHooks {
   // An unrecoverable guest error (kernel: guest_fatal, exit 5; never returns there). If it returns (tests), the GPU
   // thread stops.
   std::function<void(const std::string& what)> fatal;
+  // Optional: called on the GPU thread after each processed swap with the running count (kernel: --exit-after-swaps).
+  std::function<void(uint64_t swaps)> on_swap;
 };
 
 class GpuSystem {
@@ -142,7 +144,7 @@ class GpuSystem {
   void fail(const std::string& what);
   void raise_interrupt(uint32_t source, uint32_t cpu, bool coalesce);
   void on_interrupt_done(uint32_t source);
-  void on_swap();
+  void on_swap(uint64_t swaps);
   uint32_t read_wptr() const;
 
   MemoryAccess mem_;

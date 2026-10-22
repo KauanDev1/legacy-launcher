@@ -570,6 +570,11 @@ que descarrega o trace de importações (`set_trace_flush_hook`: saída normal, 
 saída 4, porque não é seguro em sinal); limite de 64 MiB, com uma
 linha final `gpu trace capped at 64 MiB`.
 
+**Saída depois de N swaps** (`--exit-after-swaps <n>`, `KernelConfig::exit_after_swaps`): quando a GPU termina o
+`n`-ésimo swap, a thread da GPU escreve `[gpu] exit after <n> swaps` no stderr, descarrega os traces e encerra o
+processo com código 0. Serve ao teste de integração do M3 (`tests/test_integration_m3.cpp`), que roda o jogo até 60
+swaps e espera saída 0.
+
 ## Diagnóstico
 
 Os modos de falha do ciclo "rodar, ver onde para, implementar" são importação faltando (saída 3), falha (4), erro

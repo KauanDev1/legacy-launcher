@@ -62,6 +62,15 @@ Kernel::Kernel(runtime::GuestMemory& mem, KernelConfig cfg)
   };
   hooks.alloc_guest = [this](uint32_t bytes) { return pool_alloc(bytes, 0x47505520 /* "GPU " */); };
   hooks.fatal = [](const std::string& what) { guest_fatal(what); };
+  if (const uint64_t limit = cfg_.exit_after_swaps; limit != 0) {
+    hooks.on_swap = [limit](uint64_t swaps) {
+      if (swaps < limit) return;
+      std::fprintf(stderr, "[gpu] exit after %llu swaps\n", static_cast<unsigned long long>(swaps));
+      std::fflush(nullptr);
+      flush_import_trace();  // also the GPU trace (flush hook)
+      _exit(runtime::kExitOk);
+    };
+  }
   gpu_ = std::make_unique<gpu::GpuSystem>(gpu_memory_access(), std::move(hooks));
   gpu_->set_vblank_mode(cfg_.vblank_paced_by_swap ? gpu::VblankMode::PacedBySwap : gpu::VblankMode::Realtime60Hz);
 }

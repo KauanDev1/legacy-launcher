@@ -424,3 +424,49 @@ TEST_CASE("VdSwap with a non-physical front buffer is guest fatal", "[unit][gpu]
   CHECK(WEXITSTATUS(status) == 5);
   CHECK(out.find("Guest fatal: VdSwap: front buffer 0x40000000 is not in a physical view") != std::string::npos);
 }
+
+// --exit-after-swaps N (KernelConfig::exit_after_swaps): the process ends with exit code 0 once the GPU has processed
+// N swaps, after a "[gpu] exit after N swaps" line on stderr (the integration test's clean finish).
+TEST_CASE("exit_after_swaps ends the process with code 0 after N swaps", "[unit][gpu]") {
+  int fds[2];
+  REQUIRE(::pipe(fds) == 0);
+  const pid_t pid = ::fork();
+  REQUIRE(pid >= 0);
+  if (pid == 0) {
+    ::dup2(fds[1], 2);
+    ::close(fds[0]);
+    {
+      lr::kernel::KernelConfig cfg;
+      cfg.vblank_paced_by_swap = true;
+      cfg.exit_after_swaps = 2;
+      KernelFixture f(cfg);
+      Ring ring{f, phys_alloc(0x10000), 1024};
+      const Phys fb = phys_alloc(0x10000);
+      const uint32_t args = f.alloc(0x40);
+      wr(f, args + 4, fb.guest & ~0xFFFu);
+      wr(f, args + 0x20, fb.guest);
+      wr(f, args + 0x24, 1280);
+      wr(f, args + 0x28, 720);
+      f.call("VdInitializeRingBuffer", ring.mem.phys, 9u);
+      for (int frame = 0; frame < 3; ++frame) {
+        const uint32_t area = ring.mem.guest + ring.wptr * 4;
+        f.call("VdSwap", area, args, 0u, 0u, 0u, args + 0x20, 0u, 0u, args + 0x24, args + 0x28);
+        for (int i = 0; i < 64; ++i) ring.put(rd(f, area + 4 * static_cast<uint32_t>(i)));
+        ring.submit();
+        if (frame == 0) wait_until([] { return kernel().gpu().swaps() == 1; });
+      }
+      std::this_thread::sleep_for(10s);  // the GPU thread ends the process long before
+    }
+    ::_exit(99);
+  }
+  ::close(fds[1]);
+  std::string out;
+  char buf[256];
+  for (ssize_t n; (n = ::read(fds[0], buf, sizeof buf)) > 0;) out.append(buf, static_cast<size_t>(n));
+  ::close(fds[0]);
+  int status = 0;
+  REQUIRE(::waitpid(pid, &status, 0) == pid);
+  REQUIRE(WIFEXITED(status));
+  CHECK(WEXITSTATUS(status) == 0);
+  CHECK(out.find("[gpu] exit after 2 swaps") != std::string::npos);
+}
