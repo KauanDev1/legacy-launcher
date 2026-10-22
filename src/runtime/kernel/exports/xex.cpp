@@ -5,7 +5,7 @@
 //
 // Deviations: XexGetProcedureAddress resolves only ordinals of the xboxkrnl.exe / xam.xex system modules, and only
 // those the executable imports (the thunk exists); a by-name lookup or the executable's own exports are "not found".
-// XexLoadImage only "loads" modules that are already loaded; XamLoaderLaunchTitle stays missing (M5).
+// XexLoadImage only "loads" modules that are already loaded. XamLoaderLaunchTitle lives in xam_ui.cpp (guest_fatal).
 #include <strings.h>
 #include <unistd.h>
 
