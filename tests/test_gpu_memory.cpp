@@ -85,7 +85,7 @@ TEST_CASE("untranslatable physical address is reported", "[unit][gpu]") {
 
   gpu::RegisterFile regs;
   gpu::NullBackend backend;
-  gpu::CommandProcessor cp{mem, regs, backend, [](uint32_t) {}};
+  gpu::CommandProcessor cp{mem, regs, backend, [](uint32_t, uint32_t) {}};
 
   // A real allocation translates and MEM_WRITE lands in it (big-endian dword).
   auto g = k.physical().allocate(0x1000, kRW, 0, 0xFFFFFFFF, 0);

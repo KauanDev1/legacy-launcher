@@ -160,7 +160,7 @@ GpuSystem::GpuSystem(MemoryAccess mem, GpuHooks hooks)
     : mem_(mem),
       hooks_(std::move(hooks)),
       proxy_(std::make_unique<BackendProxy>(*this)),
-      cp_(std::move(mem), regs_, *proxy_, [this](uint32_t source) { raise_interrupt(source, false); }) {}
+      cp_(std::move(mem), regs_, *proxy_, [this](uint32_t source, uint32_t cpu) { raise_interrupt(source, cpu, false); }) {}
 
 GpuSystem::~GpuSystem() { stop(); }
 
@@ -430,7 +430,7 @@ void GpuSystem::vblank_main() {
       }
       last = now - due > kRealtimePeriod ? now : due;  // missed periods are skipped
       lock.unlock();
-      raise_interrupt(kInterruptSourceVblank, true);
+      raise_interrupt(kInterruptSourceVblank, kVblankCpu, true);
       lock.lock();
       continue;
     }
@@ -439,7 +439,7 @@ void GpuSystem::vblank_main() {
       --swap_vblanks_owed_;
       last = now;
       lock.unlock();
-      raise_interrupt(kInterruptSourceVblank, false);
+      raise_interrupt(kInterruptSourceVblank, kVblankCpu, false);
       lock.lock();
       continue;
     }
@@ -457,34 +457,35 @@ void GpuSystem::vblank_main() {
     }
     last = now;
     lock.unlock();
-    raise_interrupt(kInterruptSourceVblank, true);
+    raise_interrupt(kInterruptSourceVblank, kVblankCpu, true);
     lock.lock();
   }
 }
 
-void GpuSystem::raise_interrupt(uint32_t source, bool coalesce) {
+void GpuSystem::raise_interrupt(uint32_t source, uint32_t cpu, bool coalesce) {
   uint32_t fn, data;
   {
     std::lock_guard<std::mutex> lock(interrupt_mutex_);
     if (callback_ == 0 || !hooks_.queue_interrupt) return;
     if (in_flight_) {
       if (coalesce) {
-        for (uint32_t s : pending_)
-          if (s == source) return;
+        for (const auto& p : pending_)
+          if (p.first == source && p.second == cpu) return;
       }
-      pending_.push_back(source);
+      pending_.emplace_back(source, cpu);
       return;
     }
     in_flight_ = true;
     fn = callback_;
     data = callback_data_;
   }
-  hooks_.queue_interrupt(fn, source, data, [this, source] { on_interrupt_done(source); });
+  hooks_.queue_interrupt(fn, source, data, cpu, [this, source] { on_interrupt_done(source); });
 }
 
 void GpuSystem::on_interrupt_done(uint32_t source) {
   if (source < 2) delivered_[source].fetch_add(1, std::memory_order_acq_rel);
-  uint32_t next, fn, data;
+  std::pair<uint32_t, uint32_t> next;
+  uint32_t fn, data;
   {
     std::lock_guard<std::mutex> lock(interrupt_mutex_);
     if (pending_.empty() || callback_ == 0) {
@@ -497,7 +498,7 @@ void GpuSystem::on_interrupt_done(uint32_t source) {
     fn = callback_;
     data = callback_data_;
   }
-  hooks_.queue_interrupt(fn, next, data, [this, next] { on_interrupt_done(next); });
+  hooks_.queue_interrupt(fn, next.first, data, next.second, [this, s = next.first] { on_interrupt_done(s); });
 }
 
 }  // namespace lr::gpu

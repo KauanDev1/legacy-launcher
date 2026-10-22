@@ -17,6 +17,7 @@
 #include "runtime/kernel/guest_structs.h"
 #include "runtime/kernel/glue.h"
 #include "runtime/kernel/registry.h"
+#include "runtime/kernel/threads.h"
 #include "runtime/kernel/trace.h"
 #include "runtime/memory_map.h"
 
@@ -44,10 +45,18 @@ Kernel::Kernel(runtime::GuestMemory& mem, KernelConfig cfg)
       deadlock_(*this) {
   vfs_.mount_defaults(cfg_.game_dir, cfg_.user_dir);
   gpu::GpuHooks hooks;
-  hooks.queue_interrupt = [this](uint32_t callback, uint32_t source, uint32_t user_data, std::function<void()> done) {
-    timers_.queue_call([callback, source, user_data, done = std::move(done)] {
+  hooks.queue_interrupt = [this](uint32_t callback, uint32_t source, uint32_t user_data, uint32_t cpu,
+                                 std::function<void()> done) {
+    timers_.queue_call([this, callback, source, user_data, cpu, done = std::move(done)] {
+      // The callback runs "on" the interrupt's CPU: the worker's KPCR reports it for the call (D3D's callback
+      // indexes per-CPU state with it), then gets its own processor back.
+      X_KPCR* pcr = nullptr;
+      if (const GuestThread* t = current_thread()) pcr = mem_.translate<X_KPCR>(t->pcr());
+      const uint8_t saved = pcr ? pcr->current_cpu : 0;
+      if (pcr) pcr->current_cpu = static_cast<uint8_t>(cpu);
       const uint64_t args[] = {source, user_data};
       (void)call_guest(callback, args);
+      if (pcr) pcr->current_cpu = saved;
       done();
     });
   };

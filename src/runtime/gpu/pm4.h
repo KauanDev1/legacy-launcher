@@ -93,7 +93,7 @@ inline constexpr uint32_t kMaxIndirectDepth = 4;  // nested INDIRECT_BUFFER leve
 class CommandProcessor {
  public:
   CommandProcessor(MemoryAccess mem, RegisterFile& regs, Backend& backend,
-                   std::function<void(uint32_t source)> raise_interrupt);
+                   std::function<void(uint32_t source, uint32_t cpu)> raise_interrupt);
 
   // Executes the packet dwords in [guest_addr, guest_addr + 4 * dwords) (4-byte aligned, the top-level ring
   // buffer). Returns the dwords consumed: all of them, or fewer when the last packet is incomplete (its header or
@@ -137,7 +137,7 @@ class CommandProcessor {
   MemoryAccess mem_;
   RegisterFile& regs_;
   Backend& backend_;
-  std::function<void(uint32_t)> raise_interrupt_;
+  std::function<void(uint32_t source, uint32_t cpu)> raise_interrupt_;
   PacketObserver observer_;
   std::map<uint32_t, uint64_t> counts_;
   std::atomic<bool> stop_{false};

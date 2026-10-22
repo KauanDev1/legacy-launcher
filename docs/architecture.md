@@ -532,8 +532,10 @@ adiantado, para os cabeçalhos do template do jogo continuarem pequenos.
   fora do anel. `stop()` chama `request_stop()`, então um `WAIT_REG_MEM` girando volta com `Cancelled`.
 - **Interrupções**: `VdSetGraphicsInterruptCallback(fn, dado)` registra `fn(fonte, dado)`; fonte 0 = vblank,
   1 = interrupção do processador de comandos (pacote `INTERRUPT`, uma por bit da máscara de CPUs), a convenção do
-  Xenia (`graphics_system.cc`/`command_processor.cc`, conferida). O Xenia também escolhe a CPU que roda o callback
-  (CPU 2 no vblank); não modelamos CPUs e descartamos o índice (lacuna conhecida). Uma interrupção por vez no
+  Xenia (`graphics_system.cc`/`command_processor.cc`, conferida). Cada interrupção também tem uma CPU, como no Xenia: o
+  vblank vai para a CPU 2 e o `INTERRUPT`, para cada CPU da máscara. Durante a chamada, o KPCR do worker informa
+  essa CPU (`current_cpu`): o callback do D3D apaga da máscara o bit da CPU em que roda, e a GPU espera essa máscara
+  zerar (`WAIT_REG_MEM`); com a CPU errada, a GPU travava (achado na Task 12 do M3). Uma interrupção por vez no
   worker, na ordem em que foram geradas; sem callback, são descartadas (como no Xenia).
 - **Ritmo do vblank** (spec, seção 11): com janela, `Realtime60Hz` (um vblank a cada 1/60 s do relógio; um vblank
   ainda não entregue absorve o seguinte). Headless (`--headless`, `KernelConfig::vblank_paced_by_swap`),

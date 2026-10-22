@@ -26,10 +26,11 @@
 //
 // Interrupts. The game's callback(source, user_data) (VdSetGraphicsInterruptCallback) gets source 0 for a vblank
 // and source 1 for a command-processor interrupt (PM4 INTERRUPT), Xenia's convention (graphics_system.cc /
-// command_processor.cc). Xenia also selects the guest CPU that runs it (vblank on CPU 2, INTERRUPT per mask bit);
-// we do not model CPUs, so the CPU index is dropped (known gap). Delivery goes through GpuHooks::queue_interrupt
-// (the kernel worker, call_guest), one interrupt in flight at a time and in raise order; without a callback an
-// interrupt is dropped, as Xenia does.
+// command_processor.cc). Each interrupt also targets a guest CPU, as in Xenia: a vblank CPU 2 (kVblankCpu), a PM4
+// INTERRUPT each CPU of its mask. Delivery goes through GpuHooks::queue_interrupt (the kernel worker, call_guest, with
+// the worker's KPCR current processor set to that CPU for the call: D3D's callback clears its own CPU's bit from the
+// mask the GPU then waits on), one interrupt in flight at a time and in raise order; without a callback an interrupt
+// is dropped, as Xenia does.
 //
 // Vblank pacing (spec section 11). Realtime60Hz (window): a vblank every 1/60 s of wall time; one already waiting
 // for delivery absorbs the next (a missed vblank, as on hardware). PacedBySwap (headless default): one vblank per
@@ -58,6 +59,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 
 #include "common/result.h"
 #include "runtime/gpu/backend.h"
@@ -70,6 +72,7 @@ enum class VblankMode { Realtime60Hz, PacedBySwap };
 
 inline constexpr uint32_t kInterruptSourceVblank = 0;
 inline constexpr uint32_t kInterruptSourceCommand = 1;
+inline constexpr uint32_t kVblankCpu = 2;  // the CPU a vblank interrupt runs on (Xenia)
 
 inline constexpr uint64_t kGpuTraceCapBytes = 64ull << 20;
 
@@ -77,7 +80,8 @@ inline constexpr uint64_t kGpuTraceCapBytes = 64ull << 20;
 struct GpuHooks {
   // Runs guest `callback(source, user_data)` asynchronously (kernel: on the kernel worker through call_guest) and
   // then `done`, on the same thread, once the callback returned.
-  std::function<void(uint32_t callback, uint32_t source, uint32_t user_data, std::function<void()> done)>
+  // `cpu` is the guest CPU the interrupt targets: the callback must see it as its current processor (KPCR).
+  std::function<void(uint32_t callback, uint32_t source, uint32_t user_data, uint32_t cpu, std::function<void()> done)>
       queue_interrupt;
   // `bytes` of committed read/write guest memory (the linearisation scratch); 0 on failure. Called from the thread
   // that initialises the ring (a guest thread in VdInitializeRingBuffer).
@@ -136,7 +140,7 @@ class GpuSystem {
   // RPTR to CP_RB_RPTR in the MMIO window and to physical `phys` (0: no write-back).
   void write_back(uint32_t rptr, uint32_t phys);
   void fail(const std::string& what);
-  void raise_interrupt(uint32_t source, bool coalesce);
+  void raise_interrupt(uint32_t source, uint32_t cpu, bool coalesce);
   void on_interrupt_done(uint32_t source);
   void on_swap();
   uint32_t read_wptr() const;
@@ -167,7 +171,7 @@ class GpuSystem {
   // Interrupts (interrupt_mutex_).
   std::mutex interrupt_mutex_;
   uint32_t callback_ = 0, callback_data_ = 0;
-  std::deque<uint32_t> pending_;
+  std::deque<std::pair<uint32_t, uint32_t>> pending_;  // (source, cpu)
   bool in_flight_ = false;
   std::atomic<uint64_t> delivered_[2]{};
 

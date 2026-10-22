@@ -85,7 +85,7 @@ constexpr uint16_t kExtentMaxXY = 8192 >> 3;
 }  // namespace
 
 CommandProcessor::CommandProcessor(MemoryAccess mem, RegisterFile& regs, Backend& backend,
-                                   std::function<void(uint32_t source)> raise_interrupt)
+                                   std::function<void(uint32_t source, uint32_t cpu)> raise_interrupt)
     : mem_(std::move(mem)), regs_(regs), backend_(backend), raise_interrupt_(std::move(raise_interrupt)) {}
 
 bool CommandProcessor::in_bounds(uint32_t guest, uint64_t bytes) const {
@@ -406,10 +406,10 @@ Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, 
 
     case pm4::INTERRUPT: {
       LR_TRY(need(1));
-      // One command interrupt (source 1) per CPU bit set in the mask; which CPU runs it is not modelled.
+      // One command interrupt (source 1) per CPU bit set in the mask, delivered on that CPU.
       const uint32_t cpu_mask = p(0);
       for (uint32_t cpu = 0; cpu < 6; ++cpu) {
-        if ((cpu_mask & (1u << cpu)) != 0 && raise_interrupt_) raise_interrupt_(1);
+        if ((cpu_mask & (1u << cpu)) != 0 && raise_interrupt_) raise_interrupt_(1, cpu);
       }
       return {};
     }

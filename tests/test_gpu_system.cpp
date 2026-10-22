@@ -17,6 +17,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include "runtime/be.h"
@@ -25,6 +26,8 @@
 #include "runtime/gpu/null_backend.h"
 #include "runtime/gpu/pm4.h"
 #include "runtime/kernel/glue.h"
+#include "runtime/kernel/guest_structs.h"
+#include "runtime/kernel/threads.h"
 #include "runtime/kernel/kernel.h"
 #include "runtime/kernel/variables.h"
 #include "runtime/memory/physical_heap.h"
@@ -275,26 +278,31 @@ TEST_CASE("an unknown PM4 opcode in the ring is guest fatal (exit 5)", "[unit][g
   CHECK(out.find("Guest fatal: GPU command processor: unknown PM4 opcode 0x7D") != std::string::npos);
 }
 
+// The callback runs on the CPU the interrupt targets (its KPCR current_cpu): vblanks on CPU 2 and a PM4 INTERRUPT on
+// each CPU of its mask, as Xenia. D3D's callback clears the bit of the CPU it runs on from the mask the GPU then
+// waits on (WAIT_REG_MEM for 0), so a wrong CPU deadlocks the GPU.
 TEST_CASE("vblank interrupt reaches the guest callback", "[unit][gpu]") {
   // Declared before the fixture: the kernel worker may still run the callback until the fixture is gone.
   std::mutex m;
-  std::vector<std::pair<uint64_t, uint64_t>> calls;  // (source, user_data)
+  std::vector<std::tuple<uint64_t, uint64_t, uint32_t>> calls;  // (source, user_data, KPCR current_cpu)
   KernelFixture f;  // Realtime60Hz (no vblank_paced_by_swap)
   def(kCallback, [&](const std::vector<uint64_t>& a) -> uint64_t {
+    const GuestThread* t = current_thread();
+    const uint32_t cpu = t ? f.mem.translate<X_KPCR>(t->pcr())->current_cpu : 0xFFu;
     std::lock_guard<std::mutex> lock(m);
-    calls.emplace_back(a.at(0), a.at(1));
+    calls.emplace_back(a.at(0), a.at(1), cpu);
     return 0;
   });
   auto count = [&](uint64_t source) {
     std::lock_guard<std::mutex> lock(m);
     size_t n = 0;
-    for (const auto& c : calls) n += c.first == source && c.second == 0x40055980 ? 1 : 0;
+    for (const auto& c : calls) n += std::get<0>(c) == source && std::get<1>(c) == 0x40055980 ? 1 : 0;
     return n;
   };
   f.call("VdSetGraphicsInterruptCallback", kCallback, 0x40055980u);
   REQUIRE(wait_until([&] { return count(lr::gpu::kInterruptSourceVblank) >= 3; }));
 
-  // A PM4 INTERRUPT with CPU mask 0b101 raises two command-processor interrupts (source 1).
+  // A PM4 INTERRUPT with CPU mask 0b101 raises two command-processor interrupts (source 1), on CPUs 0 and 2.
   Ring ring{f, phys_alloc(0x10000), 1024};
   f.call("VdInitializeRingBuffer", ring.mem.phys, 9u);
   ring.put(Pm4Builder().type3(pm4::INTERRUPT, {0x5}));
@@ -304,7 +312,13 @@ TEST_CASE("vblank interrupt reaches the guest callback", "[unit][gpu]") {
   kernel().gpu().stop();
   {
     std::lock_guard<std::mutex> lock(m);
-    for (const auto& c : calls) CHECK(c.second == 0x40055980);
+    std::vector<uint32_t> command_cpus;
+    for (const auto& c : calls) {
+      CHECK(std::get<1>(c) == 0x40055980);
+      if (std::get<0>(c) == lr::gpu::kInterruptSourceVblank) CHECK(std::get<2>(c) == 2u);
+      if (std::get<0>(c) == lr::gpu::kInterruptSourceCommand) command_cpus.push_back(std::get<2>(c));
+    }
+    CHECK(command_cpus == std::vector<uint32_t>{0, 2});
   }
 }
 

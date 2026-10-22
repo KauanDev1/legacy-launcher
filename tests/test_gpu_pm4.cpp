@@ -8,6 +8,7 @@
 #include <cstring>
 #include <optional>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "runtime/gpu/null_backend.h"
@@ -32,7 +33,7 @@ struct Fixture {
   std::vector<uint8_t> mem = std::vector<uint8_t>(kMemSize, 0);
   RegisterFile regs;
   NullBackend backend;
-  std::vector<uint32_t> interrupts;
+  std::vector<std::pair<uint32_t, uint32_t>> interrupts;  // (source, cpu)
   uint32_t skew = 0;  // added to every translation (a broken mapping, for the alignment check)
   std::vector<uint32_t> translated;  // every physical address the processor asked to_guest about
   CommandProcessor cp{MemoryAccess{mem.data(),
@@ -42,7 +43,7 @@ struct Fixture {
                                      return phys + kPhysToGuest + skew;
                                    },
                                    kMemSize},
-                      regs, backend, [this](uint32_t source) { interrupts.push_back(source); }};
+                      regs, backend, [this](uint32_t source, uint32_t cpu) { interrupts.emplace_back(source, cpu); }};
 
   uint8_t* guest(uint32_t addr) { return mem.data() + addr; }
   uint8_t* phys(uint32_t addr) { return mem.data() + addr + kPhysToGuest; }
@@ -525,10 +526,10 @@ TEST_CASE("constant packets fill the register file", "[unit][gpu]") {
   CHECK(r.error().code == lr::ErrorCode::InvalidFormat);
 }
 
-TEST_CASE("INTERRUPT raises one command interrupt per CPU bit", "[unit][gpu]") {
+TEST_CASE("INTERRUPT raises one command interrupt per CPU bit, on that CPU", "[unit][gpu]") {
   Fixture f;
   Pm4Builder b;
   b.type3(pm4::INTERRUPT, {0b101});
   REQUIRE(f.run(b).ok());
-  CHECK(f.interrupts == std::vector<uint32_t>{1, 1});
+  CHECK(f.interrupts == std::vector<std::pair<uint32_t, uint32_t>>{{1, 0}, {1, 2}});
 }
