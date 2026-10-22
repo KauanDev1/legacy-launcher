@@ -49,6 +49,10 @@ target_compile_definitions(lr_vulkan_thirdparty PUBLIC VK_NO_PROTOTYPES
 target_link_libraries(lr_vulkan_thirdparty PUBLIC ${CMAKE_DL_LIBS})
 set_target_properties(lr_vulkan_thirdparty PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# SPIRV-Headers (Khronos): header-only, the enums the plan B translator's SpirvBuilder writes (runtime/gpu/shader).
+add_library(lr_spirv_headers INTERFACE)
+target_include_directories(lr_spirv_headers SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/SPIRV-Headers/include)
+
 add_subdirectory(src)
 add_subdirectory(tests)
 

@@ -146,7 +146,7 @@ config/            recompiler settings and expected file hashes for the supporte
 tests/             unit tests and integration tests that use a real disc
 tools/             reverse-engineering helper scripts
 assets/fonts/      launcher fonts
-thirdparty/        git submodules: XenonRecomp, Dear ImGui, Catch2, volk, VMA, Vulkan-Headers
+thirdparty/        git submodules: XenonRecomp, Dear ImGui, Catch2, volk, VMA, Vulkan-Headers, SPIRV-Headers
 docs/              format notes, reverse-engineering notes, decision records, specs and plans
 ```
 

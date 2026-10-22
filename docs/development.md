@@ -31,7 +31,8 @@ tools/dev/container.sh run [-- argumentos do jogo]
 ## Onde ficam as coisas
 
 - Imagem `legacyrecomp-dev` (Arch Linux com clang, cmake, ninja, SDL2, pkgconf, git, python, binutils, rsync e Vulkan: `mesa`, `vulkan-swrast` (lavapipe, o driver
-  por software usado nos testes `[vulkan]`), `vulkan-icd-loader`, `vulkan-validation-layers` e `vulkan-tools`). É reconstruída pelo Docker apenas quando o `Dockerfile` muda.
+  por software usado nos testes `[vulkan]`), `vulkan-icd-loader`, `vulkan-validation-layers` e `vulkan-tools`; mais `spirv-tools`, que traz o `spirv-val` e o
+  `spirv-dis` usados só nos testes do tradutor de shaders, por `tests/support/spirv_tools.h`, e nunca distribuídos). É reconstruída pelo Docker apenas quando o `Dockerfile` muda.
 - O repositório é montado somente leitura em `/src`. Os arquivos **rastreados pelo git** (incluindo
   submódulos) são sincronizados com `rsync --delete` para o volume `lr-build`, montado em `/work`;
   também entram os arquivos novos ainda não rastreados (que não estejam no `.gitignore`); arquivos rastreados mas apagados na árvore de trabalho não são copiados e saem do volume. O build fica em `/work/build/<preset>` e sobrevive

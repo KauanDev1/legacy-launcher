@@ -126,6 +126,9 @@ Result<Device> Device::create(const DeviceOptions& options) {
 #ifdef LR_HAVE_SDL2
   std::vector<const char*> sdl_exts;
 #endif
+  // VK_KHR_swapchain (enabled on every device, see check_floor) requires VK_KHR_surface on the instance; a window
+  // gets it from SDL below, a headless device asks for it here (VUID-vkCreateDevice-ppEnabledExtensionNames-01387).
+  if (options.headless && has_instance_ext(VK_KHR_SURFACE_EXTENSION_NAME)) exts.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
   if (!options.headless) {
 #ifdef LR_HAVE_SDL2
     if (!options.sdl_window)

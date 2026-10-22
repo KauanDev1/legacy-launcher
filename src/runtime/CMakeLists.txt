@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
-set(LR_RUNTIME_CORE_SOURCES guest_memory.cpp fault.cpp func_table.cpp loader.cpp xex_imports.cpp kernel/registry.cpp kernel/kernel.cpp kernel/glue.cpp guest_thread.cpp memory/page_heap.cpp memory/physical_heap.cpp kernel/exports/memory.cpp kernel/objects.cpp kernel/exports/objects.cpp kernel/variables.cpp kernel/dispatcher.cpp kernel/exports/sync.cpp kernel/threads.cpp kernel/exports/threads.cpp kernel/timers.cpp kernel/exports/time.cpp kernel/exports/critsec.cpp kernel/trace.cpp kernel/deadlock.cpp kernel/exports/debug.cpp kernel/vfs.cpp kernel/exports/vfs.cpp kernel/exports/files.cpp kernel/exports/lzx.cpp kernel/guest_printf.cpp kernel/exports/rtl.cpp kernel/exports/xex.cpp kernel/exports/config.cpp kernel/exports/crypto.cpp kernel/exports/xam.cpp kernel/exports/xam_ui.cpp kernel/exports/audio.cpp kernel/exports/video.cpp kernel/exports/net.cpp kernel/exports/msg.cpp kernel/exports/nui.cpp gpu/registers.cpp gpu/null_backend.cpp gpu/pm4.cpp gpu/mmio.cpp gpu/gpu_system.cpp gpu/shader_cache.cpp gpu/shader/ir.cpp gpu/shader/disasm.cpp)
+set(LR_RUNTIME_CORE_SOURCES guest_memory.cpp fault.cpp func_table.cpp loader.cpp xex_imports.cpp kernel/registry.cpp kernel/kernel.cpp kernel/glue.cpp guest_thread.cpp memory/page_heap.cpp memory/physical_heap.cpp kernel/exports/memory.cpp kernel/objects.cpp kernel/exports/objects.cpp kernel/variables.cpp kernel/dispatcher.cpp kernel/exports/sync.cpp kernel/threads.cpp kernel/exports/threads.cpp kernel/timers.cpp kernel/exports/time.cpp kernel/exports/critsec.cpp kernel/trace.cpp kernel/deadlock.cpp kernel/exports/debug.cpp kernel/vfs.cpp kernel/exports/vfs.cpp kernel/exports/files.cpp kernel/exports/lzx.cpp kernel/guest_printf.cpp kernel/exports/rtl.cpp kernel/exports/xex.cpp kernel/exports/config.cpp kernel/exports/crypto.cpp kernel/exports/xam.cpp kernel/exports/xam_ui.cpp kernel/exports/audio.cpp kernel/exports/video.cpp kernel/exports/net.cpp kernel/exports/msg.cpp kernel/exports/nui.cpp gpu/registers.cpp gpu/null_backend.cpp gpu/pm4.cpp gpu/mmio.cpp gpu/gpu_system.cpp gpu/shader_cache.cpp gpu/shader/ir.cpp gpu/shader/disasm.cpp gpu/shader/spirv_builder.cpp)
 add_library(lr_runtime_core STATIC ${LR_RUNTIME_CORE_SOURCES})
 target_include_directories(lr_runtime_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
-target_link_libraries(lr_runtime_core PUBLIC lr_common lr_formats PRIVATE XenonUtils)
+target_link_libraries(lr_runtime_core PUBLIC lr_common lr_formats lr_spirv_headers PRIVATE XenonUtils)
 lr_configure_target(lr_runtime_core)
 
 # --- Staging variant linked by the game template (share/legacyrecomp/runtime/lib/liblr_runtime_core.a) ---
@@ -17,7 +17,7 @@ list(TRANSFORM _lr_common_sources PREPEND "${_lr_common_dir}/")
 get_target_property(_lr_formats_dir lr_formats SOURCE_DIR)
 add_library(lr_runtime_core_staged STATIC ${LR_RUNTIME_CORE_SOURCES} ${_lr_common_sources} "${_lr_formats_dir}/xex2.cpp")
 target_include_directories(lr_runtime_core_staged PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
-target_link_libraries(lr_runtime_core_staged PRIVATE XenonUtils)
+target_link_libraries(lr_runtime_core_staged PRIVATE XenonUtils lr_spirv_headers)
 target_compile_options(lr_runtime_core_staged PRIVATE -Wall -Wextra -Wpedantic -Werror -O2)
 set_target_properties(lr_runtime_core_staged PROPERTIES
   OUTPUT_NAME lr_runtime_core

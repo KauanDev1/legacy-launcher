@@ -9,6 +9,7 @@
 #                                     the import thunks include, even transitively, must be here: the unit test
 #                                     template_compiles_with_staged_headers (tests/CMakeLists.txt) checks it
 #   runtime/include/simde/            SIMD Everywhere headers (ppc_context.h includes <x86/avx.h>)
+#   runtime/include/spirv/            SPIRV-Headers' spirv.hpp and GLSL.std.450.h (unified1/) and its LICENSE
 #   runtime/lib/                      liblr_runtime_core.a (sanitizer-free staged variant, see src/runtime),
 #                                     libXenonUtils.a. Not libdisasm.a: XenonUtils' PowerPC disassembler is
 #                                     GPL-2.0-or-later (binutils) and the game uses none of it (ADR 0002).
@@ -58,6 +59,11 @@ foreach(_h IN LISTS _lr_runtime_headers)
   list(APPEND _lr_runtime_files "src/${_h}=include/${_h}")
 endforeach()
 list(APPEND _lr_runtime_files "src/runtime/main.cpp=src/main.cpp" "src/runtime/template/CMakeLists.txt=template/CMakeLists.txt")
+# SPIRV-Headers: runtime/gpu/shader/spirv_builder.h includes <spirv/unified1/spirv.hpp>; with its license.
+set(_lr_spirv "thirdparty/SPIRV-Headers")
+list(APPEND _lr_runtime_files "${_lr_spirv}/include/spirv/unified1/spirv.hpp=include/spirv/unified1/spirv.hpp"
+  "${_lr_spirv}/include/spirv/unified1/GLSL.std.450.h=include/spirv/unified1/GLSL.std.450.h"
+  "${_lr_spirv}/LICENSE=include/spirv/LICENSE")
 foreach(_pair IN LISTS _lr_runtime_files)
   string(REPLACE "=" ";" _pair "${_pair}")
   list(GET _pair 0 _from)

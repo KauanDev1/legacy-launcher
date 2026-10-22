@@ -59,6 +59,7 @@ Dear ImGui                         MIT                                       leg
 volk (v1.4.309)                    MIT                                       not linked yet (M3)
 VulkanMemoryAllocator (v3.2.1)     MIT                                       not linked yet (M3)
 Vulkan-Headers (1.4.309)           Apache-2.0                                not linked yet (M3)
+SPIRV-Headers (1.4.363)            MIT (Khronos variant)                     runtime/include/spirv (headers)
 toml++                             MIT                                       launchers, XenonRecomp
 {fmt}                              MIT                                       launchers, tools
 xxHash (library)                   BSD-2-Clause                              XenonRecomp; runtime (inline XXH3)
@@ -127,6 +128,8 @@ section "Dear ImGui (MIT)" "$repo/thirdparty/imgui/LICENSE.txt"
 section "volk (MIT)" "$repo/thirdparty/volk/LICENSE.md"
 section "Vulkan Memory Allocator (MIT)" "$repo/thirdparty/VulkanMemoryAllocator/LICENSE.txt"
 section "Vulkan-Headers (Apache-2.0)" "$repo/thirdparty/Vulkan-Headers/LICENSES/Apache-2.0.txt"
+section "SPIRV-Headers (MIT, Khronos variant; the CC-BY-4.0 part covers only its .md files, not shipped)" \
+  "$repo/thirdparty/SPIRV-Headers/LICENSE"
 section "toml++ (MIT)" "$tp/tomlplusplus/LICENSE"
 section "{fmt} (MIT)" "$tp/fmt/LICENSE"
 section "xxHash library (BSD-2-Clause)" "$tp/xxHash/LICENSE"

@@ -16,3 +16,6 @@
 [submodule "thirdparty/Vulkan-Headers"]
 	path = thirdparty/Vulkan-Headers
 	url = https://github.com/KhronosGroup/Vulkan-Headers
+[submodule "thirdparty/SPIRV-Headers"]
+	path = thirdparty/SPIRV-Headers
+	url = https://github.com/KhronosGroup/SPIRV-Headers
