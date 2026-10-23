@@ -26,6 +26,9 @@ void Translator::declare_stage_interface() {
     b_.decorate(vertex_index_in_, spv::DecorationBuiltIn, {spv::BuiltInVertexIndex});
     position_out_ = global_var(spv::StorageClassOutput, t_.vec4, "position");
     b_.decorate(position_out_, spv::DecorationBuiltIn, {spv::BuiltInPosition});
+    // Invariant, with every float operation before it NoContraction: the same microcode gives the same position in
+    // every pipeline (multipass rendering depends on equal depths).
+    b_.decorate(position_out_, spv::DecorationInvariant);
     point_size_out_ = global_var(spv::StorageClassOutput, t_.f32, "point_size");
     b_.decorate(point_size_out_, spv::DecorationBuiltIn, {spv::BuiltInPointSize});
     // Always all 16 (64 components, the Vulkan minimum), so any PS links by register index; no interpolation
@@ -180,16 +183,16 @@ void Translator::emit_stage_epilogue() {
       const Id one = const_f(1.0f);
       Id w = extract(p, 3);
       w = b_.op(spv::OpSelect, t_.f32,
-                {flag(kVteW0NotReciprocal), w, b_.op(spv::OpFDiv, t_.f32, {one, w})});
+                {flag(kVteW0NotReciprocal), w, arith(spv::OpFDiv, t_.f32, {one, w})});
       const Id xy_scale = b_.op(spv::OpSelect, t_.f32, {flag(kVteXyDividedByW), w, one});
       const Id z_scale = b_.op(spv::OpSelect, t_.f32, {flag(kVteZDividedByW), w, one});
-      const Id x = b_.op(spv::OpFMul, t_.f32, {extract(p, 0), xy_scale});
-      const Id y = b_.op(spv::OpFMul, t_.f32, {extract(p, 1), xy_scale});
-      const Id z = b_.op(spv::OpFMul, t_.f32, {extract(p, 2), z_scale});
+      const Id x = arith(spv::OpFMul, t_.f32, {extract(p, 0), xy_scale});
+      const Id y = arith(spv::OpFMul, t_.f32, {extract(p, 1), xy_scale});
+      const Id z = arith(spv::OpFMul, t_.f32, {extract(p, 2), z_scale});
       const Id unscaled = b_.op(spv::OpCompositeConstruct, t_.vec4, {x, y, z, w});
-      const Id scaled = b_.op(spv::OpFMul, t_.vec4, {unscaled, load_shared(kSharedNdcScale)});
-      const Id offset = b_.op(spv::OpVectorTimesScalar, t_.vec4, {load_shared(kSharedNdcOffset), w});
-      position = b_.op(spv::OpCompositeInsert, t_.vec4, {w, b_.op(spv::OpFAdd, t_.vec4, {scaled, offset}), 3});
+      const Id scaled = arith(spv::OpFMul, t_.vec4, {unscaled, load_shared(kSharedNdcScale)});
+      const Id offset = arith(spv::OpVectorTimesScalar, t_.vec4, {load_shared(kSharedNdcOffset), w});
+      position = b_.op(spv::OpCompositeInsert, t_.vec4, {w, arith(spv::OpFAdd, t_.vec4, {scaled, offset}), 3});
     }
     b_.op_void(spv::OpStore, {position_out_, position});
     return;

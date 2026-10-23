@@ -14,10 +14,8 @@
 // Values that must dominate every later block (buffer pointers, CF state) are made in step 2/3, so the CF can put
 // the clauses in any blocks.
 //
-// Where later tasks plug in: the scalar unit in emit_alu (15.7, translator_alu.cpp; the vector unit is there already,
-// the scalar PRED_SET*s are in translator_cf.cpp until then), emit_fetch (15.8/15.9, translator_fetch.cpp; a predicated
-// fetch evaluates unconditionally and merges with OpSelect on pred_matches()). They report what they cannot translate
-// with unsupported().
+// Where later tasks plug in: emit_fetch (15.8/15.9, translator_fetch.cpp; a predicated fetch evaluates
+// unconditionally and merges with OpSelect on pred_matches()). It reports what it cannot translate with unsupported().
 #pragma once
 
 #include <array>
@@ -44,6 +42,28 @@ struct TempUse {
   bool relative = false;
 };
 TempUse referenced_temps(const Program& program);
+
+// The components an ALU instruction writes with each unit's result (the export masks on an export).
+inline uint32_t vector_result_mask(const AluInstr& a) {
+  return a.export_data ? a.export_vector_mask : a.vector_write_mask;
+}
+inline uint32_t scalar_result_mask(const AluInstr& a) {
+  return a.export_data ? a.export_scalar_mask : a.scalar_write_mask;
+}
+// Whether the vector unit runs: it writes something or has a side effect (predicate push, kill, a0).
+inline bool vector_unit_runs(const AluInstr& a) {
+  return vector_result_mask(a) != 0 || vector_op_has_side_effect(a.vector_op);
+}
+// Whether the scalar unit runs: every op but RETAIN_PREV runs whatever its write mask, because its result becomes the
+// previous scalar result `ps` (as in Xenia); RETAIN_PREV only when it writes ps somewhere.
+inline bool scalar_unit_runs(const AluInstr& a) {
+  return a.scalar_op != ScalarOp::RetainPrev || scalar_result_mask(a) != 0;
+}
+// Whether the scalar op reads ps.
+inline bool scalar_op_reads_ps(ScalarOp op) {
+  return op == ScalarOp::AddPrev || op == ScalarOp::MulPrev || op == ScalarOp::MulPrev2 || op == ScalarOp::SubPrev ||
+         op == ScalarOp::RetainPrev;
+}
 
 class Translator {
  public:
@@ -117,28 +137,32 @@ class Translator {
   Id pred_matches(bool condition);  // p0 == condition (for predicated instructions; fetches merge with OpSelect)
   Id bool_matches(uint32_t bool_index, bool condition);  // bool constant == condition
   Id current_al();                                       // aL (i32)
-  // A scalar PRED_SET{EQ,NE,GT,GE}s: the scalar result, and the new p0 (stored by the caller once the instruction's
-  // writes are done). The rest of the scalar unit is Task 15.7.
-  Result<std::pair<Id, Id>> emit_scalar_pred_set(uint32_t slot, const AluInstr& a);
 
   // --- ALU (translator_alu.cpp) ---
-  // What the vector unit produces: its result (0 when not issued), and the new p0 (PRED_SET*_PUSH) and a0 (MAXA),
-  // which emit_alu_unpredicated stores once the instruction's register writes are done (0 = unchanged).
-  struct VectorResult {
+  // What a unit produces: its result (0 when the unit does not run), and the new p0 (vector PRED_SET*_PUSH, scalar
+  // PRED_SET*) and a0 (MAXA, MOVA*), which emit_alu_unpredicated stores once the instruction's register writes are
+  // done (0 = unchanged).
+  struct UnitResult {
     Id value = 0, p0 = 0, a0 = 0;
   };
-  void scan_address_registers();  // translator.cpp: sets uses_a0_ / uses_al_constants_
-  void declare_alu_state();       // main's entry block: a0 when the program uses it
+  // translator.cpp: sets uses_a0_ / uses_al_constants_ / uses_ps_ from the sources and ops the running units use.
+  void scan_alu_state();
+  void declare_alu_state();  // main's entry block: a0 and ps when the program uses them
   Result<void> emit_alu(uint32_t slot, const AluInstr& a);  // predicated instructions run under an emit_if
   Result<void> emit_alu_unpredicated(uint32_t slot, const AluInstr& a);
-  Result<VectorResult> emit_vector_op(uint32_t slot, const AluInstr& a);
+  Result<UnitResult> emit_vector_op(uint32_t slot, const AluInstr& a);  // value: a vec4
+  Result<UnitResult> emit_scalar_op(uint32_t slot, const AluInstr& a);  // value: a float
   // Source i after relative addressing, swizzle, abs and negate (a vec4).
   Result<Id> load_source(uint32_t slot, const AluInstr& a, uint32_t i);
   // c[index + aL] or c[index + a0]: 0 when the sum is outside 0..255.
   Id load_relative_constant(const AluInstr& a, uint32_t reg);
+  // A float add, sub, mul, div, negate or vector-times-scalar, decorated NoContraction: the driver may not fuse it
+  // (into an FMA), so the same microcode gives the same bits in every pipeline (as Xenia does).
+  Id arith(spv::Op opcode, Id type, std::initializer_list<Id> operands);
   // The Xenos product a * b: +0 where either factor is 0 (even 0 * inf or NaN), except in the components of
   // `identical` (a bit mask), where both factors are the same operand and IEEE multiplication already agrees.
   Id xenos_mul(Id a, Id b, uint32_t identical);
+  Id xenos_mul_f32(Id a, Id b, bool identical);  // the same for two floats
 
   // --- fetch (Tasks 15.8/15.9) ---
   Result<void> emit_fetch(uint32_t slot, const FetchInstr& f);
@@ -191,7 +215,9 @@ class Translator {
   Id backward_ = 0;     // u32: backward branches taken (kCfBackwardBranchCap)
   Id ended_ = 0;        // straight-line form only: a conditional exec_end ended the shader
   Id a0_ = 0;           // i32 address register (0 when the program never uses it)
+  Id ps_ = 0;           // f32 previous scalar result (0 when no op reads it)
   bool uses_a0_ = false;            // MAXA, MOVA*, or an a0-relative constant
+  bool uses_ps_ = false;            // a *_PREV op or RETAIN_PREV runs
   bool uses_al_constants_ = false;  // an aL-relative constant (aL is declared even without loops)
   std::optional<Error> internal_error_;  // see record_internal()
 };

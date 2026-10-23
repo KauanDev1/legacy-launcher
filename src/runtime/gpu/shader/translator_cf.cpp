@@ -438,25 +438,6 @@ Id Translator::current_al() {
   return extract(b_.op(spv::OpLoad, t_.ivec4, {al_stack_}), 0, t_.i32);
 }
 
-Result<std::pair<Id, Id>> Translator::emit_scalar_pred_set(uint32_t slot, const AluInstr& a) {
-  // PRED_SET{EQ,NE,GT,GE}s compare operand a (src3's W after the swizzle) with 0: p0 = the comparison, and the
-  // result is 0.0 when it holds, 1.0 otherwise. NaN: only "not equal" holds.
-  LR_TRY_ASSIGN(src, load_source(slot, a, 2));
-  const Id x = extract(src, 3);
-  spv::Op compare = spv::OpFOrdEqual;
-  switch (a.scalar_op) {
-    case ScalarOp::PredSetEq: compare = spv::OpFOrdEqual; break;
-    case ScalarOp::PredSetNe: compare = spv::OpFUnordNotEqual; break;
-    case ScalarOp::PredSetGt: compare = spv::OpFOrdGreaterThan; break;
-    case ScalarOp::PredSetGe: compare = spv::OpFOrdGreaterThanEqual; break;
-    default: return unsupported(slot, "alu", "scalar op " + std::string(scalar_op_name(a.scalar_op)));
-  }
-  if (!p0_) return internal("predicate set before the control-flow state exists");
-  const Id p = b_.op(compare, t_.bool_, {x, const_f(0.0f)});
-  const Id result = b_.op(spv::OpSelect, t_.f32, {p, const_f(0.0f), const_f(1.0f)});
-  return std::pair<Id, Id>{result, p};
-}
-
 Result<void> Translator::emit_exec_clause(uint32_t, const CfInstr& c) {
   for (uint32_t k = 0; k < c.count; ++k) {
     const uint32_t slot = c.address + k;

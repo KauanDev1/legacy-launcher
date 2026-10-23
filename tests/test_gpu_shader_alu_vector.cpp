@@ -200,9 +200,10 @@ std::array<Pixel, 4> draw(ShaderHarness& h, const std::vector<Cf>& program, Harn
   return first;
 }
 
+// Component-wise ==, except that a NaN expects a NaN.
 void check_pixel(const Pixel& got, const Pixel& want) {
   INFO("got " << text(got) << ", want " << text(want));
-  CHECK(got == want);
+  for (uint32_t k = 0; k < 4; ++k) CHECK((std::isnan(want[k]) ? std::isnan(got[k]) : got[k] == want[k]));
 }
 
 }  // namespace
@@ -227,10 +228,10 @@ TEST_CASE("vector op table", "[unit][vulkan]") {
       {"ADD", xe::kVectorAdd, {1, 2, 3, 4}, {10, 20, 30, 40}, {}, {11, 22, 33, 44}},
       // a * b; 0 * inf = +0 (the factors are different operands)
       {"MUL", xe::kVectorMul, {1, 2, -3, 0}, {2, 3, 4, kInf}, {}, {2, 6, -12, 0}},
-      // a >= b ? a : b
-      {"MAX", xe::kVectorMax, {1, 5, -3, 0}, {2, 4, -4, 0}, {}, {2, 5, -3, 0}},
-      // a < b ? a : b
-      {"MIN", xe::kVectorMin, {1, 5, -3, 0}, {2, 4, -4, 0}, {}, {1, 4, -4, 0}},
+      // a >= b ? a : b: a NaN on either side picks b (NMax/FMax would drop the NaN in w)
+      {"MAX", xe::kVectorMax, {1, 5, kNan, 0}, {2, 4, -4, kNan}, {}, {2, 5, -4, kNan}},
+      // a < b ? a : b, likewise
+      {"MIN", xe::kVectorMin, {1, 5, kNan, 0}, {2, 4, -4, kNan}, {}, {1, 4, -4, kNan}},
       // a == b ? 1 : 0, NaN: 0
       {"SETE", xe::kVectorSetEq, {1, 2, 3, kNan}, {1, 3, 3, kNan}, {}, {1, 0, 1, 0}},
       // a > b ? 1 : 0
@@ -503,19 +504,23 @@ TEST_CASE("aL-relative destination register is written", "[unit][vulkan]") {
 TEST_CASE("swizzle and negate", "[unit][vulkan]") {
   ShaderHarness h = make_harness();
   HarnessInputs in;
-  in.color_targets = 3;
-  in.ps_constants = {{0, 0, 0, 0}, {1, 2, 3, 4}, {-10, 20, -30, 40}};
+  in.color_targets = 4;
+  in.ps_constants = {{0, 0, 0, 0}, {1, 2, 3, 4}, {-10, 20, -30, 40}, {-1, 2, -3, 4}};
   xe::Alu abs_constants = add(1, c(2), neg(c(1)), true);  // |c2| - c1
   abs_constants.abs_constants = true;
+  xe::Alu abs_negative = add(3, c(2), neg(c(3)), true);  // |c2| - |c3|: abs, then negate, on negative values too
+  abs_negative.abs_constants = true;
   const auto out = draw(h,
                         {exec_end({mov(2, c(1)), mov(3, c(2)),
                                    add(0, neg(r(2, kWZYX)), abs_(r(3)), true),  // -r2.wzyx + |r3|
                                    abs_constants,
-                                   add(2, neg(abs_(r(3))), c(0), true)})},  // -|r3|
+                                   add(2, neg(abs_(r(3))), c(0), true),  // -|r3|
+                                   abs_negative})},
                         in);
   check_pixel(out[0], {6, 17, 28, 39});
   check_pixel(out[1], {9, 18, 27, 36});
   check_pixel(out[2], {-10, -20, -30, -40});
+  check_pixel(out[3], {9, 18, 27, 36});
 }
 
 TEST_CASE("write mask keeps the other components", "[unit][vulkan]") {
@@ -593,7 +598,30 @@ TEST_CASE("kill ops discard the pixel", "[unit][vulkan]") {
     const float v = k.kills ? 0.0f : 1.0f;
     check_pixel(draw(h, {exec_end({masked(vop(k.op, 1, c(1), c(2)), 0), mov(0, c(3), true)})}, in)[0], {v, v, v, v});
   }
-  // The kill result is 1 when it kills (the pixel is discarded at the end, so later instructions still run).
+  {
+    // The kill result is 1.0 when it kills (ucode.h; Xenia returns 0.0). A vertex shader discards nothing and only
+    // gets the result: KILLE(c3, c3) = 1 and KILLGT(c3, c3) = 0 go to interpolator 0 x and y; the pixel shader exports
+    // floor(r0 + 0.5), so the interpolation's rounding cannot blur the value.
+    INFO("the kill result is 1.0 when it kills");
+    const auto vs = translate_ok(
+        ShaderStage::Vertex,
+        assemble({exec({mul(1, r(0, kXXXX), c(1)), mul(2, r(0, kXXXX), r(0, kXXXX)), mul(2, r(2), c(2)),
+                        add(1, r(1), r(2))}),
+                  exec_end({masked(vop(xe::kVectorKillEq, 3, c(3), c(3)), 0x1),
+                            masked(vop(xe::kVectorKillGt, 3, c(3), c(3)), 0x2), mov(0, r(3), true),
+                            add(sh::kExportVsPosition, r(1), c(0), true)})}));
+    const auto ps = translate_ok(
+        ShaderStage::Pixel,
+        assemble({exec_end({add(1, r(0), c(1)), vop(xe::kVectorFloor, 0, r(1), r(1), {}, true)})}));
+    HarnessInputs in;
+    in.vs_constants = fullscreen_constants();
+    in.vs_constants.push_back({7, 7, 7, 7});  // c3
+    in.ps_constants = {{0, 0, 0, 0}, {0.5f, 0.5f, 0.5f, 0.5f}};
+    auto res = h.draw(vs.spirv, ps.spirv, in);
+    if (!res) FAIL("draw: " << res.error().message);
+    for (const Pixel& p : res.value().color[0]) check_pixel(p, {1, 0, 0, 0});
+  }
+  // A single OpKill (the pixel is discarded at the end, so later instructions still run).
   if (lr::testing::spirv_tools_available()) {
     const auto ps = translate_ok(ShaderStage::Pixel,
                                  assemble({exec_end({vop(xe::kVectorKillEq, 1, c(1), c(2)), mov(0, r(1), true)})}));

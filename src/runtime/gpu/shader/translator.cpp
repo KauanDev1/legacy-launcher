@@ -64,10 +64,10 @@ TempUse referenced_temps(const Program& p) {
       if (a->vector_write_mask != 0 || vector_op_has_side_effect(a->vector_op))
         for (uint32_t i = 0; i < vector_op_source_count(a->vector_op); ++i)
           if (a->src[i].is_temp) note(a->src[i].reg, a->is_src_temp_relative[i]);
-      if (a->scalar_write_mask != 0 || scalar_op_has_side_effect(a->scalar_op)) {
+      if (scalar_op_operand_count(a->scalar_op) > 0) {  // every scalar op but RETAIN_PREV runs (it sets ps)
         if (scalar_op_is_const(a->scalar_op))
           note(a->scalar_const_temp, false);
-        else if (scalar_op_operand_count(a->scalar_op) > 0 && a->src[2].is_temp)
+        else if (a->src[2].is_temp)
           note(a->src[2].reg, a->is_src_temp_relative[2]);
       }
     } else {
@@ -79,19 +79,27 @@ TempUse referenced_temps(const Program& p) {
   return use;
 }
 
-void Translator::scan_address_registers() {
+void Translator::scan_alu_state() {
   for_each_exec_slot(program_, [&](uint32_t, const std::variant<AluInstr, FetchInstr>& s) {
     const auto* a = std::get_if<AluInstr>(&s);
     if (!a) return;
-    if (a->vector_op == VectorOp::MaxA || a->scalar_op == ScalarOp::MovA || a->scalar_op == ScalarOp::MovAFloor)
+    const bool vector_runs = vector_unit_runs(*a);
+    const bool scalar_runs = scalar_unit_runs(*a);
+    if ((vector_runs && a->vector_op == VectorOp::MaxA) ||
+        (scalar_runs && (a->scalar_op == ScalarOp::MovA || a->scalar_op == ScalarOp::MovAFloor)))
       uses_a0_ = true;
-    for (const AluSource& src : a->src) {
-      if (!src.const_relative) continue;
+    if (scalar_runs && scalar_op_reads_ps(a->scalar_op)) uses_ps_ = true;
+    // Only the sources the running units read: src1..n for the vector op, src3 for a scalar op with operands.
+    const auto note_constant = [&](uint32_t i) {
+      if (!a->src[i].const_relative) return;
       if (a->a0_rel)
         uses_a0_ = true;
       else
         uses_al_constants_ = true;
-    }
+    };
+    if (vector_runs)
+      for (uint32_t i = 0; i < vector_op_source_count(a->vector_op); ++i) note_constant(i);
+    if (scalar_runs && scalar_op_operand_count(a->scalar_op) > 0) note_constant(2);
   });
 }
 
@@ -272,7 +280,7 @@ Result<TranslatedShader> Translator::run() {
   if (program_.uses_memexport) return unsupported(0, "alu", "memexport (eA/eM)");
 
   temps_ = referenced_temps(program_);
-  scan_address_registers();
+  scan_alu_state();
   reg_count_ = std::max<uint32_t>(program_.temp_count, 1);
   if (temps_.relative) reg_count_ = kMaxTemps;
 

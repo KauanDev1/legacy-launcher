@@ -734,8 +734,33 @@ registrador, endereçamento, modificadores e componente do swizzle) dispensam o 
 `MAX`/`MIN` são `a >= b ? a : b` e `a < b ? a : b`; as comparações são ordenadas, menos "diferente" (NaN conta como
 diferente). `MAXA` devolve o máximo e põe em `a0` `clamp(floor(src0.w + 0,5), -256, 255)`. `CUBE` lê `src0.zzxy` e
 devolve `(tc, sc, 2·eixo maior, face)`, com empate a favor de Z e depois Y. `PRED_SET*_PUSH` escreve `p0` e os
-`KILL*` ligam a flag `killed`. As duas unidades leem as fontes antes de qualquer escrita; `a0` e `p0` são gravados
-depois dos registradores, `p0` por último (o da unidade escalar prevalece). Saturação: `NClamp` em 0..1 (NaN vira 0).
+`KILL*` ligam a flag `killed`. O resultado de um `KILL*` (vetorial ou escalar) é 1,0 quando mata e 0,0 senão, como
+diz o `ucode.h`; o tradutor SPIR-V do Xenia devolve 0,0 nos dois casos. As duas unidades leem as fontes antes de
+qualquer escrita; `a0` e `p0` são gravados depois dos registradores, `p0` por último (o da unidade escalar
+prevalece). Saturação: `NClamp` em 0..1 (NaN vira 0). Toda soma, subtração, multiplicação, divisão e negação de
+float da ALU (e da transformação da posição no epílogo) leva `NoContraction`, como no Xenia: o driver não pode
+fundi-las em FMA, e o mesmo microcódigo dá os mesmos bits em qualquer pipeline. A saída `Position` do VS é
+`Invariant`.
+
+**Unidade escalar da ALU** (`translator_alu.cpp`): os operandos são `a` = componente W de `src3` e `b` = componente X
+(depois do swizzle). As operações `*_CONST_0/1` leem `a` da constante `src3` e `b` do temporário cujo índice o
+decodificador monta com o bit 0 do opcode, o bit de seleção de `src3` e os bits 2..5 do swizzle de `src3`; a negação
+de `src3` e `abs_constants` valem para os dois, e a constante é o minuendo de `SUB_CONST`. Toda operação escalar
+menos `RETAIN_PREV` executa mesmo com máscara de escrita zero, porque o resultado vira o escalar anterior `ps`
+(guardado antes da saturação, como no Xenia; começa em 0); `RETAIN_PREV` devolve `ps`. Semântica (Xenia, `ucode.h`):
+`MULs`, `MUL_PREVs`, `MUL_PREV2s` e `MUL_CONST_0/1` seguem a regra do 0× (só `MULs` com `a` e `b` no mesmo
+componente dispensa o teste); `MUL_PREV2s` dá `-FLT_MAX` quando `ps` é `-FLT_MAX` ou não finito, ou quando `b` não
+é finito ou não é > 0; `MAXs`/`MINs` como os vetoriais; `SETEs/GTs/GTEs/NEs` comparam `a` com 0; `EXP_IEEE`,
+`LOG_*`, `RECIP_*`, `RECIPSQ_*`, `SQRT_IEEE`, `SIN` e `COS` (em radianos, sem escala) vêm do GLSL.std.450, com o
+valor exato em `a = 1` para log, recíproco e raiz recíproca; as variantes `_CLAMP` trocam ±inf por ±`FLT_MAX`
+(`LOG_CLAMP` só -inf) e as `_FF` por ±0. `MOVAs` e `MOVA_FLOORs` devolvem `max(a, b)` e põem em `a0`
+`clamp(floor(a + 0,5), -256, 255)` e `clamp(floor(a), -256, 255)`. Predicados: `PRED_SETE/NE/GT/GTEs` fazem
+`p0 = a <op> 0` e devolvem 0 quando vale, senão 1; `PRED_SET_INVs` faz `p0 = a == 1` e devolve 0, ou senão 1 se
+`a == 0` e `a` nos outros casos; `PRED_SET_POPs` faz `p0 = a - 1 <= 0` e devolve 0, ou senão `a - 1`;
+`PRED_SET_CLRs` zera `p0` e devolve `FLT_MAX`; `PRED_SET_RESTOREs` faz `p0 = a == 0` e devolve 0, ou senão `a`.
+`KILLE/GT/GTE/NE/ONEs` matam quando `a <op> 0` (`ONE`: `a == 1`). "Diferente" é não ordenada (NaN conta como
+diferente); as demais comparações são ordenadas. Resultados vetorial e escalar no mesmo registrador se combinam pela
+máscara de escrita (o vetorial é gravado primeiro).
 
 **Limites conhecidos do M3** (falham alto, salvo onde indicado): exportação de memória; o tamanho de ponto exportado
 é descartado (informado em `ShaderInfo`); fetches com LOD implícito dentro de um caso do `switch` de pc alcançado por
@@ -744,9 +769,9 @@ põe -0,0 (o bit de sinal marca linha), porque a chave não tem flag de linha (s
 desvios para trás terminam cedo (silencioso); o predicado é avaliado por invocação, não por wave: no hardware,
 `cond_exec_pred`, `cond_jmp`/`cond_call` predicados e a saída predicada do `loop_end` decidem uma vez para os 64
 lanes (qualquer lane / todos os lanes), e aqui, como no Xenia, cada invocação segue o próprio `p0` (silencioso); um
-`kill` num vertex shader só produz o resultado, sem descartar nada (silencioso). Até a Tarefa 15.6 o tradutor aceita
-todo o controle de fluxo, toda a unidade vetorial e, da unidade escalar, só `PRED_SETE/NE/GT/GTEs`; o resto (demais
-operações escalares e fetch) é um erro `is not supported` até as Tarefas 15.7 a 15.9.
+`kill` num vertex shader só produz o resultado, sem descartar nada (silencioso). Até a Tarefa 15.7 o tradutor aceita
+todo o controle de fluxo e toda a ALU (vetorial e escalar); o fetch é um erro `is not supported` até as Tarefas 15.8
+e 15.9.
 
 ## Diagnóstico
 

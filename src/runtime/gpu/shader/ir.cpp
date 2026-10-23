@@ -401,15 +401,17 @@ Result<AluInstr> Decoder::decode_alu(uint32_t slot, const uint32_t* w) {
     if (a.vector_write_mask != 0) note_temp(a.vector_dest, a.vector_dest_rel);
     if (a.scalar_write_mask != 0) note_temp(a.scalar_dest, a.scalar_dest_rel);
   }
-  // Sources the issued ops read.
+  // Sources the running units read. The scalar unit runs whatever its write mask (its result becomes the previous
+  // scalar result, ps), so a scalar op reads its operands even when it writes nothing; RETAIN_PREV and PRED_SET_CLRs
+  // read none.
   if (a.vector_write_mask != 0 || vector_op_has_side_effect(a.vector_op)) {
     for (uint32_t i = 0; i < vector_op_source_count(a.vector_op); ++i)
       if (a.src[i].is_temp) note_temp(a.src[i].reg, a.is_src_temp_relative[i]);
   }
-  if (a.scalar_write_mask != 0 || scalar_op_has_side_effect(a.scalar_op)) {
+  if (scalar_op_operand_count(a.scalar_op) > 0) {
     if (scalar_const)
       note_temp(a.scalar_const_temp, false);
-    else if (scalar_op_operand_count(a.scalar_op) > 0 && a.src[2].is_temp)
+    else if (a.src[2].is_temp)
       note_temp(a.src[2].reg, a.is_src_temp_relative[2]);
   }
   if (is_kill(a.vector_op) || is_kill(a.scalar_op)) p_.uses_kill = true;
