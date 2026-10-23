@@ -150,7 +150,11 @@ struct TextureCache::Impl {
   uint64_t created = 0, upload_count = 0;
   uint64_t resident_bytes = 0;
   std::set<std::string> logged;
+  std::map<VkFormat, bool> linear_ok;  // filterable() cache
   std::function<void()> after_hash_hook;  // tests: runs between the hash and the load (set_after_hash_hook)
+  // Flushes the frame's command stream (VkBackend): runs before this cache submits work, destroys an image or view
+  // or rewrites a descriptor, so commands recorded earlier never see the change and nothing pending is touched.
+  std::function<Result<void>()> before_gpu_work;
 
   Impl(const Device& d, MemoryAccess m, const std::atomic<bool>* s) : device(d), mem(std::move(m)), stop(s) {}
   Impl(const Impl&) = delete;
@@ -167,6 +171,15 @@ struct TextureCache::Impl {
     for (DescriptorHeap& h : heaps) destroy_descriptor_heap(d, h);
     if (fence) vkDestroyFence(d, fence, nullptr);
     if (pool) vkDestroyCommandPool(d, pool, nullptr);
+  }
+
+  bool filterable(VkFormat f) {
+    if (auto it = linear_ok.find(f); it != linear_ok.end()) return it->second;
+    VkFormatProperties props{};
+    vkGetPhysicalDeviceFormatProperties(device.physical_device(), f, &props);
+    const bool ok = (props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0;
+    linear_ok.emplace(f, ok);
+    return ok;
   }
 
   bool sampleable(VkFormat f) const {
@@ -231,7 +244,13 @@ struct TextureCache::Impl {
   }
 
   // --- command submission -------------------------------------------------------------------------------------------
+  Result<void> flush_others() {
+    if (before_gpu_work) return before_gpu_work();
+    return {};
+  }
+
   Result<void> begin() {
+    LR_TRY(flush_others());
     vkResetCommandBuffer(cmd, 0);
     VkCommandBufferBeginInfo b = make<VkCommandBufferBeginInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
     b.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -415,17 +434,23 @@ struct TextureCache::Impl {
     return {};
   }
 
-  void evict_for(uint64_t bytes) {
+  Result<void> evict_for(uint64_t bytes) {
+    bool flushed = false;
     while (resident_bytes + bytes > kTextureCacheBudget) {
       auto victim = entries.end();
       for (auto it = entries.begin(); it != entries.end(); ++it)
         if (it->second.last_use < frame && (victim == entries.end() || it->second.last_use < victim->second.last_use))
           victim = it;
-      if (victim == entries.end()) return;  // everything is in use this frame: go over the budget
+      if (victim == entries.end()) return {};  // everything is in use this frame: go over the budget
+      if (!flushed) {
+        LR_TRY(flush_others());
+        flushed = true;
+      }
       resident_bytes -= victim->second.footprint.host_bytes;
       destroy(victim->second);
       entries.erase(victim);
     }
+    return {};
   }
 
   Result<Entry*> create_entry(const TextureDesc& desc) {
@@ -443,7 +468,7 @@ struct TextureCache::Impl {
       }
     }
     LR_TRY_ASSIGN(fp, texture_footprint(desc, mem));  // validates the guest range and the host size first
-    evict_for(fp.host_bytes);
+    LR_TRY(evict_for(fp.host_bytes));
 
     Entry e;
     e.desc = desc;
@@ -509,6 +534,10 @@ struct TextureCache::Impl {
       return Error{ErrorCode::Internal,
                    "texture heap full (" + std::to_string(kTextureHeapSize - 1) + " views of one dimension)", ""};
     }
+    if (auto r = flush_others(); !r) {
+      vkDestroyImageView(device.device(), view, nullptr);
+      return r.error();
+    }
     v.heap_index = free.back();
     free.pop_back();
     write_descriptor(heap_of(e.desc), v.heap_index, v.view);
@@ -559,6 +588,7 @@ Result<void> TextureCache::bind(uint32_t fetch_slot, const TextureFetch& fetch_c
   slot = TextureHeapIndices{};
   LR_TRY_ASSIGN(found, impl_->resolve(fetch_constant));
   if (!found.second) return {};
+  slot.filter_linear = impl_->filterable(found.first->format);
   switch (heap_of(found.first->desc)) {
     case kHeap2D: slot.texture_2d = found.second->heap_index; break;
     case kHeap3D: slot.texture_3d = found.second->heap_index; break;
@@ -580,6 +610,10 @@ void TextureCache::invalidate_range(uint32_t phys, uint32_t size) {
 void TextureCache::begin_frame() { ++impl_->frame; }
 
 void TextureCache::set_after_hash_hook(std::function<void()> hook) { impl_->after_hash_hook = std::move(hook); }
+
+void TextureCache::set_before_gpu_work(std::function<Result<void>()> hook) {
+  impl_->before_gpu_work = std::move(hook);
+}
 
 VkDescriptorSetLayout TextureCache::set_layout(uint32_t set) const { return impl_->heaps[std::min(set, 2u)].layout; }
 VkDescriptorSet TextureCache::set(uint32_t set) const { return impl_->heaps[std::min(set, 2u)].set; }

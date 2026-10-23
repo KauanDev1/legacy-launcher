@@ -339,10 +339,9 @@ uint32_t RenderTarget::host_sample_mask(uint32_t guest_mask) const {
 struct Edram::Impl {
   const Device& device;
   const std::atomic<bool>* stop;
-
-  VkCommandPool pool = VK_NULL_HANDLE;
-  VkCommandBuffer cmd = VK_NULL_HANDLE;
-  VkFence fence = VK_NULL_HANDLE;
+  std::unique_ptr<CommandStream> own_stream;  // tests: no shared stream, flushed after every operation
+  CommandStream* stream = nullptr;
+  VkCommandBuffer cmd = VK_NULL_HANDLE;  // the stream's, while an operation records
   VkSampler sampler = VK_NULL_HANDLE;
   VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
   VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
@@ -358,9 +357,9 @@ struct Edram::Impl {
 
   std::vector<std::unique_ptr<RenderTarget>> targets;
   uint64_t uses = 0;
-  bool abandoned = false;  // a wait gave up (stop): its submission may still run, nothing more is submitted
   std::set<std::string> warned;
   std::function<void(uint32_t phys, uint32_t size)> on_write;
+  std::function<void(const RenderTarget&)> on_evict;
 
   Impl(const Device& d, const std::atomic<bool>* s) : device(d), stop(s) {}
   Impl(const Impl&) = delete;
@@ -368,6 +367,7 @@ struct Edram::Impl {
 
   ~Impl() {
     const VkDevice d = device.device();
+    if (stream) stream->drain();  // nothing recorded may still use a target
     if (d) vkDeviceWaitIdle(d);
     for (auto& t : targets) destroy_target(*t);
     if (staging) vmaDestroyBuffer(device.allocator(), staging, staging_alloc);
@@ -377,8 +377,7 @@ struct Edram::Impl {
     if (pipeline_layout) vkDestroyPipelineLayout(d, pipeline_layout, nullptr);
     if (set_layout) vkDestroyDescriptorSetLayout(d, set_layout, nullptr);
     if (sampler) vkDestroySampler(d, sampler, nullptr);
-    if (fence) vkDestroyFence(d, fence, nullptr);
-    if (pool) vkDestroyCommandPool(d, pool, nullptr);
+    own_stream.reset();
   }
 
   void warn_once(const std::string& msg) {
@@ -387,20 +386,6 @@ struct Edram::Impl {
 
   Result<void> init() {
     const VkDevice d = device.device();
-    VkCommandPoolCreateInfo cpci = make<VkCommandPoolCreateInfo>(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
-    cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    cpci.queueFamilyIndex = device.graphics_family();
-    if (VkResult r = vkCreateCommandPool(d, &cpci, nullptr, &pool); r != VK_SUCCESS)
-      return vk_error("vkCreateCommandPool", r);
-    VkCommandBufferAllocateInfo cbai =
-        make<VkCommandBufferAllocateInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
-    cbai.commandPool = pool;
-    cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cbai.commandBufferCount = 1;
-    if (VkResult r = vkAllocateCommandBuffers(d, &cbai, &cmd); r != VK_SUCCESS)
-      return vk_error("vkAllocateCommandBuffers", r);
-    VkFenceCreateInfo fci = make<VkFenceCreateInfo>(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
-    if (VkResult r = vkCreateFence(d, &fci, nullptr, &fence); r != VK_SUCCESS) return vk_error("vkCreateFence", r);
 
     VkSamplerCreateInfo sci = make<VkSamplerCreateInfo>(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
     sci.magFilter = sci.minFilter = VK_FILTER_NEAREST;
@@ -466,15 +451,11 @@ struct Edram::Impl {
     return {};
   }
 
-  // --- Command recording: one submission per operation, waited for on the spot ---
+  // --- Command recording: into the stream (the frame's command buffer, or the Edram's own) ---
 
   Result<void> begin() {
-    if (abandoned || (stop && stop->load(std::memory_order_acquire)))
-      return Error{ErrorCode::Cancelled, "EDRAM: the GPU is stopping", ""};
-    vkResetCommandBuffer(cmd, 0);
-    VkCommandBufferBeginInfo bi = make<VkCommandBufferBeginInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
-    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    if (VkResult r = vkBeginCommandBuffer(cmd, &bi); r != VK_SUCCESS) return vk_error("vkBeginCommandBuffer", r);
+    LR_TRY_ASSIGN(c, stream->begin());
+    cmd = c;
     full_barrier();
     return {};
   }
@@ -488,18 +469,9 @@ struct Edram::Impl {
                          nullptr, 0, nullptr);
   }
 
-  Result<void> submit() {
-    if (VkResult r = vkEndCommandBuffer(cmd); r != VK_SUCCESS) return vk_error("vkEndCommandBuffer", r);
-    VkSubmitInfo si = make<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
-    si.commandBufferCount = 1;
-    si.pCommandBuffers = &cmd;
-    if (VkResult r = vkQueueSubmit(device.graphics_queue(), 1, &si, fence); r != VK_SUCCESS)
-      return vk_error("vkQueueSubmit", r);
-    if (!wait_fence(device.device(), fence, stop)) {
-      abandoned = true;
-      return Error{ErrorCode::Cancelled, "EDRAM: submission abandoned, the GPU is stopping", ""};
-    }
-    vkResetFences(device.device(), 1, &fence);
+  // The end of an operation that does not need its result on the CPU: submitted now only on the Edram's own stream.
+  Result<void> done() {
+    if (own_stream) return stream->flush();
     return {};
   }
 
@@ -683,7 +655,7 @@ struct Edram::Impl {
       VkClearColorValue zero{};
       vkCmdClearColorImage(cmd, t->image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &ib.subresourceRange);
     }
-    LR_TRY(submit());
+    LR_TRY(done());
     guard.t = nullptr;
     return t;
   }
@@ -701,11 +673,13 @@ struct Edram::Impl {
         return t.get();
       }
     if (targets.size() >= edram::kMaxRenderTargets) {
-      // Every operation waits for its own submission, so the device no longer uses the evicted image.
+      // Recorded commands may still use the evicted image: its destruction waits for the next completed flush.
       auto lru = std::min_element(targets.begin(), targets.end(),
                                   [](const auto& a, const auto& b) { return a->last_use < b->last_use; });
-      destroy_target(**lru);
+      if (on_evict) on_evict(**lru);
+      std::shared_ptr<RenderTarget> victim(std::move(*lru));
       targets.erase(lru);
+      stream->defer([this, victim] { destroy_target(*victim); });
     }
     LR_TRY_ASSIGN(t, create_target(*key));
     t->last_use = ++uses;
@@ -756,7 +730,7 @@ struct Edram::Impl {
     if (color_rt)
       record_clear(*color_rt, rect, clear_value(color_rt->key, regs.read(RB_COLOR_CLEAR), regs.read(RB_COLOR_CLEAR_LO)));
     if (depth_rt) record_clear(*depth_rt, rect, clear_value(depth_rt->key, regs.read(RB_DEPTH_CLEAR), 0));
-    return submit();
+    return done();
   }
 
   // --- Resolves ---
@@ -920,7 +894,7 @@ struct Edram::Impl {
     mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &mb, 0, nullptr,
                          0, nullptr);
-    LR_TRY(submit());
+    LR_TRY(stream->flush());  // the guest bytes are needed now
     if (VkResult vr = vmaInvalidateAllocation(device.allocator(), staging_alloc, 0, len); vr != VK_SUCCESS)
       return vk_error("vmaInvalidateAllocation", vr);
     std::memcpy(guest_bytes, staging_map, len);
@@ -940,8 +914,16 @@ struct Edram::Impl {
   }
 };
 
-Result<std::unique_ptr<Edram>> Edram::create(const Device& device, const std::atomic<bool>* stop) {
+Result<std::unique_ptr<Edram>> Edram::create(const Device& device, const std::atomic<bool>* stop,
+                                             CommandStream* stream) {
   auto impl = std::make_unique<Impl>(device, stop);
+  if (stream) {
+    impl->stream = stream;
+  } else {
+    LR_TRY_ASSIGN(own, CommandStream::create(device, stop));
+    impl->own_stream = std::move(own);
+    impl->stream = impl->own_stream.get();
+  }
   LR_TRY(impl->init());
   return std::unique_ptr<Edram>(new Edram(std::move(impl)));
 }
@@ -961,6 +943,10 @@ std::size_t Edram::render_target_count() const { return impl_->targets.size(); }
 
 void Edram::set_write_observer(std::function<void(uint32_t phys, uint32_t size)> observer) {
   impl_->on_write = std::move(observer);
+}
+
+void Edram::set_evict_observer(std::function<void(const RenderTarget& target)> observer) {
+  impl_->on_evict = std::move(observer);
 }
 
 }  // namespace lr::gpu::vk

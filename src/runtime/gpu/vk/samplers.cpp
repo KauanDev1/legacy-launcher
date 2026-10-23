@@ -182,8 +182,14 @@ struct SamplerCache::Impl {
     vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
   }
 
-  uint32_t heap_index(const TextureFetch& f) {
-    const VkSamplerCreateInfo ci = sampler_create_info(f, limits);
+  uint32_t heap_index(const TextureFetch& f, bool nearest_only) {
+    VkSamplerCreateInfo ci = sampler_create_info(f, limits);
+    if (nearest_only) {
+      ci.magFilter = ci.minFilter = VK_FILTER_NEAREST;
+      ci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+      ci.anisotropyEnable = VK_FALSE;
+      ci.maxAnisotropy = 1.0f;
+    }
     const SamplerKey key = key_of(ci);
     if (auto it = indices.find(key); it != indices.end()) return it->second;
     if (samplers.size() + 1 >= kSamplerHeapSize) {
@@ -226,7 +232,9 @@ Result<std::unique_ptr<SamplerCache>> SamplerCache::create(const Device& device)
 SamplerCache::SamplerCache(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 SamplerCache::~SamplerCache() = default;
 
-uint32_t SamplerCache::heap_index(const TextureFetch& fetch_constant) { return impl_->heap_index(fetch_constant); }
+uint32_t SamplerCache::heap_index(const TextureFetch& fetch_constant, bool nearest_only) {
+  return impl_->heap_index(fetch_constant, nearest_only);
+}
 VkDescriptorSetLayout SamplerCache::set_layout() const { return impl_->heap.layout; }
 VkDescriptorSet SamplerCache::set() const { return impl_->heap.set; }
 std::size_t SamplerCache::size() const { return impl_->samplers.size(); }

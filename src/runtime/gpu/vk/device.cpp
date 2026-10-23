@@ -262,6 +262,26 @@ Result<Device> Device::create(const DeviceOptions& options) {
     vkGetPhysicalDeviceFeatures2(dev.physical_, &have2);
     dev.sampler_anisotropy_ = have2.features.samplerAnisotropy == VK_TRUE;
     dev.mirror_clamp_to_edge_ = have12.samplerMirrorClampToEdge == VK_TRUE;
+    dev.geometry_shader_ = have2.features.geometryShader == VK_TRUE;
+    dev.fill_mode_non_solid_ = have2.features.fillModeNonSolid == VK_TRUE;
+    dev.independent_blend_ = have2.features.independentBlend == VK_TRUE;
+    // VK_EXT_provoking_vertex: flat interpolants from the last vertex (PA_SU_SC_MODE_CNTL.provoking_vtx_last).
+    std::uint32_t n = 0;
+    vkEnumerateDeviceExtensionProperties(dev.physical_, nullptr, &n, nullptr);
+    std::vector<VkExtensionProperties> ext(n);
+    vkEnumerateDeviceExtensionProperties(dev.physical_, nullptr, &n, ext.data());
+    const bool has_provoking = std::any_of(ext.begin(), ext.end(), [](const VkExtensionProperties& p) {
+      return std::strcmp(p.extensionName, VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME) == 0;
+    });
+    if (has_provoking) {
+      VkPhysicalDeviceProvokingVertexFeaturesEXT pv{};
+      pv.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT;
+      VkPhysicalDeviceFeatures2 f2{};
+      f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+      f2.pNext = &pv;
+      vkGetPhysicalDeviceFeatures2(dev.physical_, &f2);
+      dev.provoking_vertex_last_ = pv.provokingVertexLast == VK_TRUE;
+    }
   }
   VkPhysicalDeviceVulkan12Features en12{};
   en12.samplerMirrorClampToEdge = dev.mirror_clamp_to_edge_ ? VK_TRUE : VK_FALSE;
@@ -276,6 +296,13 @@ Result<Device> Device::create(const DeviceOptions& options) {
   en2.features.textureCompressionBC = VK_TRUE;
   en2.features.shaderSampledImageArrayDynamicIndexing = VK_TRUE;  // translated tfetch: heaps indexed by the shared block
   en2.features.samplerAnisotropy = dev.sampler_anisotropy_ ? VK_TRUE : VK_FALSE;
+  en2.features.geometryShader = dev.geometry_shader_ ? VK_TRUE : VK_FALSE;  // rect lists (draw path)
+  en2.features.fillModeNonSolid = dev.fill_mode_non_solid_ ? VK_TRUE : VK_FALSE;
+  en2.features.independentBlend = dev.independent_blend_ ? VK_TRUE : VK_FALSE;
+  VkPhysicalDeviceProvokingVertexFeaturesEXT en_pv{};
+  en_pv.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT;
+  en_pv.provokingVertexLast = VK_TRUE;
+  if (dev.provoking_vertex_last_) en12.pNext = &en_pv;
 
   const float priority = 1.0f;
   VkDeviceQueueCreateInfo qci{};
@@ -283,13 +310,13 @@ Result<Device> Device::create(const DeviceOptions& options) {
   qci.queueFamilyIndex = dev.family_;
   qci.queueCount = 1;
   qci.pQueuePriorities = &priority;
-  const char* dev_exts[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+  const char* dev_exts[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME};
   VkDeviceCreateInfo dci{};
   dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
   dci.pNext = &en2;
   dci.queueCreateInfoCount = 1;
   dci.pQueueCreateInfos = &qci;
-  dci.enabledExtensionCount = 1;
+  dci.enabledExtensionCount = dev.provoking_vertex_last_ ? 2 : 1;
   dci.ppEnabledExtensionNames = dev_exts;
   const VkResult dr = vkCreateDevice(dev.physical_, &dci, nullptr, &dev.device_);
   if (dr != VK_SUCCESS)
@@ -331,6 +358,10 @@ Device& Device::operator=(Device&& o) noexcept {
     limits_ = o.limits_;
     sampler_anisotropy_ = o.sampler_anisotropy_;
     mirror_clamp_to_edge_ = o.mirror_clamp_to_edge_;
+    geometry_shader_ = o.geometry_shader_;
+    fill_mode_non_solid_ = o.fill_mode_non_solid_;
+    independent_blend_ = o.independent_blend_;
+    provoking_vertex_last_ = o.provoking_vertex_last_;
   }
   return *this;
 }

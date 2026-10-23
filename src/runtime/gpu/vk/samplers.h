@@ -64,8 +64,10 @@ class SamplerCache {
 
   // The heap index of the fetch constant's sampler, created and written to the heap on first use. Equal sampler
   // states share one entry. A full heap (kSamplerHeapSize distinct states) or a failed vkCreateSampler returns 0, the
-  // default sampler (nearest, clamp to edge), with one warning on stderr.
-  uint32_t heap_index(const TextureFetch& fetch_constant);
+  // default sampler (nearest, clamp to edge), with one warning on stderr. `nearest_only`: the texture's format
+  // cannot be filtered linearly (TextureHeapIndices::filter_linear false), so the filters become nearest and
+  // anisotropy is off (a distinct entry; Vulkan forbids linear filtering of such a view).
+  uint32_t heap_index(const TextureFetch& fetch_constant, bool nearest_only = false);
 
   VkDescriptorSetLayout set_layout() const;  // set 3: binding 0, kSamplerHeapSize samplers, partially bound
   VkDescriptorSet set() const;

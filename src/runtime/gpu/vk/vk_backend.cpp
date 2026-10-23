@@ -13,6 +13,7 @@
 #include "runtime/gpu/vk/edram.h"
 #include "runtime/gpu/vk/presenter.h"
 #include "runtime/gpu/vk/samplers.h"
+#include "runtime/gpu/vk/stream.h"
 #include "runtime/gpu/vk/textures.h"
 #include "runtime/gpu/texture_format.h"
 #include "vk_mem_alloc.h"
@@ -39,6 +40,8 @@ struct VkBackend::Impl {
   // Declaration order is destruction order reversed: the presenter goes before the device it uses.
   Device device;
   std::optional<Presenter> presenter;
+  // The frame's command stream (draws, EDRAM clears and resolves): created before and destroyed after its users.
+  std::unique_ptr<CommandStream> stream;
   std::unique_ptr<Edram> edram;  // render targets, clears and resolves (Task 18); destroyed before the device
   std::unique_ptr<TextureCache> textures;  // Task 19; Task 20's draws bind through it
   std::unique_ptr<SamplerCache> samplers;
@@ -74,6 +77,7 @@ struct VkBackend::Impl {
 
   ~Impl() {
     const VkDevice d = device.device();
+    if (stream) stream->drain();
     if (d) vkDeviceWaitIdle(d);
     if (frame) vmaDestroyImage(device.allocator(), frame, frame_alloc);
     if (staging) vmaDestroyBuffer(device.allocator(), staging, staging_alloc);
@@ -82,6 +86,7 @@ struct VkBackend::Impl {
     edram.reset();
     samplers.reset();
     textures.reset();
+    stream.reset();
     presenter.reset();  // then ~Device (vkDeviceWaitIdle first)
   }
 
@@ -189,6 +194,12 @@ struct VkBackend::Impl {
 
   void swap(const RegisterFile& regs, uint32_t phys, uint32_t w, uint32_t h) {
     if (abandoned || stopping.load(std::memory_order_acquire)) return;
+    // The frame's recorded work is submitted and complete before the next frame starts.
+    if (auto r = stream->flush(); !r) {
+      if (r.error().code != ErrorCode::Cancelled)
+        std::fprintf(stderr, "error: [gpu] swap: %s\n", r.error().message.c_str());
+      return;
+    }
     const uint64_t n = ++swaps;
     present_front_buffer(regs, phys, w, h);
     if (textures) textures->begin_frame();
@@ -235,10 +246,13 @@ Result<std::unique_ptr<VkBackend>> VkBackend::create(VkBackendOptions options) {
   LR_TRY_ASSIGN(device, Device::create(dopts));
   auto impl = std::make_unique<Impl>(std::move(device));
   LR_TRY(impl->init());
-  LR_TRY_ASSIGN(edram, Edram::create(impl->device, &impl->stopping));
+  LR_TRY_ASSIGN(stream, CommandStream::create(impl->device, &impl->stopping));
+  impl->stream = std::move(stream);
+  LR_TRY_ASSIGN(edram, Edram::create(impl->device, &impl->stopping, impl->stream.get()));
   impl->edram = std::move(edram);
   LR_TRY_ASSIGN(textures, TextureCache::create(impl->device, options.mem, &impl->stopping));
   impl->textures = std::move(textures);
+  impl->textures->set_before_gpu_work([stream = impl->stream.get()] { return stream->flush(); });
   LR_TRY_ASSIGN(samplers, SamplerCache::create(impl->device));
   impl->samplers = std::move(samplers);
   impl->edram->set_write_observer([cache = impl->textures.get()](uint32_t phys, uint32_t size) {
@@ -276,7 +290,9 @@ void VkBackend::swap(const RegisterFile& regs, uint32_t frontbuffer_phys, uint32
 uint64_t VkBackend::textures_created() const { return impl_ && impl_->textures ? impl_->textures->textures_created() : 0; }
 
 void VkBackend::wait_idle() {
-  if (impl_) vkQueueWaitIdle(impl_->device.graphics_queue());
+  if (!impl_) return;
+  if (!impl_->abandoned && !impl_->stopping.load(std::memory_order_acquire)) (void)impl_->stream->flush();
+  vkQueueWaitIdle(impl_->device.graphics_queue());
 }
 
 void VkBackend::request_stop() {

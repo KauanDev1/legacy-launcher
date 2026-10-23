@@ -16,8 +16,10 @@
 // No page protection: it would have to coexist with recompiled code writing guest memory and with the fault
 // handler. A CPU write between two draws of the same frame is seen only in the next frame.
 //
-// Thread-safety: GPU thread only. Uploads and read-backs are submitted and waited for on the spot (Task 20 folds them
-// into the frame's command stream).
+// Thread-safety: GPU thread only. Uploads and read-backs are submitted and waited for on the spot, after the
+// before-GPU-work hook flushed the frame's command stream (Task 20): an upload is rare once a texture is resident,
+// and it keeps re-uploads into an existing image, evictions and descriptor rewrites ordered after the draws that
+// used the old contents.
 #pragma once
 
 #include <atomic>
@@ -49,6 +51,9 @@ struct TextureHeapIndices {
   uint32_t texture_2d = 0;
   uint32_t texture_3d = 0;
   uint32_t texture_cube = 0;
+  // The view's format supports linear filtering (VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT); false: the
+  // draw asks the sampler cache for a nearest-only sampler, as Vulkan requires.
+  bool filter_linear = true;
   bool operator==(const TextureHeapIndices&) const = default;
 };
 
@@ -79,6 +84,10 @@ class TextureCache {
   // Tests only: `hook` runs during every (re)load, after the guest bytes were hashed and before they are read (to
   // write guest memory at the worst moment deterministically).
   void set_after_hash_hook(std::function<void()> hook);
+  // Task 20: called before the cache submits work of its own, destroys an image or view, or rewrites a heap
+  // descriptor (VkBackend flushes the frame's command stream there, so earlier draws are submitted and complete
+  // first and no descriptor is rewritten while a command buffer using it is pending). An error is returned as is.
+  void set_before_gpu_work(std::function<Result<void>()> hook);
 
   VkDescriptorSetLayout set_layout(uint32_t set) const;  // contract set 0, 1 or 2
   VkDescriptorSet set(uint32_t set) const;

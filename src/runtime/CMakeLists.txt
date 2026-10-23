@@ -42,7 +42,7 @@ target_include_directories(lr_runtime_core_staged SYSTEM PRIVATE ${LR_STB_INCLUD
 # presenter writes PNGs through gpu/screenshot.cpp); lr_vulkan does not link it itself, so a consumer can take it
 # --whole-archive (the game, lr_tests, lr_fake_game).
 set(LR_VULKAN_SOURCES gpu/vk/device.cpp gpu/vk/presenter.cpp gpu/vk/vk_backend.cpp gpu/vk/edram.cpp gpu/vk/textures.cpp
-  gpu/vk/samplers.cpp)
+  gpu/vk/samplers.cpp gpu/vk/stream.cpp)
 add_library(lr_vulkan STATIC ${LR_VULKAN_SOURCES})
 target_include_directories(lr_vulkan PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(lr_vulkan PUBLIC lr_common lr_vulkan_thirdparty)

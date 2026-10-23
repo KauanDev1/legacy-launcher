@@ -658,7 +658,10 @@ um erro do próprio tradutor também vira `Result`, nunca `abort`. Com um backen
 O piso do dispositivo (`Device::create`) é o das restrições globais mais `maxVertexOutputComponents` e
 `maxFragmentInputComponents` ≥ 64 (16 interpoladores de 4 componentes, o mínimo garantido pelo Vulkan), conferidos
 por `check_device_limits`, uma função pura sobre `VkPhysicalDeviceLimits`. Antes de destruir qualquer coisa, o
-`Device` espera o dispositivo ficar ocioso (`vkDeviceWaitIdle`).
+`Device` espera o dispositivo ficar ocioso (`vkDeviceWaitIdle`). Recursos opcionais, ligados quando existem (fora do
+piso): `samplerAnisotropy` e `samplerMirrorClampToEdge` (texturas), `geometryShader` (listas de retângulos),
+`fillModeNonSolid` (modos de polígono de `PA_SU_SC_MODE_CNTL`), `independentBlend` (blend por alvo) e a extensão
+`VK_EXT_provoking_vertex` com `provokingVertexLast` (interpolantes flat do último vértice).
 
 **Swap.** O `resolve` vai para a emulação da EDRAM (seção "EDRAM"); `draw` e `load_shader` ainda não fazem nada
 (o desenho chega nas Tarefas 20 e 21), e `binds_shaders()` continua falso até a Tarefa 20. Em cada
@@ -769,8 +772,11 @@ alvo e do destino, como no D3D9. A cópia é um compute shader (`resolve_{color,
 buffer que espelha a faixa da memória do convidado tocada (os macrotiles 32×32 inteiros, do primeiro ao último).
 Esse buffer chega preenchido com os bytes atuais do convidado e volta inteiro depois. É uma leitura-modificação-escrita
 de macrotiles inteiros: bytes desses macrotiles fora do retângulo voltam com o valor lido logo antes, então uma
-escrita da CPU neles durante o resolve se perde. Cada operação é gravada,
-enviada e esperada na hora; a Tarefa 20 junta isso ao fluxo de desenho.
+escrita da CPU neles durante o resolve se perde. Tudo é gravado no fluxo de comandos do quadro (`CommandStream`, ver
+"Fluxo de comandos" abaixo): limpezas e a inicialização de render targets ficam no command buffer do quadro, depois
+dos draws gravados antes delas; o resolve grava a cópia ali e envia e espera o fluxo, porque os bytes do convidado
+precisam estar na CPU quando ele volta. Sem fluxo compartilhado (os testes), a `Edram` tem um próprio e o envia ao fim
+de cada operação.
 
 **Segurança.** Base, pitch e tamanho vêm do convidado. A faixa é limitada ao tamanho da memória do convidado, ao
 espaço físico de 512 MiB, a 64 MiB por resolve e ao fim da alocação física que contém o primeiro byte
@@ -787,8 +793,8 @@ aparecer. A Tarefa 19 a reaproveita.
 
 **A reconfirmar na Tarefa 20.** A ordem das metades da palavra de limpeza de 64 bits (`RB_COLOR_CLEAR` como os 32 bits
 de baixo, `RB_COLOR_CLEAR_LO` como os de cima, como o Xenia junta) ainda não foi vista num jogo. A destruição LRU
-de render targets supõe que cada operação já terminou na GPU; quando a Tarefa 20 juntar o trabalho num command
-buffer por quadro, a destruição tem de esperar o fim do uso da imagem.
+de render targets passa por `CommandStream::defer`: a imagem só é destruída depois que o envio que a usa terminou, e o
+observador de despejo (`Edram::set_evict_observer`) avisa antes, para o fluxo de desenho esquecer os framebuffers dela.
 
 ## Texturas (M3, Tarefa 19)
 
@@ -880,8 +886,12 @@ outros dois para o índice 0, que em todo heap é uma textura nula 1×1 zerada q
 ou sem endereço, ou um `bind` que falhou, deixa os três em 0. A Tarefa 20 escreve esses índices nas tabelas do bloco
 compartilhado. Cada heap tem 4096 descritores (`kTextureHeapSize`), partially bound e update-after-bind; um descritor
 liberado volta a apontar para a textura nula. Acima de 1 GiB de dados no host, as texturas não usadas no quadro atual
-saem primeiro (LRU). Envios e leituras de volta são gravados, enviados e esperados na hora (a Tarefa 20 os junta ao
-fluxo do quadro).
+saem primeiro (LRU). Envios e leituras de volta são gravados, enviados e esperados na hora, mas antes o gancho
+`set_before_gpu_work` envia e espera o fluxo de comandos do quadro: todo envio, destruição de imagem ou view e
+regravação de descritor do cache acontece com a GPU parada, depois dos draws gravados antes (ver "Fluxo de comandos").
+`TextureHeapIndices::filter_linear` diz se o formato da view aceita filtro linear
+(`VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT`); quando não aceita, o draw pede ao `SamplerCache` a variante só
+nearest (`heap_index(fetch, nearest_only)`), como o Vulkan exige.
 
 **Invalidação: hash por textura, não proteção de página.** Cada textura guarda um XXH3-64 dos bytes que cobre (só a
 faixa do nível base e a dos mips) e o compara na primeira vez que é usada em cada quadro (`begin_frame`, chamado a cada
@@ -907,18 +917,16 @@ sempre normalizadas. O `SamplerCache` cria um `VkSampler` por estado distinto e 
 `samplerMirrorClampToEdge` são opcionais: o `Device` os liga quando existem (não entram no piso).
 
 **Para a Tarefa 20** (o que o cache ainda supõe e o fluxo de desenho precisa resolver):
-- destruição por LRU e reenvio numa imagem existente só depois da fence do quadro que a usa (hoje tudo é esperado na
-  hora, então nada está em voo);
-- reuso de índices dos heaps enquanto um command buffer pendente pode lê-los: ou
-  `VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT` com reciclagem adiada dos índices liberados, ou gravações de
-  descritor adiadas para depois da fence;
+- resolvido pelo fluxo de comandos: destruição por LRU, reenvio numa imagem existente e reuso de índices dos heaps
+  só acontecem depois que o gancho `set_before_gpu_work` enviou e esperou o command buffer do quadro, então nenhum
+  descritor é regravado enquanto um command buffer que o usa está pendente;
+- resolvido: filtro linear num formato sem `VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT` vira nearest
+  (`filter_linear`, `nearest_only`);
 - `bind` de toda fetch constant usada a cada draw (os registradores mudam entre draws; `heap_index` só guarda o último
   `bind`);
 - erro de `bind` (formato não suportado, com sinal, fora da memória, grande demais) vira `guest_fatal` (saída 5);
 - filtros por instrução do `tfetch` (`mag/min/mip/aniso_filter` diferentes de "da fetch constant") hoje são ignorados
   pelo tradutor; se o jogo os usar, o sampler precisa da sobreposição;
-- filtro linear num formato sem `VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT` (por exemplo `R32_SFLOAT` em
-  alguns dispositivos) precisa virar nearest;
 - opcionalmente, refazer o hash quando a fetch constant de uma textura é reescrita no meio do quadro (escrita da CPU
   entre draws do mesmo quadro).
 
@@ -933,6 +941,32 @@ dispositivo; com o lavapipe e a camada de validação (`[unit][vulkan]`): `equal
 one image and two views`, `modified guest memory invalidates the texture` e `a guest write during a load is never left
 stale`. O teste do jogo falso `tiled front buffer
 frame is captured` pinta o front buffer em tiles com um padrão por pixel e confere a captura inteira.
+
+## Fluxo de comandos (M3, Tarefa 20)
+
+`runtime/gpu/vk/stream.h` (`CommandStream`). Um command buffer compartilhado pelos draws, pelas limpezas e resolves
+da EDRAM e pela inicialização dos render targets, enviado em pontos de sincronização em vez de uma vez por operação.
+O envio (`flush`) submete o que foi gravado e espera a fence; acontece no resolve (os bytes do convidado precisam
+estar na CPU), no swap, no `wait_idle`, antes de todo trabalho próprio do cache de texturas (gancho
+`TextureCache::set_before_gpu_work`) e quando o anel de envio do desenho enche. Depois de um envio, a GPU não usa
+mais nada gravado antes, o que deixa as regras de tempo de vida simples:
+
+- tudo que um comando gravado pode usar é destruído por `defer`: roda depois do próximo envio concluído (na hora,
+  quando nada está gravado). O despejo LRU de render targets da EDRAM passa por aí;
+- uma regravação de descritor ou um reenvio de textura que comandos já gravados não podem ver vem depois de um
+  envio (o gancho do cache de texturas), então nenhum descritor é atualizado enquanto um command buffer que o usa
+  está pendente: todo envio é esperado antes da próxima mudança no host. Os heaps continuam update-after-bind,
+  porque um índice novo pode ser gravado enquanto o command buffer do quadro ainda está sendo gravado (nunca
+  enviado);
+- só um render pass fica aberto por vez: `begin()` o fecha (transferências, limpezas e compute ficam fora de render
+  passes) e `begin_render_pass()` mantém o aberto quando pedem o mesmo par (render pass, framebuffer).
+
+`request_stop` faz a espera da fence desistir (`Cancelled`); o fluxo fica abandonado e não envia mais nada. Na
+destruição, `drain()` espera o dispositivo ficar ocioso e roda o trabalho adiado.
+
+**Decisão (M3).** O envio espera a fence na hora, em vez de manter quadros em voo: o resolve precisa do resultado na
+CPU de qualquer jeito, e o jogo costuma resolver uma ou mais vezes por quadro. Quadros em voo (vários command buffers,
+anel de envio por quadro e reciclagem de descritores pela fence de cada um) ficam para quando o desempenho pedir.
 
 ## Contrato dos shaders traduzidos (plano B)
 

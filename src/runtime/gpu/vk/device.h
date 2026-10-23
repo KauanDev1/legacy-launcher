@@ -60,6 +60,14 @@ class Device {
   // modes fall back to mirrored repeat).
   bool sampler_anisotropy() const { return sampler_anisotropy_; }
   bool mirror_clamp_to_edge() const { return mirror_clamp_to_edge_; }
+  // Optional features of the draw path (Task 20), enabled when present: geometryShader (rect lists expand in a
+  // built-in geometry shader; without it a rect-list draw is fatal), fillModeNonSolid (PA_SU_SC_MODE_CNTL dual
+  // polygon modes; without it they draw filled), independentBlend (per-target blend state; without it every target
+  // takes target 0's) and VK_EXT_provoking_vertex's provokingVertexLast (flat interpolants from the last vertex).
+  bool geometry_shader() const { return geometry_shader_; }
+  bool fill_mode_non_solid() const { return fill_mode_non_solid_; }
+  bool independent_blend() const { return independent_blend_; }
+  bool provoking_vertex_last() const { return provoking_vertex_last_; }
 
  private:
   Device() = default;
@@ -77,6 +85,10 @@ class Device {
   VkPhysicalDeviceLimits limits_{};
   bool sampler_anisotropy_ = false;
   bool mirror_clamp_to_edge_ = false;
+  bool geometry_shader_ = false;
+  bool fill_mode_non_solid_ = false;
+  bool independent_blend_ = false;
+  bool provoking_vertex_last_ = false;
 };
 
 }  // namespace lr::gpu::vk

@@ -13,8 +13,14 @@
 // that rectangle to RB_COLOR_CLEAR(_LO) / RB_DEPTH_CLEAR. Semantics per Xenia xenos.h, registers.h, draw_util.cc
 // and render_target_cache (reference only, no code taken from them).
 //
-// Thread-safety: GPU thread only. Each clear or resolve is recorded, submitted and waited for on the spot (Task 20
-// folds this into the draw command stream).
+// Command recording (Task 20): everything goes into a CommandStream (stream.h). With the VkBackend's stream, clears
+// and render-target initialisation stay in the frame's command buffer, after the draws recorded before them; a
+// resolve records its copy there too and then flushes the stream, because the guest bytes must be on the CPU when it
+// returns. A render target evicted by bind() (LRU) is destroyed through CommandStream::defer, after the commands
+// that use it completed, and the eviction observer is told first (the draw path drops its framebuffers). Without a
+// stream (tests), the Edram owns one and flushes after every operation, as before.
+//
+// Thread-safety: GPU thread only.
 #pragma once
 
 #include <atomic>
@@ -28,6 +34,7 @@
 #include "runtime/gpu/pm4.h"
 #include "runtime/gpu/registers.h"
 #include "runtime/gpu/vk/device.h"
+#include "runtime/gpu/vk/stream.h"
 
 struct VmaAllocation_T;  // same declaration as VK_DEFINE_HANDLE(VmaAllocation) in vk_mem_alloc.h
 using VmaAllocation = VmaAllocation_T*;
@@ -131,14 +138,18 @@ struct RenderTarget {
 class Edram {
  public:
   // `stop` (may be null): raised, the fence waits give up (wait_fence) and the call fails with Cancelled.
-  static Result<std::unique_ptr<Edram>> create(const Device& device, const std::atomic<bool>* stop = nullptr);
+  // `stream` (may be null): the command stream to record into (the VkBackend's, shared with the draws); it must
+  // outlive the Edram. Null: the Edram owns a stream and flushes it after every operation.
+  static Result<std::unique_ptr<Edram>> create(const Device& device, const std::atomic<bool>* stop = nullptr,
+                                               CommandStream* stream = nullptr);
   ~Edram();
   Edram(const Edram&) = delete;
   Edram& operator=(const Edram&) = delete;
 
   // The host render target of slot 0-3 (colour) or edram::kDepthSlot, created (zero-filled) on first use. The
   // pointer stays valid until a later bind() evicts it (more than edram::kMaxRenderTargets keys in use) or the Edram
-  // is destroyed. InvalidFormat: a malformed key or a format with no host equivalent.
+  // is destroyed: callers never keep it across another bind() of a different key. InvalidFormat: a malformed key or
+  // a format with no host equivalent.
   Result<RenderTarget*> bind(const RegisterFile& regs, uint32_t slot);
   // The clear half of RB_COPY_CONTROL: colour target copy_src_select when color_clear_enable (and copy_src_select is
   // a colour slot) to RB_COLOR_CLEAR(_LO), the depth target when depth_clear_enable to RB_DEPTH_CLEAR, both in
@@ -157,6 +168,9 @@ class Edram {
   // Called after a resolve wrote guest memory, with the physical range written (the texture cache invalidates the
   // textures it covers: a texture rendered by a resolve is sampled in the same frame).
   void set_write_observer(std::function<void(uint32_t phys, uint32_t size)> observer);
+  // Called when bind() evicts a render target, before its destruction is deferred (the draw path forgets the
+  // framebuffers that use it).
+  void set_evict_observer(std::function<void(const RenderTarget& target)> observer);
 
  private:
   struct Impl;

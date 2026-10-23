@@ -279,3 +279,17 @@ Formato: o quê, por quê, custo se estiver errada.
 - Custo se errado: texturas grandes custam tempo de CPU no envio e no hash de cada quadro em que são usadas (8192×8192
   RGBA8 são 256 MiB); uma escrita da CPU entre dois draws do mesmo quadro só aparece no quadro seguinte. Se isso pesar,
   o destile pode ir para um compute shader e o hash para menos vezes por quadro sem mudar a interface do cache.
+
+### M12. Fluxo de comandos (Tarefa 20): um command buffer enviado em pontos de sincronização e esperado na hora
+- O quê: draws, limpezas e resolves da EDRAM e a inicialização de render targets vão para um único command buffer
+  (`CommandStream`, `runtime/gpu/vk/stream.h`), enviado no resolve, no swap, no `wait_idle`, antes do trabalho
+  próprio do cache de texturas e quando o anel de envio enche. Cada envio espera a fence na hora; não há quadros em
+  voo. Destruições que comandos gravados podem usar passam por `CommandStream::defer`, e o cache de texturas envia o
+  fluxo (gancho `set_before_gpu_work`) antes de enviar, destruir ou regravar descritores, em vez de
+  `UPDATE_UNUSED_WHILE_PENDING` com reciclagem adiada de índices.
+- Por quê: o resolve precisa dos bytes na CPU quando volta, e o jogo resolve pelo menos uma vez por quadro; com o
+  envio esperado, nada fica pendente quando o host muda descritores ou destrói objetos, e a validação não tem o que
+  apontar. É o lado "correção primeiro" que a Tarefa 20 pede.
+- Custo se errado: a CPU espera a GPU a cada resolve e a cada swap (sem sobreposição entre quadros). Se o desempenho
+  pedir, o fluxo ganha vários command buffers com fences próprias, um anel por quadro e reciclagem de índices pela fence,
+  sem mudar a interface de `defer`/`flush`.
