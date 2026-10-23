@@ -355,7 +355,8 @@ ActiveShaders GpuSystem::prepare_draw(const RegisterFile& regs, const DrawInfo& 
   for (const ShaderStage stage : {ShaderStage::Vertex, ShaderStage::Pixel}) {
     const Active& a = active_[stage == ShaderStage::Vertex ? 0 : 1];
     if (!a.loaded) continue;
-    const shader::ShaderKey key{stage, a.hash, a.dwords, shader::key_modifiers(stage, regs, info)};
+    const uint32_t inputs = shader_cache_->referenced_interpolators(stage, a.hash, a.dwords);
+    const shader::ShaderKey key{stage, a.hash, a.dwords, shader::key_modifiers(stage, regs, info, inputs)};
     Result<const shader::TranslatedShader*> r = shader_cache_->translate(key);
     const ShaderCache::Origin origin = shader_cache_->last_origin();
     const shader::TranslatedShader* t = r ? r.value() : nullptr;

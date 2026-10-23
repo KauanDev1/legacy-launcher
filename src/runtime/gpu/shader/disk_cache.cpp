@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "runtime/gpu/shader/disk_cache.h"
 
+#include <fcntl.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -125,14 +126,27 @@ Result<void> DiskCache::store(const ShaderKey& key, std::span<const uint32_t> mi
   std::filesystem::path temp = file;
   temp += ".tmp-" + std::to_string(::getpid()) + "-" + std::to_string(temp_counter_++);
   {
-    std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-    if (!out || !out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())) ||
-        !out.flush()) {
-      const int err = errno;
+    // POSIX calls, so the reported errno is the failing call's own (an ofstream does not promise to keep it).
+    const auto fail = [&](const char* what, int err) -> Error {
       std::error_code ignored;
       std::filesystem::remove(temp, ignored);
-      return Error{ErrorCode::IoError, "cannot write " + temp.string() + ": " + std::strerror(err), ""};
+      return Error{ErrorCode::IoError, std::string("cannot ") + what + " " + temp.string() + ": " + std::strerror(err),
+                   ""};
+    };
+    const int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0) return fail("create", errno);
+    size_t done = 0;
+    while (done < bytes.size()) {
+      const ssize_t n = ::write(fd, bytes.data() + done, bytes.size() - done);
+      if (n < 0 && errno == EINTR) continue;
+      if (n <= 0) {
+        const int err = n < 0 ? errno : EIO;
+        ::close(fd);
+        return fail("write", err);
+      }
+      done += static_cast<size_t>(n);
     }
+    if (::close(fd) != 0) return fail("close", errno);
   }
   std::error_code ec;
   std::filesystem::rename(temp, file, ec);

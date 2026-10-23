@@ -30,6 +30,14 @@ void ShaderCache::set_disk_dir(std::optional<std::filesystem::path> dir) {
                  dir->c_str(), ec ? ec.message().c_str() : "not a directory");
     return;
   }
+  // Temporary files a crashed or killed run left behind (DiskCache::store renames them on success). One game process
+  // uses the directory at a time, so none of them is in flight.
+  for (std::filesystem::directory_iterator it(*dir, ec), end; !ec && it != end; it.increment(ec)) {
+    const std::string name = it->path().filename().string();
+    if (name.find(".tmp-") == std::string::npos) continue;
+    std::error_code ignored;
+    std::filesystem::remove(it->path(), ignored);
+  }
   disk_.emplace(*dir);
 }
 
@@ -52,8 +60,14 @@ uint64_t ShaderCache::load(ShaderStage stage, const uint8_t* guest_microcode_be,
   auto program = shader::decode(stage, l.microcode);
   if (program) l.program = std::move(program.value());
   else l.decode_error = program.error().message;
+  if (l.program && stage == ShaderStage::Pixel) l.inputs = shader::shader_info(*l.program, {}).interpolators_read;
   loaded_.emplace(k, std::move(l));
   return hash;
+}
+
+uint32_t ShaderCache::referenced_interpolators(ShaderStage stage, uint64_t hash, uint32_t dwords) const {
+  const auto it = loaded_.find(loaded_key(stage, hash, dwords));
+  return it == loaded_.end() ? 0 : it->second.inputs;
 }
 
 Result<const shader::TranslatedShader*> ShaderCache::remember(const shader::ShaderKey& key, Entry entry) {
@@ -89,7 +103,7 @@ Result<const shader::TranslatedShader*> ShaderCache::translate(const shader::Sha
       auto t = std::make_unique<shader::TranslatedShader>();
       t->spirv = std::move(*spirv);
       t->info = shader::shader_info(*loaded.program, options);
-      dump(key, loaded, {});
+      dump(key, loaded, {}, &t->spirv);
       return remember(key, Entry{std::move(t), {}});
     }
   }
@@ -103,11 +117,12 @@ Result<const shader::TranslatedShader*> ShaderCache::translate(const shader::Sha
   if (disk_) {
     if (auto r = disk_->store(key, loaded.microcode, t->spirv); !r) disable_disk(r.error().message);
   }
-  dump(key, loaded, {});
+  dump(key, loaded, {}, &t->spirv);
   return remember(key, Entry{std::move(t), {}});
 }
 
-void ShaderCache::dump(const shader::ShaderKey& key, const Loaded& loaded, const std::string& error) const {
+void ShaderCache::dump(const shader::ShaderKey& key, const Loaded& loaded, const std::string& error,
+                       const std::vector<uint32_t>* spirv) const {
   if (!dump_ || !disk_) return;
   std::filesystem::path file = disk_->path_of(key);
   file.replace_extension(".txt");
@@ -129,6 +144,12 @@ void ShaderCache::dump(const shader::ShaderKey& key, const Loaded& loaded, const
     out << "\n";
   }
   if (!out) std::fprintf(stderr, "[gpu] --dump-shaders: cannot write %s\n", file.c_str());
+  if (!spirv) return;
+  // The bare module (no LRSV header) for spirv-dis / spirv-val.
+  file.replace_extension(".raw.spv");
+  std::ofstream raw(file, std::ios::binary | std::ios::trunc);
+  raw.write(reinterpret_cast<const char*>(spirv->data()), static_cast<std::streamsize>(spirv->size() * 4));
+  if (!raw) std::fprintf(stderr, "[gpu] --dump-shaders: cannot write %s\n", file.c_str());
 }
 
 }  // namespace lr::gpu

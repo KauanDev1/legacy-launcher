@@ -53,9 +53,11 @@ limpeza, untile, resolve) serão GLSL compilado pelo `glslangValidator` do siste
 (Tarefa 15.x). O histórico do git guarda o fork do XenosRecomp (commits `0523eda`..`3b15c74`).
 
 O jogo guarda os shaders traduzidos em `--shader-cache-dir <pasta>` (o `legacyrecomp run` passa
-`<raiz>/work/shaders/runtime`; sem a flag, ficam só na memória). Para depurar o tradutor:
-`tools/dev/container.sh run -- --dump-shaders` grava `<nome>.txt` com a desmontagem do microcódigo (e, numa falha, o
-motivo) ao lado de cada `.spv` no volume `lr-data`. Ao sair, o jogo escreve no stderr
+`<raiz>/work/shaders/runtime`; sem a flag, ficam só na memória). Os `.spv` do cache **não** são módulos SPIR-V puros:
+começam com um cabeçalho `LRSV` de 48 bytes (versão do tradutor, chave, checksum) seguido do microcódigo, então o
+`spirv-dis` não os lê. Para depurar o tradutor: `tools/dev/container.sh run -- --dump-shaders` grava, ao lado de cada
+`.spv` no volume `lr-data`, `<nome>.txt` com a desmontagem do microcódigo (e, numa falha, o motivo) e
+`<nome>.raw.spv`, o módulo puro para o `spirv-dis`/`spirv-val`. Ao sair, o jogo escreve no stderr
 `[gpu] shaders: keys=N vs=N ps=N translated=N disk=N failed=N new_last_100_swaps=N`. Mudou a saída do tradutor?
 Suba `kTranslatorVersion` (`src/runtime/gpu/shader/translator.h`) e atualize a impressão digital do teste
 `translator output fingerprint matches kTranslatorVersion` (`tests/test_gpu_shader_cache.cpp`; o valor novo aparece

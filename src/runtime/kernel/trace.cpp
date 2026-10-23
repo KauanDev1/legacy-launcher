@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cstdio>
+#include <mutex>
 #include <cstdlib>
 #include <cstring>
 #include <system_error>
@@ -134,8 +135,12 @@ void set_trace_flush_hook(void (*hook)()) { g_flush_hook.store(hook, std::memory
 void set_exit_report_hook(void (*hook)()) { g_exit_report_hook.store(hook, std::memory_order_release); }
 
 void flush_at_exit() {
-  // exchange: once per process, even when two threads race to exit.
-  if (auto* hook = g_exit_report_hook.exchange(nullptr, std::memory_order_acq_rel)) hook();
+  // Once per process. A thread that loses the race waits until the winner has printed the report, so whichever
+  // thread reaches _exit first, the report is already out.
+  static std::once_flag once;
+  std::call_once(once, [] {
+    if (auto* hook = g_exit_report_hook.load(std::memory_order_acquire)) hook();
+  });
   std::fflush(nullptr);
   flush_import_trace();
 }

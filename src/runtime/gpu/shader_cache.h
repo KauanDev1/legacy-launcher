@@ -32,7 +32,8 @@ class ShaderCache {
   // and the cache stays in memory only (the run goes on). Before the first translate().
   void set_disk_dir(std::optional<std::filesystem::path> dir);
   // --dump-shaders: next to each cache file, `<name>.txt` with the key, the microcode disassembly and, for a
-  // failure, the reason. Needs a disk directory (nothing is written without one).
+  // failure, the reason, and `<name>.raw.spv`, the bare module (no LRSV header) for spirv-dis. Needs a disk
+  // directory (nothing is written without one). set_disk_dir also deletes stale `*.tmp-*` files there.
   void set_dump(bool dump) { dump_ = dump; }
   bool disk_enabled() const { return disk_.has_value(); }
 
@@ -40,12 +41,17 @@ class ShaderCache {
   uint64_t load(ShaderStage stage, const uint8_t* guest_microcode_be, uint32_t dwords);
   Result<const shader::TranslatedShader*> translate(const shader::ShaderKey& key);  // memory -> disk -> translator
   Origin last_origin() const { return last_origin_; }
+  // Bit r: the loaded pixel shader (stage, hash, dwords) references register r < 16, so it may read interpolator r
+  // (all 16 with aL-relative temporaries). 0 for a vertex shader, one never loaded or one that does not decode.
+  // key_modifiers keeps only these bits of the interpolator masks.
+  uint32_t referenced_interpolators(ShaderStage stage, uint64_t hash, uint32_t dwords) const;
 
  private:
   struct Loaded {
     std::vector<uint32_t> microcode;  // host order
     std::optional<shader::Program> program;
     std::string decode_error;
+    uint32_t inputs = 0;  // referenced_interpolators
   };
   struct Entry {
     std::unique_ptr<shader::TranslatedShader> shader;  // null: failed
@@ -53,7 +59,8 @@ class ShaderCache {
   };
 
   Result<const shader::TranslatedShader*> remember(const shader::ShaderKey& key, Entry entry);
-  void dump(const shader::ShaderKey& key, const Loaded& loaded, const std::string& error) const;
+  void dump(const shader::ShaderKey& key, const Loaded& loaded, const std::string& error,
+            const std::vector<uint32_t>* spirv = nullptr) const;
   void disable_disk(const std::string& why);
 
   std::map<shader::ShaderKey, Loaded> loaded_;  // by (stage, hash, dwords), modifiers 0

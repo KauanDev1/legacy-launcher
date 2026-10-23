@@ -585,7 +585,8 @@ e 6, e a chamada indireta sem função, 4) escreve uma linha no stderr, calculad
 (`format_shader_summary`). `new_last_100_swaps` conta as chaves cujo primeiro draw foi nos últimos 100 swaps (todas,
 antes do swap 100): se não cai a zero, o jogo ainda está carregando shaders novos. O mecanismo é o
 `set_exit_report_hook` de `kernel/trace.h`: o `main.cpp` registra a função, e `flush_at_exit` (chamada por todos esses
-caminhos logo antes do `_exit`) a roda uma vez e depois descarrega os traces.
+caminhos logo antes do `_exit`) a roda uma vez (`std::call_once`: uma thread que perde a corrida espera o resumo da
+vencedora) e depois descarrega os traces.
 
 ## Shaders (M3, plano B)
 
@@ -617,10 +618,12 @@ primeira vez que um draw o usa (ADR 0005, M8). O fork do XenosRecomp está no hi
   confiado: tamanho, magic, versão, chave, checksum, microcódigo e o magic do SPIR-V são conferidos; qualquer
   divergência vira um aviso no stderr e uma tradução nova, que sobrescreve o arquivo. O `ShaderInfo` de um módulo
   lido do disco vem de `shader_info(Program, TranslateOptions)`, a mesma função que o `translate()` usa. Pasta que
-  não pode ser criada, ou uma escrita que falha: um aviso no stderr e só memória daí em diante (o jogo continua). O
-  SPIR-V traduzido é derivado do jogo: fica só nessa pasta e nunca é versionado.
+  não pode ser criada, ou uma escrita que falha (a mensagem traz a chamada que falhou e o `errno` dela): um aviso no
+  stderr e só memória daí em diante (o jogo continua). Ao abrir a pasta, arquivos temporários `*.tmp-*` que uma
+  execução interrompida deixou são apagados. O SPIR-V traduzido é derivado do jogo: fica só nessa pasta e nunca é versionado.
 - `--dump-shaders` (exige `--shader-cache-dir`): grava `<nome>.txt` ao lado de cada `.spv`, com a chave, a desmontagem
-  do microcódigo e, numa falha, o motivo.
+  do microcódigo e, numa falha, o motivo, e `<nome>.raw.spv`, o módulo puro (sem o cabeçalho `LRSV`) para o
+  `spirv-dis`.
 - `kTranslatorVersion` (hoje 9) entra no nome e no cabeçalho dos arquivos. O teste
   `translator output fingerprint matches kTranslatorVersion` guarda um XXH3 do SPIR-V de três shaders sintéticos de
   referência para a versão atual: mudar a saída do tradutor sem subir a versão faz o teste falhar.
@@ -737,12 +740,19 @@ centro do pixel (`PA_SU_VTX_CNTL`), com a inversão de Y incluída.
 
 **Chave e opções**: `ShaderKey{estágio, microcode_hash, dwords, modificadores de 64 bits}`. Modificadores do PS:
 bits 0..7 o registrador `param_gen` (`0xFF` = nenhum), bit 8 a flag de ponto, bits 16..31 a máscara flat
-(`SQ_INTERPOLATOR_CNTL.param_shade`), bits 32..47 a máscara centroid (`sampling_pattern`). O VS não tem
-modificadores no M3. `TranslateOptions` tem exatamente esses campos decodificados (`key_options`). Na montagem
+(`SQ_INTERPOLATOR_CNTL.param_shade`), bits 32..47 a máscara centroid (os interpoladores amostrados no centroide, não
+no centro; derivada como abaixo). O VS não tem modificadores no M3. `TranslateOptions` tem exatamente esses campos decodificados (`key_options`). Na montagem
 (`key_modifiers`): o registrador `param_gen` é `SQ_CONTEXT_MISC.param_gen_pos` (bits 8..15) quando
 `SQ_PROGRAM_CNTL.param_gen` (bit 18) está ligado e a posição é um interpolador (< 16), senão `0xFF`; a flag de ponto
 (o draw é uma lista de pontos, `prim_type` 1) só entra com um registrador `param_gen`, porque sem ele não muda nada e
-só dividiria chaves.
+só dividiria chaves. A máscara centroid segue a regra do Xenia (`GetInterpolatorSamplingPattern` em `xenos.h` e o
+cache de pipelines, só como referência): um bit de `SQ_INTERPOLATOR_CNTL.sampling_pattern` ligado quer dizer
+**centro**; com MSAA 1x (`RB_SURFACE_INFO.msaa_samples`, bits 16..17, = 0) ou `SQ_CONTEXT_MISC.sc_sample_cntl`
+(bits 2..3) = 1 ("só centros") tudo é amostrado no centro; com `sc_sample_cntl` = 0 ("só centroides") tudo no
+centroide; com 2 ("centroides e centros") vale o padrão. A máscara é o complemento disso. As máscaras flat e centroid
+ficam só com os bits dos registradores `r0..r15` que o pixel shader carregado referencia
+(`ShaderCache::referenced_interpolators`) e nunca com o do registrador `param_gen`: estado de interpoladores que o
+shader não lê não cria chaves novas.
 
 **Kill e derivadas**: um `kill` liga uma flag local; o `main` termina com `OpKill` só se ela estiver ligada (o alpha
 test usa a mesma flag). Nunca há `OpKill` no meio do shader, então fetches posteriores mantêm as derivadas do quad.

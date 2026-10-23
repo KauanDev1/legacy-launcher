@@ -16,19 +16,28 @@ uint64_t microcode_hash(const uint8_t* guest_microcode_be, uint32_t dwords) {
   return XXH3_64bits(guest_microcode_be, size_t{dwords} * 4);
 }
 
-uint64_t key_modifiers(ShaderStage stage, const RegisterFile& regs, const DrawInfo& draw) {
+uint64_t key_modifiers(ShaderStage stage, const RegisterFile& regs, const DrawInfo& draw, uint32_t ps_inputs) {
   if (stage != ShaderStage::Pixel) return 0;
+  uint32_t inputs = ps_inputs & 0xFFFF;
+  const uint32_t misc = regs.read(SQ_CONTEXT_MISC);
   uint64_t mod = kNoParamGen;
   if ((regs.read(SQ_PROGRAM_CNTL) >> 18) & 1) {
-    const uint32_t pos = (regs.read(SQ_CONTEXT_MISC) >> 8) & 0xFF;
+    const uint32_t pos = (misc >> 8) & 0xFF;
     if (pos < 16) {
       mod = pos;
       if (draw.prim_type == kPrimPointList) mod |= kModPointBit;
+      inputs &= ~(1u << pos);  // the param_gen register is generated, never interpolated
     }
   }
   const uint32_t interp = regs.read(SQ_INTERPOLATOR_CNTL);
-  mod |= uint64_t{interp & 0xFFFF} << kModFlatShift;
-  mod |= uint64_t{interp >> 16} << kModCentroidShift;
+  // Sampled at the centre (bit set) or at the centroid (Xenia's GetInterpolatorSamplingPattern semantics).
+  const uint32_t msaa_samples = (regs.read(RB_SURFACE_INFO) >> 16) & 3;
+  const uint32_t sample_control = (misc >> 2) & 3;
+  uint32_t centre = interp >> 16;  // centroids and centres: the per-interpolator pattern
+  if (msaa_samples == 0 || sample_control == 1) centre = 0xFFFF;  // 1x MSAA, or centres only
+  else if (sample_control == 0) centre = 0;                        // centroids only
+  mod |= uint64_t{interp & inputs} << kModFlatShift;
+  mod |= uint64_t{~centre & inputs} << kModCentroidShift;
   return mod;
 }
 

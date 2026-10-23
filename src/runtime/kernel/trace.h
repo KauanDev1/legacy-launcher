@@ -50,8 +50,9 @@ void set_trace_flush_hook(void (*hook)());
 // HalReturnToFirmware, XamLoaderTerminateTitle, exits 3, 5 and 6, and the bad indirect call's 4), through
 // flush_at_exit. nullptr clears it.
 void set_exit_report_hook(void (*hook)());
-// What every such exit path calls right before _exit: the exit report (once), fflush of stdio, flush_import_trace.
-// Not async-signal-safe.
+// What every such exit path calls right before _exit: the exit report (std::call_once: a thread that loses the race
+// waits for the winner's report), fflush of stdio, flush_import_trace. Not async-signal-safe; the hook must not
+// itself exit through flush_at_exit (it would wait on itself).
 void flush_at_exit();
 // Async-signal-safe variant for the fault handler: skips the flush if the buffer is busy.
 void flush_import_trace_from_signal();

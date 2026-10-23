@@ -356,13 +356,16 @@ TEST_CASE("fake game prints the shader summary at every exit", "[unit][gpu][thre
   INFO(first.out);
   CHECK(first.code == 0);
   CHECK(first.out == kSummaryTranslated);
-  size_t spv = 0, txt = 0;
+  size_t spv = 0, raw = 0, txt = 0;
   for (const auto& e : fs::directory_iterator(cache)) {
-    spv += e.path().extension() == ".spv" ? 1 : 0;
-    txt += e.path().extension() == ".txt" ? 1 : 0;
+    const std::string name = e.path().filename().string();
+    if (name.ends_with(".raw.spv")) ++raw;
+    else if (name.ends_with(".spv")) ++spv;
+    else if (name.ends_with(".txt")) ++txt;
   }
   CHECK(spv == 2);
-  CHECK(txt == 2);  // --dump-shaders
+  CHECK(raw == 2);  // --dump-shaders: the bare modules
+  CHECK(txt == 2);  // --dump-shaders: the disassembly
 
   auto second = run_game(td.path, {"--headless", "--shader-cache-dir", cache.string(), "--image", image});
   INFO(second.out);

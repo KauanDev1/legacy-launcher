@@ -9,6 +9,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -24,6 +25,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "runtime/be.h"
@@ -268,7 +270,7 @@ TEST_CASE("same microcode and modifiers give the same key", "[unit][gpu]") {
   CHECK(a == b);
   CHECK(sh::cache_file_name(a) == sh::cache_file_name(b));
   char want[96];
-  std::snprintf(want, sizeof want, "v%u-ps-%016llx-6-00000001000200ff.spv", sh::kTranslatorVersion,
+  std::snprintf(want, sizeof want, "v%u-ps-%016llx-6-00000000000200ff.spv", sh::kTranslatorVersion,
                 static_cast<unsigned long long>(a.microcode_hash));
   CHECK(sh::cache_file_name(a) == want);
   // The stage is part of the key and of the name.
@@ -350,13 +352,83 @@ TEST_CASE("interpolator flat and centroid masks change the pixel shader key", "[
   regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0x0003);  // param_shade: r0, r1 flat
   const uint64_t flat = sh::key_modifiers(ShaderStage::Pixel, regs, draw);
   CHECK(flat == (0xFF | (0x0003ull << 16)));
-  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0x00050000);  // sampling_pattern: r0, r2 centroid
+  // Centroids with 4x MSAA, sc_sample_cntl "centroids and centres", the pattern's centre bits r1, r3..r15: r0 and
+  // r2 are sampled at the centroid.
+  regs.write(lr::gpu::RB_SURFACE_INFO, 2u << 16);
+  regs.write(lr::gpu::SQ_CONTEXT_MISC, 2u << 2);
+  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0xFFFA0000);
   const uint64_t centroid = sh::key_modifiers(ShaderStage::Pixel, regs, draw);
   CHECK(centroid == (0xFF | (0x0005ull << 32)));
-  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0xFFFFFFFF);
+  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0x0000FFFF);  // everything flat, every interpolator at the centroid
   CHECK(sh::key_modifiers(ShaderStage::Pixel, regs, draw) == (0xFF | (0xFFFFull << 16) | (0xFFFFull << 32)));
   CHECK(flat != centroid);
   CHECK(sh::key_modifiers(ShaderStage::Vertex, regs, draw) == 0);  // VS outputs carry no interpolation decorations
+}
+
+TEST_CASE("centroid sampling follows Xenia's sampling-pattern rule", "[unit][gpu]") {
+  // A sampling_pattern bit set means "centre"; the pattern applies only with MSAA and sc_sample_cntl 2 (centroids
+  // and centres). 1x MSAA or "centres only" samples everything at the centre; "centroids only" nothing.
+  lr::gpu::RegisterFile regs;
+  const lr::gpu::DrawInfo draw{4, 3, 0, 0, false, 0};
+  const auto centroid_mask = [&](uint32_t msaa, uint32_t control, uint32_t pattern) {
+    regs.write(lr::gpu::RB_SURFACE_INFO, msaa << 16);
+    regs.write(lr::gpu::SQ_CONTEXT_MISC, control << 2);
+    regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, pattern << 16);
+    return sh::key_options({ShaderStage::Pixel, 1, 6, sh::key_modifiers(ShaderStage::Pixel, regs, draw)})
+        .centroid_mask;
+  };
+  for (uint32_t control : {0u, 1u, 2u}) CHECK(centroid_mask(0, control, 0x0000) == 0);  // 1x: always centres
+  CHECK(centroid_mask(1, 1, 0x0000) == 0);       // 2x, centres only
+  CHECK(centroid_mask(2, 0, 0xFFFF) == 0xFFFF);  // 4x, centroids only: the pattern is ignored
+  CHECK(centroid_mask(2, 2, 0x00FF) == 0xFF00);  // 4x, both: the clear pattern bits
+  CHECK(centroid_mask(1, 2, 0xFFFE) == 0x0001);
+}
+
+TEST_CASE("unread interpolator mask bits do not change the pixel shader key", "[unit][gpu]") {
+  // pixel_shader() references r0 only: flat/centroid bits for r1..r15 must not create new keys.
+  ShaderCache cache;
+  const std::vector<uint32_t> ps = pixel_shader();
+  const sh::ShaderKey base = load(cache, ShaderStage::Pixel, ps);
+  const uint32_t inputs = cache.referenced_interpolators(ShaderStage::Pixel, base.microcode_hash, base.dwords);
+  CHECK(inputs == 0x0001);
+  CHECK(cache.referenced_interpolators(ShaderStage::Vertex, base.microcode_hash, base.dwords) == 0);
+  lr::gpu::RegisterFile regs;
+  const lr::gpu::DrawInfo draw{4, 3, 0, 0, false, 0};
+  regs.write(lr::gpu::RB_SURFACE_INFO, 2u << 16);
+  regs.write(lr::gpu::SQ_CONTEXT_MISC, 2u << 2);
+  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0xFFFF0000);  // nothing flat, every interpolator at the centre
+  const uint64_t plain = sh::key_modifiers(ShaderStage::Pixel, regs, draw, inputs);
+  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0x0001FFFE);  // r1..r15 flat and at the centroid: unread
+  CHECK(sh::key_modifiers(ShaderStage::Pixel, regs, draw, inputs) == plain);
+  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0xFFFE0001);  // r0 flat and at the centroid: read
+  CHECK(sh::key_modifiers(ShaderStage::Pixel, regs, draw, inputs) == (0xFF | (1ull << 16) | (1ull << 32)));
+  // The param_gen register is generated, never interpolated: its bits are dropped too.
+  regs.write(lr::gpu::SQ_PROGRAM_CNTL, 1u << 18);
+  regs.write(lr::gpu::SQ_CONTEXT_MISC, (2u << 2) | (0u << 8));
+  CHECK(sh::key_modifiers(ShaderStage::Pixel, regs, draw, inputs) == 0);
+}
+
+TEST_CASE("GpuSystem keys pixel shaders on the interpolators they read", "[unit][gpu]") {
+  KernelFixture f;
+  Gpu g(f);
+  auto backend = std::make_unique<lr::gpu::NullBackend>();
+  g.gpu->set_backend(std::move(backend));
+  Pm4Builder b;
+  im_load_immediate(b, ShaderStage::Vertex, vertex_shader());
+  im_load_immediate(b, ShaderStage::Pixel, pixel_shader());
+  b.type0(lr::gpu::SQ_INTERPOLATOR_CNTL, {0x0000FFFE});  // r1..r15 flat: unread
+  draw_triangle(b);
+  b.type0(lr::gpu::SQ_INTERPOLATOR_CNTL, {0x00000000});
+  draw_triangle(b);
+  b.type0(lr::gpu::SQ_INTERPOLATOR_CNTL, {0x00000001});  // r0 flat: read, a new key
+  draw_triangle(b);
+  g.run(b);
+  g.gpu->stop();
+  CHECK(g.fatal().empty());
+  const ShaderLoadStats stats = g.gpu->shader_stats();
+  REQUIRE(stats.keys.size() == 3);
+  CHECK(stats.keys[1].key.modifiers == 0xFF);
+  CHECK(stats.keys[2].key.modifiers == (0xFF | (1ull << 16)));
 }
 
 TEST_CASE("key options decode the modifiers", "[unit][gpu]") {
@@ -380,15 +452,16 @@ TEST_CASE("key options decode the modifiers", "[unit][gpu]") {
   // Round trip through the registers: the options the cache translates with are the draw's.
   lr::gpu::RegisterFile regs;
   regs.write(lr::gpu::SQ_PROGRAM_CNTL, 1u << 18);
-  regs.write(lr::gpu::SQ_CONTEXT_MISC, 7u << 8);
-  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0x00F0000F);
+  regs.write(lr::gpu::SQ_CONTEXT_MISC, (7u << 8) | (2u << 2));  // param_gen r7, centroids and centres
+  regs.write(lr::gpu::RB_SURFACE_INFO, 2u << 16);                // 4x MSAA
+  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0x00F0000F);         // r0..r3 flat; r4..r7 at the centre
   const sh::TranslateOptions rt = sh::key_options(
       {ShaderStage::Pixel, 1, 6,
        sh::key_modifiers(ShaderStage::Pixel, regs, lr::gpu::DrawInfo{sh::kPrimPointList, 1, 0, 0, false, 0})});
   CHECK(rt.ps_param_gen == 7);
   CHECK(rt.ps_point);
   CHECK(rt.flat_mask == 0x000F);
-  CHECK(rt.centroid_mask == 0x00F0);
+  CHECK(rt.centroid_mask == 0xFF0F);  // every interpolator but r4..r7 (r7, the param_gen one, is dropped anyway)
   // A flat mask is a different module (the PS reads r0: interpolator 0 becomes Flat).
   CHECK(translate_direct(ShaderStage::Pixel, pixel_shader(), sh::key_options({ShaderStage::Pixel, 1, 6, 0xFF})) !=
         translate_direct(ShaderStage::Pixel, pixel_shader(),
@@ -563,69 +636,197 @@ TEST_CASE("shader dump (--dump-shaders) writes the disassembly next to each cach
   REQUIRE(fs::is_regular_file(txt(bad)));
   CHECK_THAT(read_text(txt(bad)), Catch::Matchers::ContainsSubstring("cannot be translated: "));
   CHECK_FALSE(fs::exists(td.path / sh::cache_file_name(bad)));  // nothing to cache for a failure
+  // The bare module next to it, for spirv-dis: exactly the translated words, no LRSV header.
+  const fs::path raw = fs::path(td.path / sh::cache_file_name(ok)).replace_extension(".raw.spv");
+  REQUIRE(fs::is_regular_file(raw));
+  const std::string raw_bytes = read_text(raw);
+  const std::vector<uint32_t> want = translate_direct(ShaderStage::Vertex, vertex_shader());
+  REQUIRE(raw_bytes.size() == want.size() * 4);
+  CHECK(std::memcmp(raw_bytes.data(), want.data(), raw_bytes.size()) == 0);
+  CHECK_FALSE(fs::exists(fs::path(td.path / sh::cache_file_name(bad)).replace_extension(".raw.spv")));
+}
+
+TEST_CASE("opening the cache directory removes stale temporary files", "[unit][gpu]") {
+  TempDir td("lr_shader_stale");
+  const fs::path stale = td.path / (sh::cache_file_name(key_of(ShaderStage::Vertex, vertex_shader())) + ".tmp-42-0");
+  const fs::path keep = td.path / "unrelated.txt";
+  std::ofstream(stale) << "half a file";
+  std::ofstream(keep) << "x";
+  ShaderCache cache;
+  cache.set_disk_dir(td.path);
+  REQUIRE(cache.disk_enabled());
+  CHECK_FALSE(fs::exists(stale));
+  CHECK(fs::exists(keep));
+}
+
+TEST_CASE("a failed cache write names the failing call and its error", "[unit][gpu]") {
+  TempDir td("lr_shader_write");
+  const std::vector<uint32_t> vs = vertex_shader();
+  const sh::ShaderKey k = key_of(ShaderStage::Vertex, vs);
+  sh::DiskCache disk(td.path / "missing");  // the directory does not exist: open(2) fails with ENOENT
+  auto r = disk.store(k, vs, translate_direct(ShaderStage::Vertex, vs));
+  REQUIRE_FALSE(r);
+  CHECK(r.error().code == lr::ErrorCode::IoError);
+  CHECK_THAT(r.error().message, Catch::Matchers::StartsWith("cannot create "));
+  CHECK_THAT(r.error().message, Catch::Matchers::EndsWith(std::strerror(ENOENT)));
 }
 
 // --- golden fingerprint -------------------------------------------------------------------------------------------
 
-TEST_CASE("translator output fingerprint matches kTranslatorVersion", "[unit][gpu]") {
-  // Three reference shaders that between them reach vertex fetch, the ALU, texture fetch (offsets, an unnormalized
-  // cube), control flow, predication, kill and every pixel shader modifier. Their SPIR-V, concatenated, hashed: if
-  // this fingerprint changes, the translator's output changed, so cached modules of the old output are stale. Bump
-  // kTranslatorVersion (translator.h) and replace the entry below with the new version and the printed value.
-  constexpr uint32_t kVersion = 9;
-  constexpr uint64_t kFingerprint = 0x4260C796DECC1553ull;
+namespace {
 
-  // 1. VS: a full and a mini vfetch, a mad, position and interpolator 0.
-  std::vector<uint32_t> vs;
-  {
-    x::emit(vs, x::cf_pair(x::cf_exec(false, 1, 2, 0x5 /*fetch, fetch*/), x::cf_exec(true, 3, 3, 0)));
-    x::emit(vs, x::vfetch(1, 0, 0, 0, 8, x::kFormat32_32_32_32Float));
-    x::emit(vs, x::vfetch_mini(2, 4, x::kFormat32_32_32_32Float));
-    x::Alu mad = vop(x::kVectorMulAdd, 3, r(1), c(1));
-    mad.src3 = c(2);
-    x::emit(vs, x::alu(mad));
-    x::emit(vs, x::alu(mov(x::kExportVsPosition, r(3), true)));
-    x::emit(vs, x::alu(mov(0, r(2), true)));
+// A CF entry of a reference shader: a raw CF instruction, or an exec over ALU/fetch slots (the sequence's fetch bits
+// come from the slot kinds, the address from the order).
+using RefSlot = std::variant<x::Alu, x::VFetch, x::TFetch>;
+struct RefCf {
+  uint64_t raw = 0;
+  bool is_exec = false;
+  bool end = false;
+  std::vector<RefSlot> slots;
+};
+RefCf ref_raw(uint64_t raw) { return {raw, false, false, {}}; }
+RefCf ref_exec(std::vector<RefSlot> slots, bool end = false) { return {0, true, end, std::move(slots)}; }
+
+std::vector<uint32_t> assemble_ref(const std::vector<RefCf>& cf) {
+  const auto cf_slots = static_cast<uint32_t>((cf.size() + 1) / 2);
+  std::vector<uint64_t> words;
+  std::vector<std::array<uint32_t, 3>> body;
+  for (const RefCf& c : cf) {
+    if (!c.is_exec) {
+      words.push_back(c.raw);
+      continue;
+    }
+    REQUIRE(c.slots.size() <= 6);
+    uint32_t sequence = 0;
+    for (size_t i = 0; i < c.slots.size(); ++i)
+      if (!std::holds_alternative<x::Alu>(c.slots[i])) sequence |= 1u << (2 * i);
+    words.push_back(x::cf_exec(c.end, cf_slots + uint32_t(body.size()), uint32_t(c.slots.size()), sequence));
+    for (const RefSlot& s : c.slots) {
+      if (const auto* a = std::get_if<x::Alu>(&s)) body.push_back(x::alu(*a));
+      else if (const auto* v = std::get_if<x::VFetch>(&s)) body.push_back(x::vfetch(*v));
+      else body.push_back(x::tfetch(std::get<x::TFetch>(s)));
+    }
   }
-  // 2. PS: a 2D tfetch with x/y offsets and an unnormalized cube tfetch, added into colour 0.
-  std::vector<uint32_t> tex;
-  {
-    x::emit(tex, x::cf_pair(x::cf_exec(false, 1, 2, 0x5), x::cf_exec(true, 3, 1, 0)));
-    x::TFetch t2;
-    t2.dst = 1;
-    t2.src = 0;
-    t2.const_index = 0;
-    t2.dimension = x::kTextureDim2D;
-    t2.offset_x = 1;
-    t2.offset_y = -3;
-    x::emit(tex, x::tfetch(t2));
-    x::TFetch cube;
-    cube.dst = 2;
-    cube.src = 0;
-    cube.const_index = 1;
-    cube.dimension = x::kTextureDimCube;
-    cube.unnormalized = true;
-    x::emit(tex, x::tfetch(cube));
-    x::emit(tex, x::alu(vop(x::kVectorAdd, x::kExportPsColor0, r(1), r(2), true)));
-  }
-  // 3. PS: a predicate set, a predicated kill, a cond_exec on a bool, and colour 0 = r1 * r3 (r3: param_gen).
-  std::vector<uint32_t> flow;
-  {
-    x::emit(flow, x::cf_pair(x::cf_exec(false, 1, 2, 0), x::cf_cond_exec(true, 3, 1, 0, 5, true)));
-    x::Alu pred;
-    pred.vector_mask = 0;
-    pred.scalar_op = 27;  // PRED_SETEs
-    pred.scalar_mask = 0;
-    pred.src3 = r(0);  // operand a: r0.w
-    x::emit(flow, x::alu(pred));
-    x::Alu kill = vop(x::kVectorKillGt, 2, r(0), c(0));
-    kill.predicated = true;
-    kill.pred_condition = true;
-    x::emit(flow, x::alu(kill));
-    x::emit(flow, x::alu(vop(x::kVectorMul, x::kExportPsColor0, r(1), r(3), true)));
-  }
+  if (words.size() % 2) words.push_back(x::cf_nop());
+  std::vector<uint32_t> code;
+  for (size_t i = 0; i < words.size(); i += 2) x::emit(code, x::cf_pair(words[i], words[i + 1]));
+  for (const auto& b : body) x::emit(code, b);
+  return code;
+}
+
+// A scalar op on src3 (operand a) into r<dest>.x, no vector result.
+x::Alu sop(uint32_t op, uint32_t dest, x::AluSrc s) {
+  x::Alu a;
+  a.vector_mask = 0;
+  a.scalar_op = op;
+  a.scalar_dest = dest;
+  a.scalar_mask = 1;
+  a.src3 = s;
+  return a;
+}
+
+x::TFetch tfetch_of(uint32_t dst, uint32_t const_index, uint32_t dimension) {
+  x::TFetch t;
+  t.dst = dst;
+  t.src = 0;
+  t.const_index = const_index;
+  t.dimension = dimension;
+  return t;
+}
+
+}  // namespace
+
+TEST_CASE("translator output fingerprint matches kTranslatorVersion", "[unit][gpu]") {
+  // Three reference shaders that between them reach every major emitter: vertex fetch (float, mini, signed
+  // normalized), texture fetch (offsets, an unnormalized cube, 3D with register gradients and a LOD bias, register
+  // LOD), the ALU (vector, scalar, MOVA, predicates, kill), control flow (a loop with an aL-relative operand, a call,
+  // a backward jump: the pc-switch path), the exports (position, interpolators, point size, colour, depth) and every
+  // pixel shader modifier. Their SPIR-V, concatenated, hashed: if this fingerprint changes, the translator's output
+  // changed and cached modules of the old output are stale. Bump kTranslatorVersion (translator.h) and replace the
+  // entry below with the new version and the printed value.
+  constexpr uint32_t kVersion = 9;
+  constexpr uint64_t kFingerprint = 0x94C5885029E507D3ull;
+
+  // 1. VS: a full, a mini and a signed-normalized 8_8_8_8 vfetch; a mad; position, two interpolators, point size.
+  x::VFetch full;
+  full.dst = 1;
+  full.slot = 0;
+  full.stride_dwords = 8;
+  full.format = x::kFormat32_32_32_32Float;
+  x::VFetch mini;
+  mini.dst = 2;
+  mini.offset_dwords = 4;
+  mini.mini = true;
+  x::VFetch snorm;
+  snorm.dst = 4;
+  snorm.slot = 3;
+  snorm.stride_dwords = 1;
+  snorm.format = 6;  // 8_8_8_8
+  snorm.is_signed = true;
+  snorm.normalized = true;
+  x::Alu mad = vop(x::kVectorMulAdd, 3, r(1), c(1));
+  mad.src3 = c(2);
+  x::Alu point_size = mov(x::kExportVsPointSize, c(3), true);
+  point_size.vector_mask = 0x1;
+  const std::vector<uint32_t> vs = assemble_ref(
+      {ref_exec({full, mini, snorm}),
+       ref_exec({mad, mov(x::kExportVsPosition, r(3), true), mov(0, r(2), true), mov(1, r(4), true), point_size},
+                true)});
+
+  // 2. PS: 2D with x/y offsets, an unnormalized cube, setGradients + a 3D fetch with register gradients and a LOD
+  //    bias, setTexLOD + a 2D fetch with the register LOD; summed into colour 0.
+  x::TFetch t2 = tfetch_of(1, 0, x::kTextureDim2D);
+  t2.offset_x = 1;
+  t2.offset_y = -3;
+  x::TFetch cube = tfetch_of(2, 1, x::kTextureDimCube);
+  cube.unnormalized = true;
+  x::TFetch grad_h = tfetch_of(0, 0, x::kTextureDim2D);
+  grad_h.opcode = x::kFetchSetGradientsH;
+  x::TFetch grad_v = grad_h;
+  grad_v.opcode = x::kFetchSetGradientsV;
+  x::TFetch t3 = tfetch_of(5, 2, x::kTextureDim3D);
+  t3.use_register_gradients = true;
+  t3.lod_bias = 8;
+  x::TFetch set_lod = grad_h;
+  set_lod.opcode = x::kFetchSetLod;
+  x::TFetch reg_lod = tfetch_of(6, 3, x::kTextureDim2D);
+  reg_lod.use_computed_lod = false;
+  reg_lod.use_register_lod = true;
+  const std::vector<uint32_t> tex = assemble_ref(
+      {ref_exec({t2, cube, grad_h, grad_v, t3, set_lod}), ref_exec({reg_lod}),
+       ref_exec({vop(x::kVectorAdd, 1, r(1), r(2)), vop(x::kVectorAdd, 1, r(1), r(5)),
+                 vop(x::kVectorAdd, x::kExportPsColor0, r(1), r(6), true)},
+                true)});
+
+  // 3. PS: predicate set, a predicated kill and scalar ops (RECIP_CLAMP, LOG_IEEE, MOVA); a loop over r[aL + 6]; a
+  //    call; a backward cond_jmp; colour 0 = r1 * r3 (r3: param_gen) and depth.
+  x::Alu pred;
+  pred.vector_mask = 0;
+  pred.scalar_op = x::kScalarPredSetEq;
+  pred.scalar_mask = 0;
+  pred.src3 = r(0);
+  x::Alu kill = vop(x::kVectorKillGt, 2, r(0), c(0));
+  kill.predicated = true;
+  kill.pred_condition = true;
+  x::AluSrc rel = r(6);
+  rel.relative = true;
+  x::Alu depth = mov(x::kExportPsDepth, r(4), true);
+  depth.vector_mask = 0x1;
+  const std::vector<uint32_t> flow = assemble_ref({
+      ref_exec({pred, kill, sop(x::kScalarRecipClamp, 4, r(0)), sop(x::kScalarLog, 5, r(0)),
+                sop(x::kScalarMovA, 7, r(0))}),                                           // 0
+      ref_raw(x::cf_loop_start(0, 4)),                                                    // 1
+      ref_exec({vop(x::kVectorAdd, 1, r(1), rel)}),                                       // 2
+      ref_raw(x::cf_loop_end(0, 2)),                                                      // 3
+      ref_raw(x::cf_call(7)),                                                             // 4
+      ref_raw(x::cf_cond_jmp(0, 1, true)),                                                // 5: backward
+      ref_exec({vop(x::kVectorMul, x::kExportPsColor0, r(1), r(3), true), depth}, true),  // 6
+      ref_exec({vop(x::kVectorAdd, 1, r(1), c(5))}),                                      // 7: subroutine
+      ref_raw(x::cf_ret()),                                                               // 8
+  });
   sh::TranslateOptions flow_options;
   flow_options.ps_param_gen = 3;
+  flow_options.ps_point = true;
   flow_options.flat_mask = 0x2;
   flow_options.centroid_mask = 0x1;
 
