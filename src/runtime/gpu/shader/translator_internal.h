@@ -14,8 +14,8 @@
 // Values that must dominate every later block (buffer pointers, CF state) are made in step 2/3, so the CF can put
 // the clauses in any blocks.
 //
-// Where later tasks plug in: emit_vector_op and the scalar unit in emit_alu (15.6/15.7, translator_alu.cpp; the
-// scalar PRED_SET*s are in translator_cf.cpp until then), emit_fetch (15.8/15.9, translator_fetch.cpp; a predicated
+// Where later tasks plug in: the scalar unit in emit_alu (15.7, translator_alu.cpp; the vector unit is there already,
+// the scalar PRED_SET*s are in translator_cf.cpp until then), emit_fetch (15.8/15.9, translator_fetch.cpp; a predicated
 // fetch evaluates unconditionally and merges with OpSelect on pred_matches()). They report what they cannot translate
 // with unsupported().
 #pragma once
@@ -121,11 +121,24 @@ class Translator {
   // writes are done). The rest of the scalar unit is Task 15.7.
   Result<std::pair<Id, Id>> emit_scalar_pred_set(uint32_t slot, const AluInstr& a);
 
-  // --- ALU (translator.cpp; Tasks 15.6/15.7 move it to translator_alu.cpp) ---
+  // --- ALU (translator_alu.cpp) ---
+  // What the vector unit produces: its result (0 when not issued), and the new p0 (PRED_SET*_PUSH) and a0 (MAXA),
+  // which emit_alu_unpredicated stores once the instruction's register writes are done (0 = unchanged).
+  struct VectorResult {
+    Id value = 0, p0 = 0, a0 = 0;
+  };
+  void scan_address_registers();  // translator.cpp: sets uses_a0_ / uses_al_constants_
+  void declare_alu_state();       // main's entry block: a0 when the program uses it
   Result<void> emit_alu(uint32_t slot, const AluInstr& a);  // predicated instructions run under an emit_if
   Result<void> emit_alu_unpredicated(uint32_t slot, const AluInstr& a);
-  Result<Id> emit_vector_op(uint32_t slot, const AluInstr& a);
+  Result<VectorResult> emit_vector_op(uint32_t slot, const AluInstr& a);
+  // Source i after relative addressing, swizzle, abs and negate (a vec4).
   Result<Id> load_source(uint32_t slot, const AluInstr& a, uint32_t i);
+  // c[index + aL] or c[index + a0]: 0 when the sum is outside 0..255.
+  Id load_relative_constant(const AluInstr& a, uint32_t reg);
+  // The Xenos product a * b: +0 where either factor is 0 (even 0 * inf or NaN), except in the components of
+  // `identical` (a bit mask), where both factors are the same operand and IEEE multiplication already agrees.
+  Id xenos_mul(Id a, Id b, uint32_t identical);
 
   // --- fetch (Tasks 15.8/15.9) ---
   Result<void> emit_fetch(uint32_t slot, const FetchInstr& f);
@@ -177,6 +190,9 @@ class Translator {
   Id pc_ = 0;           // u32: the next CF index, kPcEnd when the shader is done
   Id backward_ = 0;     // u32: backward branches taken (kCfBackwardBranchCap)
   Id ended_ = 0;        // straight-line form only: a conditional exec_end ended the shader
+  Id a0_ = 0;           // i32 address register (0 when the program never uses it)
+  bool uses_a0_ = false;            // MAXA, MOVA*, or an a0-relative constant
+  bool uses_al_constants_ = false;  // an aL-relative constant (aL is declared even without loops)
   std::optional<Error> internal_error_;  // see record_internal()
 };
 

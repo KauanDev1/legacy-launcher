@@ -102,7 +102,7 @@ class CfEmitter {
 void CfEmitter::declare_state() {
   t_.p0_ = state_var(ty_.bool_, "p0", b_.constant_bool(false));
   const bool branches = t_.program_.has_jumps_calls_or_loops;
-  if (branches || t_.temps_.relative) {
+  if (branches || t_.temps_.relative || t_.uses_al_constants_) {
     const Id zero = b_.constant_i32(0);
     const Id zeros[] = {zero, zero, zero, zero};
     t_.al_stack_ = state_var(ty_.ivec4, "aL", b_.constant_composite(ty_.ivec4, zeros));

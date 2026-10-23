@@ -725,16 +725,28 @@ bloco de saída. Estado local:
   aninhados de 255 iterações cabem (255^3 ≈ 1,66·10^7 < 2^24 ≈ 1,68·10^7); quatro, ou três com uma chamada no corpo
   mais interno (cada `return` também conta), são cortados.
 
+**Unidade vetorial da ALU** (`translator_alu.cpp`): fontes temporárias (absolutas ou `r[aL+n]`) ou constantes
+(absolutas, ou `c[n+aL]`/`c[n+a0]`: a primeira constante da instrução usa `const_0_rel`, as seguintes `const_1_rel`,
+e uma soma fora de 0..255 lê 0), depois swizzle, `abs` e negação. A multiplicação segue o Direct3D 9: um fator 0 dá
++0 seja qual for o outro (inclusive infinito e NaN) em `MUL`, no produto do `MULADD` (não na parcela somada), em cada
+produto de `DOT4`/`DOT3`/`DOT2ADD` e no y do `DST`; componentes em que os dois fatores são o mesmo operando (mesmo
+registrador, endereçamento, modificadores e componente do swizzle) dispensam o teste, que daria o mesmo resultado.
+`MAX`/`MIN` são `a >= b ? a : b` e `a < b ? a : b`; as comparações são ordenadas, menos "diferente" (NaN conta como
+diferente). `MAXA` devolve o máximo e põe em `a0` `clamp(floor(src0.w + 0,5), -256, 255)`. `CUBE` lê `src0.zzxy` e
+devolve `(tc, sc, 2·eixo maior, face)`, com empate a favor de Z e depois Y. `PRED_SET*_PUSH` escreve `p0` e os
+`KILL*` ligam a flag `killed`. As duas unidades leem as fontes antes de qualquer escrita; `a0` e `p0` são gravados
+depois dos registradores, `p0` por último (o da unidade escalar prevalece). Saturação: `NClamp` em 0..1 (NaN vira 0).
+
 **Limites conhecidos do M3** (falham alto, salvo onde indicado): exportação de memória; o tamanho de ponto exportado
 é descartado (informado em `ShaderInfo`); fetches com LOD implícito dentro de um caso do `switch` de pc alcançado por
 um `cond_jmp` que depende de predicado podem perder as derivadas; o z do `param_gen` vale 0 para linhas, onde o Xenia
 põe -0,0 (o bit de sinal marca linha), porque a chave não tem flag de linha (silencioso); laços que passam de 2^24
 desvios para trás terminam cedo (silencioso); o predicado é avaliado por invocação, não por wave: no hardware,
 `cond_exec_pred`, `cond_jmp`/`cond_call` predicados e a saída predicada do `loop_end` decidem uma vez para os 64
-lanes (qualquer lane / todos os lanes), e aqui, como no Xenia, cada invocação segue o próprio `p0` (silencioso). Até a
-Tarefa 15.5 o tradutor aceita todo o controle de fluxo, as
-operações vetoriais `MAX`, `ADD` e `MUL` e, da unidade escalar, só `PRED_SETE/NE/GT/GTEs`; o resto (demais operações
-da ALU e escalares, fetch, constantes relativas) é um erro `is not supported` até as Tarefas 15.6 a 15.9.
+lanes (qualquer lane / todos os lanes), e aqui, como no Xenia, cada invocação segue o próprio `p0` (silencioso); um
+`kill` num vertex shader só produz o resultado, sem descartar nada (silencioso). Até a Tarefa 15.6 o tradutor aceita
+todo o controle de fluxo, toda a unidade vetorial e, da unidade escalar, só `PRED_SETE/NE/GT/GTEs`; o resto (demais
+operações escalares e fetch) é um erro `is not supported` até as Tarefas 15.7 a 15.9.
 
 ## Diagnóstico
 
