@@ -5,6 +5,7 @@
 //
 // Usage: <game> --image <xex> [--data <dir>] [--user <dir>] [--headless] [--coverage] [--strict-memory] [--trace-imports]
 //        [--trace-file <path>] [--trace-gpu] [--gpu-trace-file <path>] [--exit-after-swaps <n>]
+//        [--shader-cache-dir <dir>] [--dump-shaders]
 // --trace-imports logs every import call (runtime/kernel/trace.h) to --trace-file, or stderr without one; the
 // launcher always passes --trace-file, which alone does nothing. --trace-gpu logs the GPU's PM4 packets, draws,
 // swaps and per-second counters (runtime/gpu/gpu_system.h) to --gpu-trace-file, or stderr without one (capped at
@@ -12,6 +13,11 @@
 // by swaps, window runs at 60 Hz of wall time. LR_DEADLOCK_SECONDS (default 10, 0 = off) sets the
 // deadlock detector threshold (runtime/kernel/deadlock.h). --exit-after-swaps <n> (n > 0) ends the run with exit code
 // 0 once the GPU has processed n swaps (KernelConfig::exit_after_swaps; the M3 integration test).
+// --shader-cache-dir <dir> keeps the translated shaders on disk (runtime/gpu/shader/disk_cache.h; the launcher passes
+// <root>/work/shaders/runtime); without it they stay in memory. --dump-shaders (needs --shader-cache-dir) also writes
+// the microcode disassembly next to each cache file (<name>.txt). Once the guest started the GPU, every exit path but
+// the fault handler prints "[gpu] shaders: keys=N vs=N ps=N translated=N disk=N failed=N new_last_100_swaps=N" on
+// stderr (lr::gpu::format_shader_summary, through lr::kernel::set_exit_report_hook).
 // Exit codes: 0 ok (also: window closed by the user), 2 usage/load error, 3 unimplemented import, 4 fault,
 // 5 guest fatal (lr::kernel::guest_fatal), 6 deadlock.
 
@@ -66,6 +72,8 @@ struct Options {
   bool trace_gpu = false;
   std::string gpu_trace_file;  // empty: stderr
   uint64_t exit_after_swaps = 0;  // 0: run until the game ends
+  std::string shader_cache_dir;    // empty: translated shaders in memory only
+  bool dump_shaders = false;
 };
 
 int usage(const char* msg) {
@@ -73,7 +81,7 @@ int usage(const char* msg) {
   std::fprintf(stderr,
                "usage: game --image <xex> [--data <dir>] [--user <dir>] [--headless] [--coverage] [--strict-memory] "
                "[--trace-imports] [--trace-file <path>] [--trace-gpu] [--gpu-trace-file <path>] "
-               "[--exit-after-swaps <n>]\n");
+               "[--exit-after-swaps <n>] [--shader-cache-dir <dir>] [--dump-shaders]\n");
   return kExitUsage;
 }
 
@@ -90,9 +98,16 @@ bool is_xex2(const std::vector<char>& b) { return b.size() >= 4 && std::memcmp(b
 // thread may run (resolve_variable_imports starts the kernel worker for KeTimeStampBundle; guest threads later)
 // goes through here, so no destructor tears the kernel down under a running thread.
 [[noreturn]] void exit_now(int rc) {
-  std::fflush(nullptr);
-  lr::kernel::flush_import_trace();
+  lr::kernel::flush_at_exit();  // the shader summary, stdio, the traces
   _exit(rc);
+}
+
+// The exit report (lr::kernel::set_exit_report_hook): the shader summary, once the guest started the GPU.
+void print_shader_summary() {
+  lr::gpu::GpuSystem& gpu = lr::kernel::kernel().gpu();
+  if (!gpu.started()) return;
+  std::fprintf(stderr, "%s\n", lr::gpu::format_shader_summary(gpu.shader_stats()).c_str());
+  std::fflush(stderr);
 }
 
 // LR_DEADLOCK_SECONDS: the detector threshold (tests use 1). Unset or not a number: 10; 0 disables the detector.
@@ -246,6 +261,7 @@ int main(int argc, char** argv) {
     else if (a == "--strict-memory") opt.strict_memory = true;
     else if (a == "--trace-imports") opt.trace_imports = true;
     else if (a == "--trace-gpu") opt.trace_gpu = true;
+    else if (a == "--dump-shaders") opt.dump_shaders = true;
     else if (a == "--exit-after-swaps") {
       if (i + 1 >= argc) return usage("missing value for --exit-after-swaps");
       const char* v = argv[++i];
@@ -253,19 +269,22 @@ int main(int argc, char** argv) {
       const unsigned long long n = std::strtoull(v, &end, 10);
       if (v[0] == '-' || end == v || *end != 0 || n == 0) return usage("--exit-after-swaps needs a positive integer");
       opt.exit_after_swaps = n;
-    } else if (a == "--image" || a == "--data" || a == "--user" || a == "--trace-file" || a == "--gpu-trace-file") {
+    } else if (a == "--image" || a == "--data" || a == "--user" || a == "--trace-file" || a == "--gpu-trace-file" ||
+               a == "--shader-cache-dir") {
       if (i + 1 >= argc) return usage(("missing value for " + a).c_str());
-      (a == "--image"        ? opt.image
-       : a == "--data"       ? opt.data
-       : a == "--user"       ? opt.user
-       : a == "--trace-file" ? opt.trace_file
-                             : opt.gpu_trace_file) = argv[++i];
+      (a == "--image"            ? opt.image
+       : a == "--data"           ? opt.data
+       : a == "--user"           ? opt.user
+       : a == "--trace-file"     ? opt.trace_file
+       : a == "--gpu-trace-file" ? opt.gpu_trace_file
+                                 : opt.shader_cache_dir) = argv[++i];
     } else {
       return usage(("unknown argument " + a).c_str());
     }
   }
   if (opt.coverage) return print_coverage(opt.image);
   if (opt.image.empty()) return usage("--image is required");
+  if (opt.dump_shaders && opt.shader_cache_dir.empty()) return usage("--dump-shaders needs --shader-cache-dir");
 
   bool read_ok = false;
   const std::vector<char> bytes = read_file(opt.image, read_ok);
@@ -303,6 +322,10 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
     return kExitUsage;
   }
+  // Before the guest runs (the GPU thread starts at VdInitializeRingBuffer).
+  if (!opt.shader_cache_dir.empty()) lr::kernel::kernel().gpu().set_shader_cache_dir(opt.shader_cache_dir);
+  lr::kernel::kernel().gpu().set_dump_shaders(opt.dump_shaders);
+  lr::kernel::set_exit_report_hook(&print_shader_summary);
 
   const auto image_bytes = std::as_bytes(std::span(bytes));
   auto img = load_image(mem.value(), image_bytes);

@@ -52,6 +52,15 @@ runtime traduz o microcódigo para SPIR-V ele mesmo (Tarefas 15.2 em diante). Os
 limpeza, untile, resolve) serão GLSL compilado pelo `glslangValidator` do sistema na compilação do launcher
 (Tarefa 15.x). O histórico do git guarda o fork do XenosRecomp (commits `0523eda`..`3b15c74`).
 
+O jogo guarda os shaders traduzidos em `--shader-cache-dir <pasta>` (o `legacyrecomp run` passa
+`<raiz>/work/shaders/runtime`; sem a flag, ficam só na memória). Para depurar o tradutor:
+`tools/dev/container.sh run -- --dump-shaders` grava `<nome>.txt` com a desmontagem do microcódigo (e, numa falha, o
+motivo) ao lado de cada `.spv` no volume `lr-data`. Ao sair, o jogo escreve no stderr
+`[gpu] shaders: keys=N vs=N ps=N translated=N disk=N failed=N new_last_100_swaps=N`. Mudou a saída do tradutor?
+Suba `kTranslatorVersion` (`src/runtime/gpu/shader/translator.h`) e atualize a impressão digital do teste
+`translator output fingerprint matches kTranslatorVersion` (`tests/test_gpu_shader_cache.cpp`; o valor novo aparece
+na falha do teste).
+
 ## ISO do jogo
 
 `install --iso <arquivo>` monta a pasta do arquivo, somente leitura, em `/iso` e passa `/iso/<arquivo>`

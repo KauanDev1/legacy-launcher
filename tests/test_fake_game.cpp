@@ -64,6 +64,10 @@ RunResult run_game(const fs::path& dir, const std::vector<std::string>& args, co
   return {WIFEXITED(st) ? WEXITSTATUS(st) : -1, ss.str()};
 }
 
+// The fake GPU guest's exit line: its vertex and pixel shader, translated in memory.
+constexpr const char* kSummaryTranslated =
+    "[gpu] shaders: keys=2 vs=1 ps=1 translated=2 disk=0 failed=0 new_last_100_swaps=2\n";
+
 std::string write_image(const fs::path& dir, uint32_t entry) {
   const fs::path p = dir / "fake.elf";
   auto elf = lr::test::build_elf(entry, {{".rdata", 0x82000000, std::vector<uint8_t>(16, 0), false},
@@ -337,7 +341,42 @@ TEST_CASE("fake guest initializes the GPU, submits a ring buffer and swaps", "[u
   auto r = run_game(td.path, {"--headless", "--image", write_image(td.path, 0x82000400)});
   INFO(r.out);
   CHECK(r.code == 0);
-  CHECK(r.out.empty());
+  // The only output: the shader summary (the guest loads a vertex and a pixel shader and draws once).
+  CHECK(r.out == kSummaryTranslated);
+}
+
+// main.cpp prints the shader summary on every exit path once the guest started the GPU: a normal exit (here with the
+// disk cache: translated, then read back) and --exit-after-swaps. Without the GPU there is no line (the other tests).
+TEST_CASE("fake game prints the shader summary at every exit", "[unit][gpu][threads]") {
+  TempDir td;
+  const fs::path cache = td.path / "shaders" / "runtime";
+  const std::string image = write_image(td.path, 0x82000400);
+  auto first =
+      run_game(td.path, {"--headless", "--shader-cache-dir", cache.string(), "--dump-shaders", "--image", image});
+  INFO(first.out);
+  CHECK(first.code == 0);
+  CHECK(first.out == kSummaryTranslated);
+  size_t spv = 0, txt = 0;
+  for (const auto& e : fs::directory_iterator(cache)) {
+    spv += e.path().extension() == ".spv" ? 1 : 0;
+    txt += e.path().extension() == ".txt" ? 1 : 0;
+  }
+  CHECK(spv == 2);
+  CHECK(txt == 2);  // --dump-shaders
+
+  auto second = run_game(td.path, {"--headless", "--shader-cache-dir", cache.string(), "--image", image});
+  INFO(second.out);
+  CHECK(second.code == 0);
+  CHECK(second.out == "[gpu] shaders: keys=2 vs=1 ps=1 translated=0 disk=2 failed=0 new_last_100_swaps=2\n");
+
+  auto swaps = run_game(td.path, {"--headless", "--exit-after-swaps", "1", "--image", image});
+  INFO(swaps.out);
+  CHECK(swaps.code == 0);
+  CHECK(swaps.out == "[gpu] exit after 1 swaps\n" + std::string(kSummaryTranslated));
+
+  auto usage = run_game(td.path, {"--headless", "--dump-shaders", "--image", image});
+  CHECK(usage.code == 2);
+  CHECK(usage.out.find("--dump-shaders needs --shader-cache-dir") != std::string::npos);
 }
 
 // The same guest with --trace-gpu: one line per PM4 packet, per swap, and the per-second counters line format.

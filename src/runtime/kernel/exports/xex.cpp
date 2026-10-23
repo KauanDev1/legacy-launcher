@@ -188,7 +188,7 @@ uint32_t XamLoaderGetLaunchData(uint32_t, uint32_t) { return ERROR_NOT_FOUND; }
 // XamLoaderTerminateTitle(): the title asks to end; exit code 0 (the import trace is flushed first).
 void XamLoaderTerminateTitle() {
   std::fflush(nullptr);
-  flush_import_trace();
+  flush_at_exit();
   _exit(0);
 }
 

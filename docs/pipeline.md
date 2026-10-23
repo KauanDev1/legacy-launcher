@@ -21,6 +21,13 @@ job (use `--jobs <n>` para limitar).
 
 Os shaders não têm etapa de instalação: o runtime traduz o microcódigo que o jogo carrega, na primeira vez que o vê (plano B, `docs/adr/0005-m3-plan-deviations.md`, M8). Um `work/state.toml` escrito por uma instalação anterior, com uma tabela `[stages.shaders]`, continua válido: a entrada é ignorada. Os restos dessa etapa (`work/shaders/in/`, `hlsl/`, `shader_cache.cpp`) podem ser apagados.
 
+O `legacyrecomp run` sempre passa ao jogo `--shader-cache-dir <raiz>/work/shaders/runtime`: é ali que o runtime guarda
+o SPIR-V que traduziu (um arquivo por chave de shader, ver `docs/architecture.md`, "Shaders (M3, plano B)"), para não
+traduzir de novo na próxima execução. É SPIR-V derivado do jogo: fica só nessa pasta, nunca vai para o repositório
+nem para um pacote. Apagar a pasta é seguro (o runtime traduz de novo); arquivos de outra versão do tradutor,
+truncados ou corrompidos são ignorados e reescritos. `legacyrecomp run -- --dump-shaders` grava também a
+desmontagem do microcódigo (`<nome>.txt`) ao lado de cada arquivo.
+
 O `analyse` também procura funções sem entrada no `.pdata` que só são alcançadas por ponteiro (vtables, tabelas
 de callbacks, o comparador de um `qsort`), que o XenonRecomp nunca recompilaria
 (`src/pipeline/function_discovery.cpp`). Candidatas: palavras de 32 bits (big-endian, alinhadas) fora das seções

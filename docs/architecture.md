@@ -563,7 +563,9 @@ adiantado, para os cabeçalhos do template do jogo continuarem pequenos.
 **Trace da GPU** (`--trace-gpu`, repassado por `legacyrecomp run -- --trace-gpu`): uma linha por pacote PM4
 (`pm4 type3 DRAW_INDX_2 dwords=3`, `pm4 type0 dwords=7`), por draw (`draw prim=4 count=3`), por resolve e por swap
 (`swap 1 fb=0x... 1280x720`), por microcódigo de shader na primeira vez que é carregado
-(`shader vertex|pixel 0x<hash> dwords=N`, ver "Shaders (M3, plano B)"), e uma vez por segundo
+(`shader load vs|ps 0x<hash> dwords=N`), por chave de shader na primeira vez que um draw a usa
+(`shader vs|ps 0x<hash> dwords=N mod=0x<modificadores> translated|disk|failed: <motivo>`, ver "Shaders (M3, plano
+B)"), e uma vez por segundo
 `stats draws=N resolves=N textures=N swaps=N` (contagens daquele segundo). Destino: `--gpu-trace-file <caminho>` (sem ele, stderr); o `legacyrecomp run` sempre passa
 `<raiz>/work/logs/gpu-trace.log`, que sozinho não faz nada. Escrito pela thread da GPU e descarregado a cada passo,
 antes do write-back do RPTR (um jogo que viu o RPTR andar também vê as linhas no disco) e em todo caminho de saída
@@ -576,11 +578,52 @@ linha final `gpu trace capped at 64 MiB`.
 processo com código 0. Serve ao teste de integração do M3 (`tests/test_integration_m3.cpp`), que roda o jogo até 60
 swaps e espera saída 0.
 
+**Resumo dos shaders na saída**: depois que o jogo inicia a GPU, todo caminho de saída menos o handler de falhas
+(saída normal e janela fechada, `--exit-after-swaps`, `HalReturnToFirmware`, `XamLoaderTerminateTitle`, saídas 3, 5
+e 6, e a chamada indireta sem função, 4) escreve uma linha no stderr, calculada de `ShaderLoadStats` e não do trace
+(que tem limite de 64 MiB): `[gpu] shaders: keys=N vs=N ps=N translated=N disk=N failed=N new_last_100_swaps=N`
+(`format_shader_summary`). `new_last_100_swaps` conta as chaves cujo primeiro draw foi nos últimos 100 swaps (todas,
+antes do swap 100): se não cai a zero, o jogo ainda está carregando shaders novos. O mecanismo é o
+`set_exit_report_hook` de `kernel/trace.h`: o `main.cpp` registra a função, e `flush_at_exit` (chamada por todos esses
+caminhos logo antes do `_exit`) a roda uma vez e depois descarrega os traces.
+
 ## Shaders (M3, plano B)
 
 Os shaders do jogo não são traduzidos na instalação: o runtime traduz o microcódigo que o jogo carrega
 (`IM_LOAD`/`IM_LOAD_IMMEDIATE`, identificado por `microcode_hash`, XXH3-64 dos bytes big-endian) para SPIR-V na
-primeira vez que o vê (ADR 0005, M8). O fork do XenosRecomp está no histórico do git (`0523eda`..`3b15c74`).
+primeira vez que um draw o usa (ADR 0005, M8). O fork do XenosRecomp está no histórico do git (`0523eda`..`3b15c74`).
+
+**Integração com a GPU emulada** (Tarefa 15.10; `runtime/gpu/shader_cache.h`, `shader/shader_key.h`,
+`shader/disk_cache.h`, `gpu_system.h`):
+- `IM_LOAD`/`IM_LOAD_IMMEDIATE`: o `GpuSystem` copia o microcódigo, calcula o hash e o decodifica durante o pacote
+  (o ponteiro de um `IM_LOAD_IMMEDIATE` só vale durante o pacote); um erro de decodificação fica guardado e aparece na
+  tradução. O último microcódigo carregado por estágio é o ativo (o modelo do Xenia). Um `IM_LOAD` com o campo
+  `start` (dword 1, bits 16..31) diferente de 0 carregaria só parte de um programa, o que o runtime não modela: é o
+  erro `IM_LOAD start 0x.... is not supported` (saída 5), nunca ignorado.
+- Em cada draw, o proxy do backend monta as duas `ShaderKey` (hash, dwords e modificadores tirados dos registradores
+  e do draw, ver "Chave e opções") e traduz a chave nova: da memória, senão do cache em disco, senão pelo tradutor,
+  na thread da GPU, com qualquer backend (então uma execução com o `NullBackend` mede a tradução). Falhas também
+  ficam na memória: uma tradução por chave, nunca uma por draw. O resultado vai ao backend em
+  `Backend::draw(regs, info, const ActiveShaders&)` (`vs`/`ps` nulos: sem microcódigo ou tradução falhou).
+- Microcódigo que o tradutor não trata vira `GpuHooks::fatal("shader microcode 0x... (<estágio>, N dwords) cannot be
+  translated: <motivo>")` (`guest_fatal`, saída 5) **só** com um backend cujo `binds_shaders()` é verdadeiro (o
+  renderizador Vulkan). Com o `NullBackend`, que não desenha nada, a falha só é informada: uma linha `[gpu] ...` no
+  stderr por chave, a linha do trace e a contagem `failed` do resumo de saída; o draw segue com `ps`/`vs` nulo.
+- Cache em disco: `--shader-cache-dir <pasta>` (o `legacyrecomp run` passa `<raiz>/work/shaders/runtime`; sem a flag,
+  só memória). Um arquivo por chave, `v<kTranslatorVersion>-<vs|ps>-<hash:016x>-<dwords>-<mod:016x>.spv`, com um
+  cabeçalho de 48 bytes (`LRSV`, a versão do tradutor, estágio, dwords, hash, modificadores, palavras de SPIR-V e um
+  XXH3-64 do resto do arquivo), o microcódigo (para detectar colisão de hash) e o SPIR-V. A escrita vai para um
+  arquivo temporário na mesma pasta e é renomeada, então ninguém lê um arquivo pela metade. Na leitura nada é
+  confiado: tamanho, magic, versão, chave, checksum, microcódigo e o magic do SPIR-V são conferidos; qualquer
+  divergência vira um aviso no stderr e uma tradução nova, que sobrescreve o arquivo. O `ShaderInfo` de um módulo
+  lido do disco vem de `shader_info(Program, TranslateOptions)`, a mesma função que o `translate()` usa. Pasta que
+  não pode ser criada, ou uma escrita que falha: um aviso no stderr e só memória daí em diante (o jogo continua). O
+  SPIR-V traduzido é derivado do jogo: fica só nessa pasta e nunca é versionado.
+- `--dump-shaders` (exige `--shader-cache-dir`): grava `<nome>.txt` ao lado de cada `.spv`, com a chave, a desmontagem
+  do microcódigo e, numa falha, o motivo.
+- `kTranslatorVersion` (hoje 9) entra no nome e no cabeçalho dos arquivos. O teste
+  `translator output fingerprint matches kTranslatorVersion` guarda um XXH3 do SPIR-V de três shaders sintéticos de
+  referência para a versão atual: mudar a saída do tradutor sem subir a versão faz o teste falhar.
 
 O tradutor (`src/runtime/gpu/shader/`, namespace `lr::gpu::shader`) é código próprio sob MIT, só CPU, sem tipos do
 Vulkan: `decode()` (`ir.h`) transforma os dwords em um `Program`, e `translate(Program, TranslateOptions)`
@@ -589,7 +632,7 @@ Vulkan: `decode()` (`ir.h`) transforma os dwords em um `Program`, e `translate(P
 profundidade, `kill`, tamanho de ponto descartado). Microcódigo que o tradutor não trata é um erro
 `instruction <n> (<tipo>): <o quê> is not supported`, com `<n>` o índice do CF ou o endereço do slot da ALU/fetch;
 um erro do próprio tradutor também vira `Result`, nunca `abort`. Com um backend que liga shaders, o erro é
-`guest_fatal` (saída 5). `kTranslatorVersion` sobe sempre que o SPIR-V gerado muda para a mesma entrada.
+`guest_fatal` (saída 5); com o `NullBackend` só é informado (ver acima). `kTranslatorVersion` sobe sempre que o SPIR-V gerado muda para a mesma entrada.
 
 ## Contrato dos shaders traduzidos (plano B)
 
@@ -695,7 +738,11 @@ centro do pixel (`PA_SU_VTX_CNTL`), com a inversão de Y incluída.
 **Chave e opções**: `ShaderKey{estágio, microcode_hash, dwords, modificadores de 64 bits}`. Modificadores do PS:
 bits 0..7 o registrador `param_gen` (`0xFF` = nenhum), bit 8 a flag de ponto, bits 16..31 a máscara flat
 (`SQ_INTERPOLATOR_CNTL.param_shade`), bits 32..47 a máscara centroid (`sampling_pattern`). O VS não tem
-modificadores no M3. `TranslateOptions` tem exatamente esses campos decodificados.
+modificadores no M3. `TranslateOptions` tem exatamente esses campos decodificados (`key_options`). Na montagem
+(`key_modifiers`): o registrador `param_gen` é `SQ_CONTEXT_MISC.param_gen_pos` (bits 8..15) quando
+`SQ_PROGRAM_CNTL.param_gen` (bit 18) está ligado e a posição é um interpolador (< 16), senão `0xFF`; a flag de ponto
+(o draw é uma lista de pontos, `prim_type` 1) só entra com um registrador `param_gen`, porque sem ele não muda nada e
+só dividiria chaves.
 
 **Kill e derivadas**: um `kill` liga uma flag local; o `main` termina com `OpKill` só se ela estiver ligada (o alpha
 test usa a mesma flag). Nunca há `OpKill` no meio do shader, então fetches posteriores mantêm as derivadas do quad.
@@ -803,14 +850,17 @@ tradutor leva S e T para -1..1 (`2c - 3`), limita a face a 0..5 (NaN vira 0), tr
 cubo do Vulkan dá essa face: +X (1, -T, -S), -X (-1, -T, S), +Y (S, 1, T), -Y (S, -1, -T), +Z (S, -T, 1),
 -Z (-S, -T, -1). Offsets da instrução (em meio texel, já divididos por 2 no decodificador) valem nos eixos da
 dimensão (no cubo, só S e T; o offset z soma na face): coordenada normalizada `c + offset / tamanho`, ou, com
-`tx_coord_denorm`, `(c + offset) / tamanho`. O tamanho vem de `OpImageQuerySizeLod` no mip 0 (capacidade
-`ImageQuery`), porque os samplers são sempre normalizados (os samplers não normalizados do Vulkan proíbem mips, 3D e
-cubo); coordenadas de cubo nunca são escaladas. LOD: o LOD de registrador (`setTexLOD`, x do operando; 0 se o
+`tx_coord_denorm`, `(c + offset) / tamanho`. Um offset x ou y diferente de 0 anda mais 1,5/1024 texel no próprio
+sentido (o épsilon do Xenia), então um offset de meio texel a partir do centro de um texel, com filtro nearest,
+escolhe o vizinho de forma determinística em vez de cair exatamente na borda; o offset z (fatia 3D ou face do cubo)
+não tem épsilon. O tamanho vem de `OpImageQuerySizeLod` no mip 0 (capacidade `ImageQuery`), porque os samplers são
+sempre normalizados (os samplers não normalizados do Vulkan proíbem mips, 3D e cubo). No cubo, com
+`tx_coord_denorm`, S e T são divididos pelo tamanho da face, como no Xenia; a face nunca é escalada. LOD: o LOD de registrador (`setTexLOD`, x do operando; 0 se o
 shader nunca o define) quando `use_register_lod`, mais o `lod_bias` da instrução (campo de 7 bits com sinal / 16).
 O LOD calculado (`use_computed_lod`) vale no PS, ou com gradientes de registrador: no PS sem gradientes é
 `OpImageSampleImplicitLod` com esse total como `Bias`; com `use_register_gradients`, `OpImageSampleExplicitLod` com
 `Grad` = os gradientes de `setGradientsH`/`setGradientsV` (x no 1D, xy no 2D, xyz no 3D e no cubo; divididos pelo
-tamanho com coordenadas não normalizadas; multiplicados por 2^total, já que `Grad` não aceita `Bias`). Sem LOD
+tamanho com coordenadas não normalizadas, só nos eixos que têm tamanho: nunca o z do cubo; multiplicados por 2^total, já que `Grad` não aceita `Bias`). Sem LOD
 calculado, e **sempre no VS** sem gradientes, o LOD é explícito: o total (0 + bias). `getGradients` (só PS) devolve
 `(dPdx(x), dPdy(x), dPdx(y), dPdy(y))` do operando; num VS é erro. `getCompTexLOD`, `getWeights` e `getBCF` falham
 a tradução com o nome (`get_comp_tex_lod`, `get_weights`, `get_border_color_frac`) até o jogo mostrar que precisa
@@ -846,9 +896,10 @@ sinal, infinitos e NaN; só os casos de borda da unidade escalar acima, decidido
 (silencioso); os formatos `*_FLOAT` de 16 bits são lidos como meia precisão IEEE, não com a faixa estendida do
 Xenos (expoente 31 é inf/NaN aqui) (silencioso); componentes ausentes valem (0, 0, 0, 1) como no Direct3D, onde o
 Xenia preenche com 0 (silencioso); no texture fetch: `getCompTexLOD`, `getWeights`, `getBCF` e `getGradients` num VS
-falham; texturas empilhadas (dimensão 2 com dados 2D em camadas) são amostradas como 3D (silencioso); o épsilon de
-arredondamento que o Xenia soma aos offsets (1,5/1024) não é somado, então um offset de meio texel com filtro
-nearest cai exatamente na borda entre texels (silencioso); os filtros por instrução, `fetch_valid_only`,
+falham; texturas empilhadas (dimensão 2 com dados 2D em camadas, `stacked`) são amostradas como 3D, o que filtra
+entre camadas e, com mips, reduz o número de camadas a cada nível, quando o certo seria um array 2D (silencioso no
+tradutor, que não vê a fetch constant: a Tarefa 19 deve registrar a primeira textura empilhada que o jogo usar,
+principalmente uma com mips, em vez de ficar calada); os filtros por instrução, `fetch_valid_only`,
 `exp_adjust` e o modo "unsigned biased" da fetch constant são ignorados (silencioso). A partir da Tarefa 15.9 o
 tradutor aceita todo o controle de fluxo, toda a ALU, o vertex fetch e o texture fetch.
 

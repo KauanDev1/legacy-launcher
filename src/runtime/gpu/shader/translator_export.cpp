@@ -42,15 +42,14 @@ void Translator::declare_stage_interface() {
     return;
   }
 
-  // Pixel shader inputs: every register r < 16 the program references, except the param_gen register.
-  for (uint32_t r = 0; r < kInterpolatorLocations && r < reg_count_; ++r) {
-    if (!temps_.relative && !temps_.absolute.test(r)) continue;
-    if (r == options_.ps_param_gen) continue;
+  // Pixel shader inputs: every register r < 16 the program references, except the param_gen register
+  // (ShaderInfo::interpolators_read, shader_info()).
+  for (uint32_t r = 0; r < kInterpolatorLocations; ++r) {
+    if (!((info_.interpolators_read >> r) & 1)) continue;
     interpolators_[r] = global_var(spv::StorageClassInput, t_.vec4, "in_r" + std::to_string(r));
     b_.decorate(interpolators_[r], spv::DecorationLocation, {r});
     if ((options_.flat_mask >> r) & 1) b_.decorate(interpolators_[r], spv::DecorationFlat);
     if ((options_.centroid_mask >> r) & 1) b_.decorate(interpolators_[r], spv::DecorationCentroid);
-    info_.interpolators_read |= 1u << r;
   }
   if (options_.ps_param_gen < reg_count_) {
     frag_coord_in_ = global_var(spv::StorageClassInput, t_.vec4, "frag_coord");

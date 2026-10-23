@@ -12,6 +12,8 @@
 #include <thread>
 #include <utility>
 
+#include "runtime/gpu/shader/shader_key.h"
+
 namespace lr::gpu {
 
 Backend::~Backend() = default;
@@ -269,6 +271,14 @@ Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, 
     if (type == 1) return ShaderStage::Pixel;
     return malformed("PM4 " + op_label(opcode) + " has unknown shader type " + std::to_string(type));
   };
+  // IM_LOAD / IM_LOAD_IMMEDIATE dword 1, bits 16-31: the instruction slot to load at. Every title we know loads whole
+  // shaders (start 0); a nonzero start would patch part of a program, which the runtime does not model (one
+  // microcode per stage, Xenia's model), so it is a named error rather than silently wrong shaders.
+  auto check_start = [&](uint32_t size_dword) -> Result<void> {
+    const uint32_t start = size_dword >> 16;
+    if (start == 0) return {};
+    return malformed(op_label(opcode) + " start " + hex(start, 4) + " is not supported");
+  };
   // DRAW_INDX / DRAW_INDX_2: the initiator is payload dword `at`, the DMA index buffer (if any) follows it.
   auto draw = [&](uint32_t at) -> Result<void> {
     const uint32_t initiator = p(at);
@@ -293,7 +303,7 @@ Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, 
     if (edram_mode == kEdramModeCopy) {
       backend_.resolve(regs_);
     } else if (edram_mode == kEdramModeColorDepth || edram_mode == kEdramModeDepthOnly) {
-      backend_.draw(regs_, info);
+      backend_.draw(regs_, info, ActiveShaders{});  // GpuSystem's backend proxy fills in the shaders
     }  // other modes (0 = ignore): nothing reaches the render targets
     return {};
   };
@@ -440,7 +450,8 @@ Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, 
       LR_TRY(need(2));
       LR_TRY_ASSIGN(stage, shader_stage(p(0) & 3));
       const uint32_t phys = p(0) & ~3u;
-      const uint32_t size = p(1) & 0xFFFF;  // dwords; bits 16-31 (start) are always 0 in practice
+      const uint32_t size = p(1) & 0xFFFF;  // dwords
+      LR_TRY(check_start(p(1)));
       LR_TRY_ASSIGN(guest, translate(phys, uint64_t{size} * 4, "IM_LOAD"));
       backend_.load_shader(stage, guest, size);
       return {};
@@ -450,6 +461,7 @@ Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, 
       LR_TRY(need(2));
       LR_TRY_ASSIGN(stage, shader_stage(p(0)));
       const uint32_t size = p(1) & 0xFFFF;
+      LR_TRY(check_start(p(1)));
       LR_TRY(need(2 + size));
       backend_.load_shader(stage, payload + 8, size);
       return {};

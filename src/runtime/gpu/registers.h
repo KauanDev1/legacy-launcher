@@ -31,7 +31,10 @@ inline constexpr uint32_t kShaderConstantLoopCount = 32;
 //    SCRATCH_REG4/5 (0x57C/0x57D) CALLBACK_ADDRESS/CALLBACK_CONTEXT after how the Xbox 360 kernel uses them.
 //  - RB, PA, SQ, VGT context registers, COHER_STATUS_HOST, the viz-query status pair and the shader constant
 //    ranges: AMD R6xx/Xenos register map; cross-checked against Xenia register_table.inc (indices only; they are
-//    hardware facts).
+//    hardware facts). The Task 15.10 additions: PA_CL_VTE_CNTL, PA_SU_VTX_CNTL and the four VGT index registers
+//    are the R6xx context byte offsets (0x28818, 0x28C08, 0x28400..0x2840C) mapped as (offset - 0x28000) / 4 +
+//    0x2000; SQ_CONTEXT_MISC and SQ_INTERPOLATOR_CNTL sit right after SQ_PROGRAM_CNTL on Xenos (they differ from
+//    R6xx), as in Xenia register_table.inc.
 // The lookup table in registers.cpp sorts them at compile time, so the order here is free.
 #define LR_GPU_REGISTERS(X)                                                                                  \
   /* Command processor */                                                                                    \
@@ -55,9 +58,13 @@ inline constexpr uint32_t kShaderConstantLoopCount = 32;
   X(PA_CL_VPORT_XSCALE, 0x210F) X(PA_CL_VPORT_XOFFSET, 0x2110) X(PA_CL_VPORT_YSCALE, 0x2111)                 \
   X(PA_CL_VPORT_YOFFSET, 0x2112) X(PA_CL_VPORT_ZSCALE, 0x2113) X(PA_CL_VPORT_ZOFFSET, 0x2114)                \
   X(PA_SU_SC_MODE_CNTL, 0x2205) X(PA_SC_VIZ_QUERY, 0x2293)                                                   \
+  X(PA_CL_VTE_CNTL, 0x2206) X(PA_SU_VTX_CNTL, 0x2302)                                                        \
   /* Sequencer and vertex grouper */                                                                         \
   X(SQ_PROGRAM_CNTL, 0x2180) X(VGT_EVENT_INITIATOR, 0x21F9) X(VGT_DMA_BASE, 0x21FA) X(VGT_DMA_SIZE, 0x21FB)    \
   X(VGT_DRAW_INITIATOR, 0x21FC)                                                                              \
+  X(SQ_CONTEXT_MISC, 0x2181) X(SQ_INTERPOLATOR_CNTL, 0x2182)                                                 \
+  X(VGT_MAX_VTX_INDX, 0x2100) X(VGT_MIN_VTX_INDX, 0x2101) X(VGT_INDX_OFFSET, 0x2102)                         \
+  X(VGT_MULTI_PRIM_IB_RESET_INDX, 0x2103)                                                                    \
   /* Shader constants (first and last register of each range) */                                             \
   X(SHADER_CONSTANT_000_X, 0x4000) X(SHADER_CONSTANT_511_W, 0x47FF)                                          \
   X(SHADER_CONSTANT_FETCH_00_0, 0x4800) X(SHADER_CONSTANT_FETCH_31_5, 0x48BF)                                \

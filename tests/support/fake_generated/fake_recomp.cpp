@@ -362,6 +362,14 @@ constexpr uint32_t kFrames = 3;
 // Offsets inside the data block D (physical memory): write-back, interrupt counters, fence, VdSwap arguments.
 constexpr uint32_t kWriteBack = 0x00, kVblanks = 0x10, kCpInterrupts = 0x14, kSwapFence = 0x20, kFetch = 0x40,
                    kFrontPtr = 0x60, kWidth = 0x64, kHeight = 0x68, kFrontBuffer = 0x1000;
+// Synthetic Xenos microcode (host-order dwords, written to the ring big-endian by PPC_STORE_U32): exec_end of one
+// ALU slot, `max` exporting c0 to the position (VS) or r0 to colour 0 (PS). The same words the test builder
+// (tests/support/xenos_shader_builder.h) assembles; test_gpu_shader_cache.cpp checks they still match.
+constexpr uint32_t kShaderDwords = 6;
+constexpr uint32_t kVertexShader[kShaderDwords] = {0x00001001, 0x00002000, 0x00000000,
+                                                   0xC80F803E, 0x00000000, 0x22000000};
+constexpr uint32_t kPixelShader[kShaderDwords] = {0x00001001, 0x00002000, 0x00000000,
+                                                  0xC80F8000, 0x00000000, 0xE2000000};
 }  // namespace gpu_boot
 
 // Graphics interrupt callback(source, user_data = D + kVblanks): counts vblanks (source 0) at user_data and
@@ -374,9 +382,9 @@ PPC_FUNC(sub_82000480) {
 
 // Entry point: VdInitializeEngines (must be 1); a 32 KiB ring and a data block from MmAllocatePhysicalMemoryEx and
 // their physical addresses (MmGetPhysicalAddress); VdSetGraphicsInterruptCallback(sub_82000480, D + kVblanks),
-// VdInitializeRingBuffer(ring, 12), VdEnableRingBufferRPtrWriteBack(D, 6). Then kFrames frames, each an optional
-// INTERRUPT packet (frame 0) and the 64 dwords VdSwap fills (10 arguments, the last two on the guest stack), WPTR
-// published through the MMIO window after each; then EVENT_WRITE_SHD with initiator bit 31 (stores the swap
+// VdInitializeRingBuffer(ring, 12), VdEnableRingBufferRPtrWriteBack(D, 6). Then kFrames frames, each with (frame 0
+// only) an INTERRUPT packet, two shader loads and a draw, then the 64 dwords VdSwap fills (10 arguments, the last
+// two on the guest stack), WPTR published through the MMIO window after each; then EVENT_WRITE_SHD with initiator bit 31 (stores the swap
 // counter at D + kSwapFence). It waits (KeDelayExecutionThread 1 ms, at most 5000 times) until the write-back RPTR
 // equals WPTR, kFrames vblanks and one CP interrupt arrived, and checks the fence holds kFrames: exit 0. Any
 // failure calls FakeMissing from 0x82000420 (exit 3).
@@ -445,6 +453,18 @@ PPC_FUNC(sub_82000400) {
     if (frame == 0) {
       put((3u << 30) | (0u << 16) | (0x54u << 8));  // INTERRUPT, 1 payload dword
       put(1);                                       // CPU mask
+      // A vertex and a pixel shader through IM_LOAD_IMMEDIATE, then one auto-index triangle draw (edram_mode 4):
+      // the runtime translates both, so the exit summary counts 2 keys.
+      for (uint32_t stage = 0; stage < 2; ++stage) {
+        put((3u << 30) | ((2u + kShaderDwords - 1) << 16) | (0x2Bu << 8));  // IM_LOAD_IMMEDIATE
+        put(stage);                                                          // 0 vertex, 1 pixel
+        put(kShaderDwords);                                                  // start 0, size
+        for (uint32_t w : stage == 0 ? kVertexShader : kPixelShader) put(w);
+      }
+      put(0x2208);  // type 0, one register: RB_MODECONTROL
+      put(4);       // edram_mode colour+depth
+      put((3u << 30) | (0u << 16) | (0x36u << 8));  // DRAW_INDX_2, 1 payload dword
+      put(4u | (2u << 6) | (3u << 16));              // triangle list, auto index, 3 vertices
     }
     const uint32_t area = ring + wptr * 4;
     ctx.r3.u64 = area;

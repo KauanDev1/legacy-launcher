@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "pipeline/game_exit.h"
 #include "pipeline/pipeline.h"
 #include "pipeline/stages/build_stage.h"
 #include "support/temp_dir.h"
@@ -187,6 +188,27 @@ TEST_CASE("launch passes --trace-file and --gpu-trace-file under <root>/work/log
   const std::string expect_gpu = (t.path / "work" / "logs" / "gpu-trace.log").string();
   CHECK(ss.str().find("--gpu-trace-file\n" + expect_gpu + "\n") != std::string::npos);
   CHECK(ss.str().find("--trace-imports\n") != std::string::npos);  // extra arguments still reach the game
+}
+
+TEST_CASE("launch passes the runtime shader cache dir", "[unit]") {
+  TempDir t;
+  write(t.path / "work" / "image" / "default_tu1.xex", "image");
+  const fs::path game = t.path / "bin" / "legacyrecomp-game";
+  const fs::path args = t.path / "args.txt";
+  write(game, "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done > '" + args.string() + "'\nexit 0\n");
+  fs::permissions(game, fs::perms::owner_all);
+  Options opts;
+  opts.root = t.path;
+  auto r = launch(opts, {});
+  REQUIRE(r);
+  CHECK(r.value() == 0);
+  std::ifstream f(args);
+  std::stringstream ss;
+  ss << f.rdbuf();
+  // Game-derived SPIR-V: under work/, never anywhere that gets committed or packaged.
+  const std::string expect = (t.path / "work" / "shaders" / "runtime").string();
+  CHECK(ss.str().find("--shader-cache-dir\n" + expect + "\n") != std::string::npos);
+  CHECK(lr::pipeline::runtime_shader_cache_dir(t.path) == t.path / "work" / "shaders" / "runtime");
 }
 
 TEST_CASE("launch passes --data <root>/game and --user <root>/user and creates user/", "[unit][vfs]") {

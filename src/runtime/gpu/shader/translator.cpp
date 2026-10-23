@@ -279,6 +279,7 @@ Result<TranslatedShader> Translator::run() {
   scan_alu_state();
   reg_count_ = std::max<uint32_t>(program_.temp_count, 1);
   if (temps_.relative) reg_count_ = kMaxTemps;
+  info_ = shader_info(program_, options_);
 
   t_.void_ = b_.type_void();
   t_.bool_ = b_.type_bool();
@@ -317,24 +318,38 @@ Result<TranslatedShader> Translator::run() {
   }
   LR_TRY_ASSIGN(spirv, b_.try_finish());
 
-  info_.vfetch_slots = program_.vfetch_slots;
-  info_.tfetch_slots = program_.tfetch_slots;
-  for_each_exec_slot(program_, [&](uint32_t, const std::variant<AluInstr, FetchInstr>& s) {
-    const auto* f = std::get_if<FetchInstr>(&s);
-    if (f && f->op != FetchOp::VertexFetch && f->const_index < 32)
-      info_.tfetch_dims[f->const_index] = static_cast<uint8_t>(f->dimension);
-  });
-  if (!is_vs()) {
-    info_.colors_written = program_.colors_written;
-    info_.writes_depth = program_.writes_depth;
-    info_.uses_kill = program_.uses_kill;
-  } else {
-    info_.drops_point_size = program_.writes_point_size;
-  }
   return TranslatedShader{std::move(spirv), info_};
 }
 
 }  // namespace detail
+
+ShaderInfo shader_info(const Program& program, const TranslateOptions& options) {
+  ShaderInfo info;
+  info.vfetch_slots = program.vfetch_slots;
+  info.tfetch_slots = program.tfetch_slots;
+  detail::for_each_exec_slot(program, [&](uint32_t, const std::variant<AluInstr, FetchInstr>& s) {
+    const auto* f = std::get_if<FetchInstr>(&s);
+    if (f && f->op != FetchOp::VertexFetch && f->const_index < 32)
+      info.tfetch_dims[f->const_index] = static_cast<uint8_t>(f->dimension);
+  });
+  if (program.stage == ShaderStage::Vertex) {
+    info.drops_point_size = program.writes_point_size;
+    return info;
+  }
+  info.colors_written = program.colors_written;
+  info.writes_depth = program.writes_depth;
+  info.uses_kill = program.uses_kill;
+  // Pixel shader inputs: every register r < 16 the program references (the register array holds it), except the
+  // param_gen register. declare_stage_interface declares exactly these.
+  const detail::TempUse temps = detail::referenced_temps(program);
+  const uint32_t reg_count = temps.relative ? kMaxTemps : std::max<uint32_t>(program.temp_count, 1);
+  for (uint32_t r = 0; r < kInterpolatorLocations && r < reg_count; ++r) {
+    if (!temps.relative && !temps.absolute.test(r)) continue;
+    if (r == options.ps_param_gen) continue;
+    info.interpolators_read |= 1u << r;
+  }
+  return info;
+}
 
 Result<TranslatedShader> translate(const Program& program, const TranslateOptions& options) {
   return detail::Translator(program, options).run();

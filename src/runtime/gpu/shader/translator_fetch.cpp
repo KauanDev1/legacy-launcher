@@ -288,6 +288,9 @@ void Translator::store_fetch_result(const FetchInstr& f, Id fetched, Id predicat
 
 namespace {
 
+// Added to a nonzero x/y tfetch offset, in texels, away from zero (Xenia's value).
+constexpr float kTexelOffsetEpsilon = 1.5f / 1024.0f;
+
 // The heap of a fetch dimension: 1D and 2D share the Texture2D heap (a 1D texture is a height-1 2D texture).
 uint32_t texture_set(uint32_t dimension) {
   if (dimension <= 1) return kSetTexture2D;
@@ -411,9 +414,16 @@ Result<void> Translator::emit_texture_fetch(uint32_t, const FetchInstr& f) {
   const Id sampler = load_heap_descriptor(kSetSamplers, f.const_index);
 
   // Unnormalized coordinates and offsets need the texture size (mip 0; a cube's face size). Samplers are always
-  // normalized: Vulkan's unnormalized samplers forbid mips, 3D and cube textures.
-  const std::array<float, 3> offset = {f.offset_x, f.offset_y, f.offset_z};
-  const bool unnormalized = f.unnormalized && !cube;  // cube face coordinates are never scaled (as in Xenia)
+  // normalized: Vulkan's unnormalized samplers forbid mips, 3D and cube textures. A cube's unnormalized S and T are
+  // divided by the face size like any other (as in Xenia); its face coordinate never is.
+  // A nonzero x or y offset moves kTexelOffsetEpsilon further in its own direction (Xenia does the same), so a
+  // half-texel offset from a texel centre with nearest filtering picks the neighbour deterministically instead of
+  // landing exactly on the texel edge. The z offset (a 3D slice, or the cube face) gets none.
+  const auto nudged = [](float o) {
+    return o == 0.0f ? 0.0f : o + (o > 0.0f ? kTexelOffsetEpsilon : -kTexelOffsetEpsilon);
+  };
+  const std::array<float, 3> offset = {nudged(f.offset_x), nudged(f.offset_y), f.offset_z};
+  const bool unnormalized = f.unnormalized;
   bool needs_size = unnormalized;
   for (uint32_t i = 0; i < axes; ++i) needs_size |= offset[i] != 0.0f;
   std::array<Id, 3> size{};
@@ -482,7 +492,8 @@ Result<void> Translator::emit_texture_fetch(uint32_t, const FetchInstr& f) {
   Id fetched = 0;
   if (computed && f.use_register_gradients) {
     // The register gradients (setGradientsH/V): x (1D, y = 0), xy (2D), xyz (3D, cube), divided by the size for
-    // unnormalized coordinates and scaled by 2^lod (a gradient sample takes no bias).
+    // unnormalized coordinates (only the sized axes: never a cube's z) and scaled by 2^lod (a gradient sample takes
+    // no bias).
     const uint32_t n = f.dimension <= 1 ? 2 : 3;
     const uint32_t used = f.dimension == 0 ? 1 : n;
     const Id scale = lod ? glsl(t_.f32, GLSLstd450Exp2, {lod}) : 0;
@@ -495,7 +506,7 @@ Result<void> Translator::emit_texture_fetch(uint32_t, const FetchInstr& f) {
           continue;
         }
         comp[i] = extract(g, i);
-        if (unnormalized) comp[i] = arith(spv::OpFDiv, t_.f32, {comp[i], size[i]});
+        if (unnormalized && i < axes) comp[i] = arith(spv::OpFDiv, t_.f32, {comp[i], size[i]});  // not a cube's z
         if (scale) comp[i] = arith(spv::OpFMul, t_.f32, {comp[i], scale});
       }
       return n == 2 ? b_.op(spv::OpCompositeConstruct, t_.vec2, {comp[0], comp[1]})

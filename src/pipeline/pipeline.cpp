@@ -86,11 +86,12 @@ Result<int> launch(const Options& options, std::span<const std::string> extra_ar
   }
 
   // --trace-file and --gpu-trace-file always: the game only writes them when --trace-imports / --trace-gpu is among
-  // the extra arguments (spec section 11).
+  // the extra arguments (spec section 11). --shader-cache-dir always: the game keeps its translated shaders there.
   std::vector<std::string> args = {game.string(), "--image", image.string(), "--data", p.game.string(),
                                    "--user", p.user.string(),
                                    "--trace-file", game_trace_file(p.root).string(),
-                                   "--gpu-trace-file", gpu_trace_file(p.root).string()};
+                                   "--gpu-trace-file", gpu_trace_file(p.root).string(),
+                                   "--shader-cache-dir", runtime_shader_cache_dir(p.root).string()};
   args.insert(args.end(), extra_args.begin(), extra_args.end());
   std::vector<char*> argv;
   for (auto& a : args) argv.push_back(a.data());

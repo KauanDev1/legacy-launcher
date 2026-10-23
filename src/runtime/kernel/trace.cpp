@@ -29,6 +29,7 @@ size_t g_len = 0;
 
 std::atomic<bool> g_enabled{false};
 std::atomic<void (*)()> g_flush_hook{nullptr};
+std::atomic<void (*)()> g_exit_report_hook{nullptr};
 
 struct SpinLock {
   SpinLock() {
@@ -129,6 +130,15 @@ void trace_import_missing(const char* name, const GuestCall& c) {
 }
 
 void set_trace_flush_hook(void (*hook)()) { g_flush_hook.store(hook, std::memory_order_release); }
+
+void set_exit_report_hook(void (*hook)()) { g_exit_report_hook.store(hook, std::memory_order_release); }
+
+void flush_at_exit() {
+  // exchange: once per process, even when two threads race to exit.
+  if (auto* hook = g_exit_report_hook.exchange(nullptr, std::memory_order_acq_rel)) hook();
+  std::fflush(nullptr);
+  flush_import_trace();
+}
 
 void flush_import_trace() {
   if (auto* hook = g_flush_hook.load(std::memory_order_acquire)) hook();

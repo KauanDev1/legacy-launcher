@@ -114,7 +114,7 @@ struct RecordingBackend final : lr::gpu::Backend {
   std::mutex m;
   std::vector<uint32_t> microcode;
   uint8_t* base = nullptr;
-  void draw(const lr::gpu::RegisterFile&, const lr::gpu::DrawInfo&) override {}
+  void draw(const lr::gpu::RegisterFile&, const lr::gpu::DrawInfo&, const lr::gpu::ActiveShaders&) override {}
   void resolve(const lr::gpu::RegisterFile&) override {}
   void swap(uint32_t, uint32_t, uint32_t) override {}
   void wait_idle() override {}

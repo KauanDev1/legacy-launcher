@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "runtime/gpu/backend.h"
+#include "runtime/gpu/shader/shader_key.h"
 
 namespace lr::gpu {
 
@@ -21,7 +22,7 @@ class NullBackend final : public Backend {
   };
 
   void load_shader(ShaderStage stage, uint32_t guest_addr, uint32_t dwords) override;
-  void draw(const RegisterFile& regs, const DrawInfo& info) override;
+  void draw(const RegisterFile& regs, const DrawInfo& info, const ActiveShaders& shaders) override;
   void resolve(const RegisterFile& regs) override;
   void swap(uint32_t frontbuffer_phys, uint32_t width, uint32_t height) override;
   void wait_idle() override;
@@ -33,6 +34,7 @@ class NullBackend final : public Backend {
   uint64_t wait_idle_calls = 0;
   std::optional<ShaderLoad> last_shader;
   std::optional<DrawInfo> last_draw;
+  std::optional<ActiveShaders> last_shaders;  // of the last draw
   std::optional<Swap> last_swap;
 };
 

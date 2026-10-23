@@ -72,7 +72,7 @@ void KeBugCheck(uint32_t code) { bugcheck("KeBugCheck", code, 0, 0, 0, 0); }
 void HalReturnToFirmware(uint32_t routine) {
   std::fprintf(stderr, "Guest requested shutdown: HalReturnToFirmware(%u)\n", routine);
   std::fflush(nullptr);
-  flush_import_trace();
+  flush_at_exit();
   _exit(runtime::kExitOk);
 }
 

@@ -299,6 +299,32 @@ TEST_CASE("IM_LOAD reports the shader to the backend", "[unit][gpu]") {
   CHECK(r.error().code == lr::ErrorCode::InvalidFormat);
 }
 
+TEST_CASE("IM_LOAD with a nonzero start is an error", "[unit][gpu]") {
+  Fixture f;
+  // Dword 1 bits 16-31 (start) nonzero: a partial load the runtime does not model, never silently ignored.
+  Pm4Builder b;
+  b.type3(pm4::IM_LOAD, {0x4000u | 1u /*pixel*/, (0x10u << 16) | 0x30});
+  auto r = f.run(b);
+  REQUIRE_FALSE(r.ok());
+  CHECK(r.error().code == lr::ErrorCode::InvalidFormat);
+  CHECK_THAT(r.error().message, Catch::Matchers::ContainsSubstring("IM_LOAD start 0x0010 is not supported"));
+  CHECK(f.backend.load_shader_calls == 0);
+
+  Pm4Builder imm;
+  imm.type3(pm4::IM_LOAD_IMMEDIATE, {0 /*vertex*/, (2u << 16) | 3, 0xA, 0xB, 0xC});
+  auto ri = f.run(imm);
+  REQUIRE_FALSE(ri.ok());
+  CHECK(ri.error().code == lr::ErrorCode::InvalidFormat);
+  CHECK_THAT(ri.error().message, Catch::Matchers::ContainsSubstring("IM_LOAD_IMMEDIATE start 0x0002 is not supported"));
+  CHECK(f.backend.load_shader_calls == 0);
+
+  // Start 0 still loads.
+  Pm4Builder ok;
+  ok.type3(pm4::IM_LOAD_IMMEDIATE, {0, 3, 0xA, 0xB, 0xC});
+  REQUIRE(f.run(ok).ok());
+  CHECK(f.backend.load_shader_calls == 1);
+}
+
 TEST_CASE("DRAW_INDX reports a draw", "[unit][gpu]") {
   Fixture f;
   // prim_type 4 (triangle list), source_select 0 (DMA), index_size 1 (32-bit), 6 indices.

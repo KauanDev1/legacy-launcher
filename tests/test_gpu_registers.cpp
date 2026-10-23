@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 #include "runtime/gpu/registers.h"
 
@@ -62,4 +63,20 @@ TEST_CASE("out-of-range index is ignored on write and reads 0", "[unit][gpu]") {
   CHECK(rf.read(kRegisterCount) == 0);
   CHECK(rf.read(0xFFFFFFFFu) == 0);
   CHECK(rf.read_float(kRegisterCount) == 0.0f);
+}
+
+TEST_CASE("new registers have the documented indices", "[unit][gpu]") {
+  // Task 15.10 (the runtime shader contract): R6xx context byte offsets (0x28xxx - 0x28000) / 4 + 0x2000, and the two
+  // SQ registers right after SQ_PROGRAM_CNTL on Xenos; cross-checked against Xenia register_table.inc.
+  CHECK(PA_CL_VTE_CNTL == 0x2206);
+  CHECK(PA_SU_VTX_CNTL == 0x2302);
+  CHECK(SQ_CONTEXT_MISC == 0x2181);
+  CHECK(SQ_INTERPOLATOR_CNTL == 0x2182);
+  CHECK(VGT_MAX_VTX_INDX == 0x2100);
+  CHECK(VGT_MIN_VTX_INDX == 0x2101);
+  CHECK(VGT_INDX_OFFSET == 0x2102);
+  CHECK(VGT_MULTI_PRIM_IB_RESET_INDX == 0x2103);
+  for (uint32_t index : {0x2206u, 0x2302u, 0x2181u, 0x2182u, 0x2100u, 0x2101u, 0x2102u, 0x2103u})
+    CHECK(RegisterFile::name(index) != nullptr);
+  CHECK(std::string(RegisterFile::name(0x2182)) == "SQ_INTERPOLATOR_CNTL");
 }

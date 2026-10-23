@@ -12,8 +12,8 @@
 #include <utility>
 
 #include "runtime/gpu/mmio.h"
-#include "runtime/gpu/shader_cache.h"
 #include "runtime/gpu/null_backend.h"
+#include "runtime/gpu/shader_cache.h"
 
 namespace lr::gpu {
 
@@ -109,11 +109,13 @@ class GpuSystem::BackendProxy final : public Backend {
     Busy b(owner_);
     inner_->load_shader(stage, guest_addr, dwords);
   }
-  void draw(const RegisterFile& regs, const DrawInfo& info) override {
+  void draw(const RegisterFile& regs, const DrawInfo& info, const ActiveShaders& /*empty: the processor's*/) override {
     ++draws;
     if (owner_.trace_) owner_.trace_->line("draw prim=%u count=%u\n", info.prim_type, info.index_count);
-    Busy b(owner_);
-    inner_->draw(regs, info);
+    Busy b(owner_);  // translation is GPU work too, for the vblank pacer
+    const ActiveShaders shaders = owner_.prepare_draw(regs, info);
+    if (owner_.shader_fatal_.load(std::memory_order_acquire)) return;
+    inner_->draw(regs, info, shaders);
   }
   void resolve(const RegisterFile& regs) override {
     ++resolves;
@@ -163,7 +165,8 @@ GpuSystem::GpuSystem(MemoryAccess mem, GpuHooks hooks)
     : mem_(mem),
       hooks_(std::move(hooks)),
       proxy_(std::make_unique<BackendProxy>(*this)),
-      cp_(std::move(mem), regs_, *proxy_, [this](uint32_t source, uint32_t cpu) { raise_interrupt(source, cpu, false); }) {}
+      cp_(std::move(mem), regs_, *proxy_, [this](uint32_t source, uint32_t cpu) { raise_interrupt(source, cpu, false); }),
+      shader_cache_(std::make_unique<ShaderCache>()) {}
 
 GpuSystem::~GpuSystem() { stop(); }
 
@@ -269,6 +272,7 @@ void GpuSystem::start() {
   std::lock_guard<std::mutex> lock(thread_mutex_);
   if (started_ || stop_) return;
   started_ = true;
+  started_flag_.store(true, std::memory_order_release);
   try {
     gpu_thread_ = std::thread([this] { gpu_main(); });
     vblank_thread_ = std::thread([this] { vblank_main(); });
@@ -294,25 +298,110 @@ void GpuSystem::flush_trace() {
   if (trace_) trace_->flush();
 }
 
-ShaderLoadStats GpuSystem::shader_stats() const {
-  std::lock_guard<std::mutex> lock(shader_mutex_);
-  return shader_stats_;
+std::string format_shader_summary(const ShaderLoadStats& stats) {
+  uint64_t vs = 0, ps = 0, translated = 0, disk = 0, failed = 0;
+  for (const ShaderLoadStats::Key& k : stats.keys) {
+    ++(k.key.stage == ShaderStage::Vertex ? vs : ps);
+    switch (k.status) {
+      case ShaderLoadStats::Status::Translated: ++translated; break;
+      case ShaderLoadStats::Status::Disk: ++disk; break;
+      case ShaderLoadStats::Status::Failed: ++failed; break;
+    }
+  }
+  char b[192];
+  std::snprintf(b, sizeof b,
+                "[gpu] shaders: keys=%zu vs=%llu ps=%llu translated=%llu disk=%llu failed=%llu new_last_100_swaps=%llu",
+                stats.keys.size(), static_cast<unsigned long long>(vs), static_cast<unsigned long long>(ps),
+                static_cast<unsigned long long>(translated), static_cast<unsigned long long>(disk),
+                static_cast<unsigned long long>(failed), static_cast<unsigned long long>(stats.new_keys_last_100_swaps));
+  return b;
 }
+
+ShaderLoadStats GpuSystem::shader_stats() const {
+  const uint64_t now = swaps();
+  std::lock_guard<std::mutex> lock(shader_mutex_);
+  ShaderLoadStats s = shader_stats_;
+  s.new_keys_last_100_swaps = 0;
+  for (const ShaderLoadStats::Key& k : s.keys) s.new_keys_last_100_swaps += k.first_swap + 100 > now ? 1 : 0;
+  return s;
+}
+
+void GpuSystem::set_shader_cache_dir(const std::optional<std::filesystem::path>& dir) {
+  shader_cache_->set_disk_dir(dir);
+}
+
+void GpuSystem::set_dump_shaders(bool dump) { shader_cache_->set_dump(dump); }
 
 void GpuSystem::on_shader_load(ShaderStage stage, uint32_t guest_addr, uint32_t dwords) {
   // The command processor already checked [guest_addr, guest_addr + 4 * dwords) against guest memory.
   if (mem_.base == nullptr || uint64_t{guest_addr} + uint64_t{dwords} * 4 > mem_.size) return;
-  const uint64_t hash = microcode_hash(mem_.base + guest_addr, dwords);
+  // Copied now: an IM_LOAD_IMMEDIATE pointer is only valid during the packet.
+  const uint64_t hash = shader_cache_->load(stage, mem_.base + guest_addr, dwords);
+  active_[stage == ShaderStage::Vertex ? 0 : 1] = Active{true, hash, dwords};
   {
     std::lock_guard<std::mutex> lock(shader_mutex_);
     ++shader_stats_.loads;
     if (!shaders_seen_.emplace(hash, stage).second) return;
-    shader_stats_.distinct.push_back({hash, stage, dwords});
   }
   if (trace_) {
-    trace_->line("shader %s 0x%016llX dwords=%u\n", stage == ShaderStage::Vertex ? "vertex" : "pixel",
+    trace_->line("shader load %s 0x%016llX dwords=%u\n", stage == ShaderStage::Vertex ? "vs" : "ps",
                  static_cast<unsigned long long>(hash), dwords);
   }
+}
+
+ActiveShaders GpuSystem::prepare_draw(const RegisterFile& regs, const DrawInfo& info) {
+  ActiveShaders out;
+  if (shader_fatal_.load(std::memory_order_acquire)) return out;
+  for (const ShaderStage stage : {ShaderStage::Vertex, ShaderStage::Pixel}) {
+    const Active& a = active_[stage == ShaderStage::Vertex ? 0 : 1];
+    if (!a.loaded) continue;
+    const shader::ShaderKey key{stage, a.hash, a.dwords, shader::key_modifiers(stage, regs, info)};
+    Result<const shader::TranslatedShader*> r = shader_cache_->translate(key);
+    const ShaderCache::Origin origin = shader_cache_->last_origin();
+    const shader::TranslatedShader* t = r ? r.value() : nullptr;
+    if (stage == ShaderStage::Vertex) {
+      out.vs = t;
+      out.vs_key = key;
+    } else {
+      out.ps = t;
+      out.ps_key = key;
+    }
+    if (origin == ShaderCache::Origin::Memory) continue;  // seen before: recorded and reported then
+
+    // A new key: record, trace and report it.
+    const char* short_stage = stage == ShaderStage::Vertex ? "vs" : "ps";
+    ShaderLoadStats::Key k;
+    k.key = key;
+    k.status = !r ? ShaderLoadStats::Status::Failed
+                  : origin == ShaderCache::Origin::Disk ? ShaderLoadStats::Status::Disk
+                                                        : ShaderLoadStats::Status::Translated;
+    if (!r) k.reason = r.error().message;
+    k.first_swap = swaps();
+    {
+      std::lock_guard<std::mutex> lock(shader_mutex_);
+      shader_stats_.keys.push_back(k);
+    }
+    if (trace_) {
+      const char* status = r ? (origin == ShaderCache::Origin::Disk ? "disk" : "translated") : "failed: ";
+      trace_->line("shader %s 0x%016llX dwords=%u mod=0x%llX %s%s\n", short_stage,
+                   static_cast<unsigned long long>(key.microcode_hash), key.dwords,
+                   static_cast<unsigned long long>(key.modifiers), status, r ? "" : k.reason.c_str());
+    }
+    if (r) continue;
+    char head[128];
+    std::snprintf(head, sizeof head, "shader microcode 0x%016llX (%s, %u dwords) cannot be translated: ",
+                  static_cast<unsigned long long>(key.microcode_hash),
+                  stage == ShaderStage::Vertex ? "vertex" : "pixel", key.dwords);
+    if (proxy_->binds_shaders()) {
+      shader_fatal_.store(true, std::memory_order_release);
+      fail(head + k.reason);
+      return ActiveShaders{};
+    }
+    // A backend that binds no shaders renders nothing anyway: report, keep going (the exit summary counts it).
+    std::fprintf(stderr, "[gpu] %s%s (modifiers 0x%llX; reported only: the backend binds no shaders)\n", head,
+                 k.reason.c_str(), static_cast<unsigned long long>(key.modifiers));
+  }
+  return out;
 }
 
 uint64_t GpuSystem::interrupts_delivered(uint32_t source) const {
@@ -398,6 +487,7 @@ bool GpuSystem::step(uint32_t generation, uint32_t ring_guest, uint32_t ring_dwo
 void GpuSystem::gpu_main() {
   uint32_t spins = 0;
   while (!stop_.load(std::memory_order_acquire)) {
+    if (shader_fatal_.load(std::memory_order_acquire)) return;
     if (trace_) {
       trace_->maybe_stats(Clock::now(), proxy_->draws, proxy_->resolves, proxy_->textures_created(), swaps());
     }

@@ -133,7 +133,7 @@ void DeadlockDetector::loop(uint32_t seconds) {
       }
       std::fputs(msg.c_str(), stderr);
       std::fflush(nullptr);
-      flush_import_trace();
+      flush_at_exit();
       _exit(runtime::kExitDeadlock);
     }
     lock.lock();

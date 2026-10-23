@@ -81,7 +81,7 @@ void bad_indirect_call(uint32_t target, uint32_t lr) {
   const std::string msg = std::string(head) + format_trail(current_trail());
   std::fputs(msg.c_str(), stderr);
   std::fflush(nullptr);
-  flush_import_trace();
+  flush_at_exit();
   _exit(runtime::kExitFault);
 }
 }  // namespace lr::kernel

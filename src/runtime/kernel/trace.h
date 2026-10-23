@@ -44,6 +44,15 @@ void flush_import_trace();
 // clears it. Not run by flush_import_trace_from_signal: the hook is not async-signal-safe, so a fault (exit 4)
 // loses that trace's unflushed lines.
 void set_trace_flush_hook(void (*hook)());
+
+// The exit report: one function (main.cpp: the GPU shader summary line on stderr) that runs once per process, on
+// every exit path that is not a signal handler (normal exit and a closed window, --exit-after-swaps,
+// HalReturnToFirmware, XamLoaderTerminateTitle, exits 3, 5 and 6, and the bad indirect call's 4), through
+// flush_at_exit. nullptr clears it.
+void set_exit_report_hook(void (*hook)());
+// What every such exit path calls right before _exit: the exit report (once), fflush of stdio, flush_import_trace.
+// Not async-signal-safe.
+void flush_at_exit();
 // Async-signal-safe variant for the fault handler: skips the flush if the buffer is busy.
 void flush_import_trace_from_signal();
 

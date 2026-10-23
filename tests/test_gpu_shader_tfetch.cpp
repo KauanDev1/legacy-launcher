@@ -495,6 +495,24 @@ TEST_CASE("cube fetch after the cube op", "[unit][vulkan]") {
     INFO("pixel " << i << ", direction " << text(verts[i].interpolators[0]));
     check_pixel(out[i], want[i]);
   }
+
+  SECTION("unnormalized: S and T are divided by the face size") {
+    // The same lookup with the face coordinates scaled by the face size (2) and tx_coord_denorm set: the translator
+    // divides S and T by the queried face size (as Xenia does), never the face, so every pixel is the same.
+    xe::Alu scale = vop(xe::kVectorMul, 1, r(1), c(1));
+    scale.vector_mask = 0x3;
+    xe::TFetch denorm = fetch;
+    denorm.unnormalized = true;
+    const Draw dn = on_points(verts, {exec_end({vop(xe::kVectorCube, 1, r(0, kZZXY), r(0, kYXZZ)), rcp, mad, scale,
+                                                denorm, mov(0, r(3), true)})});
+    HarnessInputs in_n = inputs(24, texture(kSlot, HarnessTextureDim::kCube, 2, 2));
+    in_n.ps_constants = {{1.5f, 1.5f, 1.5f, 1.5f}, {2, 2, 2, 2}};
+    const auto out_n = run(h, dn, in_n);
+    for (size_t i = 0; i < want.size(); ++i) {
+      INFO("pixel " << i << ", direction " << text(verts[i].interpolators[0]));
+      check_pixel(out_n[i], want[i]);
+    }
+  }
 }
 
 // --- LOD ----------------------------------------------------------------------------------------------------------
@@ -685,6 +703,26 @@ TEST_CASE("fetch offsets", "[unit][vulkan]") {
     xe::TFetch f = tf(1, 0, kSlot, xe::kTextureDim2D);
     f.offset_x = 2;  // half texels
     f.offset_y = -2;
+    const Draw d = on_points(verts, {exec_end({f, mov(0, r(1), true)})});
+    const auto out = run(h, d, inputs(9, texture(kSlot, HarnessTextureDim::k2D, 4, 4)));
+    for (size_t i = 0; i < want.size(); ++i) {
+      INFO("pixel " << i);
+      check_pixel(out[i], want[i]);
+    }
+  }
+  SECTION("2D: half-texel offsets pick the neighbour in the offset's direction (the epsilon)") {
+    // From a texel centre, half a texel lands exactly on the edge between two texels; the 1.5/1024 texel epsilon
+    // (Xenia's) pushes it on: -1/2 in x picks the texel to the left, +1/2 in y the one below.
+    std::vector<Vertex> verts;
+    std::vector<Pixel> want;
+    for (uint32_t ty = 0; ty < 3; ++ty)
+      for (uint32_t tx = 1; tx < 4; ++tx) {
+        verts.push_back(point(static_cast<uint32_t>(verts.size()), 9, {Pixel{at(tx, 4), at(ty, 4), 0, 0}}));
+        want.push_back(texel_value(tx - 1, ty + 1, 0, 0));
+      }
+    xe::TFetch f = tf(1, 0, kSlot, xe::kTextureDim2D);
+    f.offset_x = -1;  // half texels
+    f.offset_y = 1;
     const Draw d = on_points(verts, {exec_end({f, mov(0, r(1), true)})});
     const auto out = run(h, d, inputs(9, texture(kSlot, HarnessTextureDim::k2D, 4, 4)));
     for (size_t i = 0; i < want.size(); ++i) {

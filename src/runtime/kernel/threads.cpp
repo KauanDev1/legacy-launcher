@@ -74,7 +74,7 @@ void store_signal_state(uint8_t* base, uint32_t header, int32_t v) {
 [[noreturn]] void die(int code, const std::string& msg) {
   std::fputs(msg.c_str(), stderr);
   std::fflush(nullptr);
-  flush_import_trace();
+  flush_at_exit();
   _exit(code);
 }
 

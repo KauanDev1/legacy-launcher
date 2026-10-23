@@ -11,6 +11,8 @@ namespace lr::gpu {
 
 enum class ShaderStage { Vertex, Pixel };
 
+struct ActiveShaders;  // runtime/gpu/shader/shader_key.h
+
 // One draw as the PM4 DRAW_INDX / DRAW_INDX_2 packet describes it. The index_* buffer fields are 0 unless
 // `indexed`.
 struct DrawInfo {
@@ -29,18 +31,21 @@ class Backend {
  public:
   virtual ~Backend();
   // IM_LOAD / IM_LOAD_IMMEDIATE: `dwords` microcode dwords (big-endian) at guest address `guest_addr`. For
-  // IM_LOAD_IMMEDIATE the address points into the command buffer itself, valid only during the call.
+  // IM_LOAD_IMMEDIATE the address points into the command buffer itself, valid only during the call. GpuSystem has
+  // already copied and decoded the microcode (runtime/gpu/shader_cache.h); draws get the translation.
   virtual void load_shader(ShaderStage stage, uint32_t guest_addr, uint32_t dwords) = 0;
-  virtual void draw(const RegisterFile& regs, const DrawInfo& info) = 0;
+  // `shaders`: the translated vertex and pixel shaders of the draw (GpuSystem fills them; the command processor alone
+  // passes an empty ActiveShaders).
+  virtual void draw(const RegisterFile& regs, const DrawInfo& info, const ActiveShaders& shaders) = 0;
   // A draw issued while RB_MODECONTROL.edram_mode is "copy": the RB_COPY_* registers describe an EDRAM resolve.
   virtual void resolve(const RegisterFile& regs) = 0;
   virtual void swap(uint32_t frontbuffer_phys, uint32_t width, uint32_t height) = 0;
   virtual void wait_idle() = 0;
   // Host textures created so far, for the --trace-gpu per-second counters. Backends without textures report 0.
   virtual uint64_t textures_created() const { return 0; }
-  // True for a backend that binds the translated shaders (the Vulkan renderer). Reserved for Task 15.10: there,
-  // microcode the runtime translator cannot handle becomes fatal only with a binding backend; backends that render
-  // nothing (NullBackend) only report it.
+  // True for a backend that binds the translated shaders (the Vulkan renderer). Microcode the runtime translator
+  // cannot handle is fatal (GpuHooks::fatal, exit 5) only with such a backend; with one that renders nothing
+  // (NullBackend) GpuSystem only reports it (stderr, --trace-gpu, the exit summary).
   virtual bool binds_shaders() const { return false; }
 };
 

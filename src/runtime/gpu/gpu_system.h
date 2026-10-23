@@ -41,15 +41,22 @@
 //
 // --trace-gpu (enable_trace): one line per PM4 packet ("pm4 type3 DRAW_INDX_2 dwords=3"), per draw
 // ("draw prim=4 count=3"), per resolve and per swap ("swap 1 fb=0x... 1280x720"), per shader microcode the first
-// time it is loaded ("shader vertex|pixel 0x<XXH3-64> dwords=N"), and once per second
+// time it is loaded ("shader load vs|ps 0x<XXH3-64> dwords=N"), per shader key the first time a draw uses it
+// ("shader vs|ps 0x<hash> dwords=N mod=0x<modifiers> translated|disk|failed: <reason>"), and once per second
 // "stats draws=N resolves=N textures=N swaps=N" (counts of that second). Written by the GPU thread, flushed after
 // every step before RPTR is written back (so a guest that saw RPTR advance also sees the lines on disk), on stop and on
 // the kernel's exit paths (flush_trace through kernel/trace.h's flush hook);
 // capped at 64 MiB (a final "gpu trace capped at 64 MiB" line).
 //
-// Shader loads. Every IM_LOAD / IM_LOAD_IMMEDIATE is hashed (XXH3-64 of the big-endian microcode in guest memory,
-// runtime/gpu/shader_cache.h); the first sighting of each (hash, stage) is recorded in shader_stats() and traced.
-// The load always reaches the backend: translating it is the backend's job (plan B, ADR 0005 M8).
+// Shaders (plan B, ADR 0005 M8). Every IM_LOAD / IM_LOAD_IMMEDIATE is copied, hashed (XXH3-64 of the big-endian
+// microcode) and decoded by the ShaderCache (runtime/gpu/shader_cache.h) during the packet, then reaches the
+// backend; the last microcode loaded per stage is the active one (Xenia's model). At each draw the backend proxy
+// builds both ShaderKeys (shader/shader_key.h: hash, size, and the modifiers from the registers and the draw),
+// translates a key it has not seen (memory, then the disk cache, then the translator; on the GPU thread, whatever
+// the backend, so a NullBackend run measures translation too), records it in shader_stats() with the swap count of
+// its first draw, traces it, and hands the results to Backend::draw (ActiveShaders). A key that cannot be
+// translated is GpuHooks::fatal("shader microcode 0x... (<stage>, N dwords) cannot be translated: <reason>") only
+// when the backend binds_shaders(); otherwise it is reported once on stderr and the draw goes on with a null shader.
 #pragma once
 
 #include <atomic>
@@ -72,8 +79,11 @@
 #include "runtime/gpu/backend.h"
 #include "runtime/gpu/pm4.h"
 #include "runtime/gpu/registers.h"
+#include "runtime/gpu/shader/shader_key.h"
 
 namespace lr::gpu {
+
+class ShaderCache;  // runtime/gpu/shader_cache.h
 
 enum class VblankMode { Realtime60Hz, PacedBySwap };
 
@@ -83,16 +93,23 @@ inline constexpr uint32_t kVblankCpu = 2;  // the CPU a vblank interrupt runs on
 
 inline constexpr uint64_t kGpuTraceCapBytes = 64ull << 20;
 
-// What the IM_LOAD / IM_LOAD_IMMEDIATE packets loaded so far, by microcode hash.
+// What the IM_LOAD / IM_LOAD_IMMEDIATE packets loaded and what the draws translated.
 struct ShaderLoadStats {
-  struct Shader {
-    uint64_t hash;
-    ShaderStage stage;
-    uint32_t dwords;  // microcode size of the first sighting
+  enum class Status { Translated, Disk, Failed };
+  struct Key {
+    shader::ShaderKey key;
+    Status status = Status::Translated;
+    std::string reason;       // Failed: why
+    uint64_t first_swap = 0;  // swaps processed when a draw first used the key
   };
-  uint64_t loads = 0;            // load_shader calls
-  std::vector<Shader> distinct;  // first sighting of each (hash, stage), in load order
+  uint64_t loads = 0;                    // load_shader calls
+  std::vector<Key> keys;                 // one per distinct ShaderKey, in first-draw order
+  uint64_t new_keys_last_100_swaps = 0;  // keys first drawn within the last 100 swaps (all of them before swap 100)
 };
+
+// The exit summary line, without a newline:
+// "[gpu] shaders: keys=N vs=N ps=N translated=N disk=N failed=N new_last_100_swaps=N".
+std::string format_shader_summary(const ShaderLoadStats& stats);
 
 // What GpuSystem needs from its host (the kernel; tests supply their own).
 struct GpuHooks {
@@ -139,8 +156,14 @@ class GpuSystem {
   Result<void> enable_trace(const std::optional<std::filesystem::path>& file);
   // Writes the buffered trace lines (no-op without a trace). Any thread; the kernel calls it on its exit paths.
   void flush_trace();
-  // A copy of the shader load statistics. Any thread.
+  // A copy of the shader statistics (new_keys_last_100_swaps computed now). Any thread.
   ShaderLoadStats shader_stats() const;
+  // --shader-cache-dir: the disk cache of translated shaders (ShaderCache::set_disk_dir; nullopt: memory only), and
+  // --dump-shaders. Before start().
+  void set_shader_cache_dir(const std::optional<std::filesystem::path>& dir);
+  void set_dump_shaders(bool dump);
+  // start() ran (the guest initialised the GPU). Any thread.
+  bool started() const { return started_flag_.load(std::memory_order_acquire); }
 
   // Swaps the backend processed (LR_SWAP packets executed).
   uint64_t swaps() const { return swaps_.load(std::memory_order_acquire); }
@@ -166,8 +189,11 @@ class GpuSystem {
   void on_interrupt_done(uint32_t source);
   void on_swap(uint64_t swaps);
   uint32_t read_wptr() const;
-  // Hashes a loaded shader and records and traces its first sighting.
+  // Copies, hashes and decodes a loaded shader, makes it its stage's active one, records and traces its first
+  // sighting.
   void on_shader_load(ShaderStage stage, uint32_t guest_addr, uint32_t dwords);
+  // The active shaders of a draw, translated if new (see "Shaders" above). Sets shader_fatal_ if it raised a fatal.
+  ActiveShaders prepare_draw(const RegisterFile& regs, const DrawInfo& info);
 
   MemoryAccess mem_;
   GpuHooks hooks_;
@@ -176,10 +202,20 @@ class GpuSystem {
   std::unique_ptr<Trace> trace_;
   CommandProcessor cp_;
 
-  // Shader loads (shader_mutex_; written by the GPU thread).
+  // Shaders. The cache and the active microcode are GPU-thread only (set_shader_cache_dir before start()); the
+  // statistics are behind shader_mutex_, which is never held across a hook call.
+  std::unique_ptr<ShaderCache> shader_cache_;
+  struct Active {
+    bool loaded = false;
+    uint64_t hash = 0;
+    uint32_t dwords = 0;
+  };
+  Active active_[2];  // by ShaderStage
   mutable std::mutex shader_mutex_;
   ShaderLoadStats shader_stats_;
   std::set<std::pair<uint64_t, ShaderStage>> shaders_seen_;
+  std::atomic<bool> shader_fatal_{false};  // a shader fatal was raised: the GPU thread stops (tests: the hook returns)
+  std::atomic<bool> started_flag_{false};
 
   // Ring state, set by guest threads and read by the GPU thread.
   std::mutex ring_mutex_;

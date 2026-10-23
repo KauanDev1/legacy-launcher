@@ -19,8 +19,9 @@
 
 namespace lr::gpu::shader {
 
-// Bumped whenever the translated SPIR-V changes for the same input (the disk cache is keyed by it).
-inline constexpr uint32_t kTranslatorVersion = 8;
+// Bumped whenever the translated SPIR-V changes for the same input (the disk cache is keyed by it; the golden test
+// `translator output fingerprint matches kTranslatorVersion` in tests/test_gpu_shader_cache.cpp enforces it).
+inline constexpr uint32_t kTranslatorVersion = 9;
 inline constexpr uint32_t kNoParamGen = 0xFF;
 
 // A shader with jumps, calls or loops runs as a loop around a switch on its pc (translator_cf.cpp). Only taken
@@ -56,5 +57,9 @@ struct TranslatedShader {
 };
 
 Result<TranslatedShader> translate(const Program& program, const TranslateOptions& options);
+
+// The ShaderInfo translate() returns for (program, options), without translating: the runtime needs it for a module
+// that comes from the disk cache. translate() itself uses it, so the two never disagree.
+ShaderInfo shader_info(const Program& program, const TranslateOptions& options);
 
 }  // namespace lr::gpu::shader

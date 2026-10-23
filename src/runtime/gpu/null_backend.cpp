@@ -8,9 +8,10 @@ void NullBackend::load_shader(ShaderStage stage, uint32_t guest_addr, uint32_t d
   last_shader = ShaderLoad{stage, guest_addr, dwords};
 }
 
-void NullBackend::draw(const RegisterFile& /*regs*/, const DrawInfo& info) {
+void NullBackend::draw(const RegisterFile& /*regs*/, const DrawInfo& info, const ActiveShaders& shaders) {
   ++draw_calls;
   last_draw = info;
+  last_shaders = shaders;
 }
 
 void NullBackend::resolve(const RegisterFile& /*regs*/) { ++resolve_calls; }

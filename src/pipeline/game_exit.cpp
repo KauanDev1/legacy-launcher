@@ -13,6 +13,10 @@ std::filesystem::path gpu_trace_file(const std::filesystem::path& root) {
   return DataPaths::from_root(root).logs / "gpu-trace.log";
 }
 
+std::filesystem::path runtime_shader_cache_dir(const std::filesystem::path& root) {
+  return DataPaths::from_root(root).work / "shaders" / "runtime";
+}
+
 std::string describe_game_exit(int code, const std::filesystem::path& trace_file, ExitTextLanguage language) {
   const bool en = language == ExitTextLanguage::English;
   const std::string n = std::to_string(code);

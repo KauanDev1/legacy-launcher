@@ -67,7 +67,7 @@ Kernel::Kernel(runtime::GuestMemory& mem, KernelConfig cfg)
       if (swaps < limit) return;
       std::fprintf(stderr, "[gpu] exit after %llu swaps\n", static_cast<unsigned long long>(swaps));
       std::fflush(nullptr);
-      flush_import_trace();  // also the GPU trace (flush hook)
+      flush_at_exit();  // also the GPU trace (flush hook)
       _exit(runtime::kExitOk);
     };
   }
@@ -200,7 +200,7 @@ void guest_fatal(std::string_view what) {
   const std::string msg = "Guest fatal: " + std::string(what) + "\n" + format_trail(current_trail());
   std::fputs(msg.c_str(), stderr);
   std::fflush(nullptr);
-  flush_import_trace();
+  flush_at_exit();
   _exit(runtime::kExitGuestFatal);
 }
 
