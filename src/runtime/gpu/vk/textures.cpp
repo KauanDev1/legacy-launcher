@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
@@ -149,6 +150,7 @@ struct TextureCache::Impl {
   uint64_t created = 0, upload_count = 0;
   uint64_t resident_bytes = 0;
   std::set<std::string> logged;
+  std::function<void()> after_hash_hook;  // tests: runs between the hash and the load (set_after_hash_hook)
 
   Impl(const Device& d, MemoryAccess m, const std::atomic<bool>* s) : device(d), mem(std::move(m)), stop(s) {}
   Impl(const Impl&) = delete;
@@ -165,6 +167,13 @@ struct TextureCache::Impl {
     for (DescriptorHeap& h : heaps) destroy_descriptor_heap(d, h);
     if (fence) vkDestroyFence(d, fence, nullptr);
     if (pool) vkDestroyCommandPool(d, pool, nullptr);
+  }
+
+  bool sampleable(VkFormat f) const {
+    VkFormatProperties props{};
+    vkGetPhysicalDeviceFormatProperties(device.physical_device(), f, &props);
+    return (props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0 &&
+           (props.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_DST_BIT) != 0;
   }
 
   void log_once(const std::string& msg) {
@@ -392,9 +401,14 @@ struct TextureCache::Impl {
   // --- the cache ----------------------------------------------------------------------------------------------------
   Result<void> load_into(Entry& e) {
     LR_TRY_ASSIGN(fp, texture_footprint(e.desc, mem));
+    // Hash first, then load: the guest CPU may write the texture concurrently. A write between the two leaves a hash
+    // of the older bytes with the newer data uploaded, so the next check sees a difference and uploads once more.
+    // The other order could hash bytes newer than the upload and keep a stale texture until the next change.
+    const uint64_t hash = hash_footprint(fp, mem);
+    if (after_hash_hook) after_hash_hook();
     LR_TRY_ASSIGN(host, load_texture(e.desc, mem, fp));
     e.footprint = fp;
-    e.hash = hash_footprint(fp, mem);
+    e.hash = hash;
     LR_TRY(upload(e.image, host.bytes, host.levels, heap_of(e.desc) == kHeap3D, e.array_layers));
     e.dirty = false;
     e.checked_frame = frame;
@@ -419,8 +433,11 @@ struct TextureCache::Impl {
     std::optional<VkFormat> format = host_format(desc.format);
     if (!format) return Error{ErrorCode::InvalidFormat, std::string("texture format ") + info.name + " is not supported", ""};
     if (desc.gamma) {
-      if (std::optional<VkFormat> s = srgb_format(*format)) {
+      if (std::optional<VkFormat> s = srgb_format(*format); s && sampleable(*s)) {
         format = *s;
+      } else if (s) {
+        log_once(std::string("gamma ignored for ") + info.name + ": the device cannot sample VkFormat " +
+                 std::to_string(int(*s)) + "; using the UNORM format");
       } else {
         log_once(std::string("gamma ignored for ") + info.name + " (no sRGB host format)");
       }
@@ -561,6 +578,8 @@ void TextureCache::invalidate_range(uint32_t phys, uint32_t size) {
 }
 
 void TextureCache::begin_frame() { ++impl_->frame; }
+
+void TextureCache::set_after_hash_hook(std::function<void()> hook) { impl_->after_hash_hook = std::move(hook); }
 
 VkDescriptorSetLayout TextureCache::set_layout(uint32_t set) const { return impl_->heaps[std::min(set, 2u)].layout; }
 VkDescriptorSet TextureCache::set(uint32_t set) const { return impl_->heaps[std::min(set, 2u)].set; }

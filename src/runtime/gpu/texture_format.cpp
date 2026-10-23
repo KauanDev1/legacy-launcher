@@ -112,9 +112,9 @@ std::string hex(uint32_t v) {
 // Places the "linear" tile-relative offset `o` (macro tile index and micro position, already scaled to bytes) and
 // the bank / pipe / y[0] bits at their address bits: o[3:0] -> 3:0, y[0] -> 4, o[4] -> 5, pipe -> 7:6, o[7:5] ->
 // 10:8, bank -> 11, o[31:8] -> 31:12.
-uint32_t spread(uint32_t o, uint32_t bank, uint32_t pipe, uint32_t y_lsb) {
-  return (o & 0xFu) | (y_lsb << 4) | (bits(o, 4, 1) << 5) | (pipe << 6) | (bits(o, 5, 3) << 8) | (bank << 11) |
-         ((o >> 8) << 12);
+uint64_t spread(uint64_t o, uint32_t bank, uint32_t pipe, uint32_t y_lsb) {
+  return (o & 0xFu) | (uint64_t{y_lsb} << 4) | (((o >> 4) & 1u) << 5) | (uint64_t{pipe} << 6) |
+         (((o >> 5) & 7u) << 8) | (uint64_t{bank} << 11) | ((o >> 8) << 12);
 }
 
 uint8_t expand(uint32_t v, uint32_t width) {  // unorm n-bit -> 8-bit, rounded
@@ -432,16 +432,18 @@ uint32_t tiled_offset_2d(uint32_t x, uint32_t y, uint32_t pitch_blocks, uint32_t
   const uint32_t o = ((macro << 6) | micro) << bpb_log2(bytes_per_block);
   const uint32_t bank = bits(y, 4, 1);
   const uint32_t pipe = bits(x, 3, 2) ^ (bits(y, 3, 1) << 1);
-  return spread(o, bank, pipe, y & 1u);
+  return uint32_t(spread(o, bank, pipe, y & 1u));
 }
 
-uint32_t tiled_offset_3d(uint32_t x, uint32_t y, uint32_t z, uint32_t pitch_blocks, uint32_t height_blocks,
+uint64_t tiled_offset_3d(uint32_t x, uint32_t y, uint32_t z, uint32_t pitch_blocks, uint32_t height_blocks,
                          uint32_t bytes_per_block) {
-  const uint32_t macro_pitch = (pitch_blocks + 31) >> 5;
-  const uint32_t macro_rows = ((height_blocks + 31) >> 5) * 2;  // 16-row macro tiles
-  const uint32_t macro = ((z >> 2) * macro_rows + (y >> 4)) * macro_pitch + (x >> 5);
-  const uint32_t micro = (bits(z, 0, 2) << 5) | (bits(y, 1, 2) << 3) | bits(x, 0, 3);
-  const uint32_t o = ((macro << 7) | micro) << bpb_log2(bytes_per_block);
+  // 64-bit: a 2048x2048x1024 volume of 16-byte blocks addresses past 4 GiB (the loader's host-size limit refuses it
+  // later, but the address math itself must not wrap).
+  const uint64_t macro_pitch = (uint64_t{pitch_blocks} + 31) >> 5;
+  const uint64_t macro_rows = ((uint64_t{height_blocks} + 31) >> 5) * 2;  // 16-row macro tiles
+  const uint64_t macro = ((uint64_t{z} >> 2) * macro_rows + (y >> 4)) * macro_pitch + (x >> 5);
+  const uint64_t micro = (bits(z, 0, 2) << 5) | (bits(y, 1, 2) << 3) | bits(x, 0, 3);
+  const uint64_t o = ((macro << 7) | micro) << bpb_log2(bytes_per_block);
   const uint32_t bank = (bits(y, 3, 1) ^ bits(z, 2, 1));
   const uint32_t pipe = bits(x, 3, 2) ^ (bank << 1);
   return spread(o, bank, pipe, y & 1u);

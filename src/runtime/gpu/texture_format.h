@@ -168,7 +168,7 @@ inline bool format_supported(XenosFormat format) { return format_info(format).ho
 uint32_t tiled_offset_2d(uint32_t x, uint32_t y, uint32_t pitch_blocks, uint32_t bytes_per_block);
 // Byte offset of block (x, y, z) in a 3D tiled surface: 32x16x4 macro tiles, 8x8x4 micro tiles. pitch_blocks and
 // height_blocks are rounded up to 32 here.
-uint32_t tiled_offset_3d(uint32_t x, uint32_t y, uint32_t z, uint32_t pitch_blocks, uint32_t height_blocks,
+uint64_t tiled_offset_3d(uint32_t x, uint32_t y, uint32_t z, uint32_t pitch_blocks, uint32_t height_blocks,
                          uint32_t bytes_per_block);
 // One past the largest byte a block in [0, width) x [0, height) (blocks) can touch, for a 2D tiled surface. Exact up
 // to the 32x32 tile holding the last block; never smaller than the true extent (the unit tests check it against

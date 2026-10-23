@@ -186,11 +186,11 @@ TEST_CASE("tiled extents cover every block", "[unit][gpu]") {
        std::vector<std::array<uint32_t, 3>>{{1, 1, 1}, {8, 8, 4}, {33, 17, 5}, {64, 32, 9}, {40, 70, 3}}) {
     const uint32_t pitch = (w + 31) / 32 * 32, height = (h + 31) / 32 * 32;
     uint64_t max_end = 0;
-    std::set<uint32_t> seen;
+    std::set<uint64_t> seen;
     for (uint32_t z = 0; z < d; ++z)
       for (uint32_t y = 0; y < h; ++y)
         for (uint32_t x = 0; x < w; ++x) {
-          const uint32_t o = lr::gpu::tiled_offset_3d(x, y, z, pitch, height, bpb);
+          const uint64_t o = lr::gpu::tiled_offset_3d(x, y, z, pitch, height, bpb);
           max_end = std::max<uint64_t>(max_end, o + bpb);
           seen.insert(o);
         }
@@ -704,6 +704,93 @@ TEST_CASE("modified guest memory invalidates the texture", "[unit][vulkan]") {
     CHECK(tc.uploads() == 3);
     CHECK(tc.image_count() == 1);
     CHECK(tc.textures_created() == 1);
+  }
+  CHECK(vk_errors.errors.empty());
+}
+
+// --- fix round 1 -------------------------------------------------------------------------------------------------------
+
+TEST_CASE("tiled 3D offset matches hand-worked values", "[unit][gpu]") {
+  // pitch 32, height 32, 4-byte blocks. (1, 0, 1): micro z[1:0] << 5 | x = 33, o = 132; o[7:5] = 4 -> bit 8..10,
+  // o[3:0] = 4: 1024 + 4. (0, 0, 4): second z slab = macro 2 (two 16-row macro tiles per 32 rows), o = 1024 ->
+  // o >> 8 = 4 at bit 12; bank y[3] ^ z[2] = 1 (bit 11); pipe = bank << 1 = 2 (bits 6-7): 16384 + 2048 + 128.
+  // (8, 8, 0): bank 1, pipe x[4:3] ^ 2 = 3: 2048 + 192.
+  CHECK(lr::gpu::tiled_offset_3d(0, 0, 0, 32, 32, 4) == 0);
+  CHECK(lr::gpu::tiled_offset_3d(1, 0, 1, 32, 32, 4) == 1028);
+  CHECK(lr::gpu::tiled_offset_3d(0, 0, 4, 32, 32, 4) == 18560);
+  CHECK(lr::gpu::tiled_offset_3d(8, 8, 0, 32, 32, 4) == 2240);
+  // Past 4 GiB without wrapping: the last 16-byte block of a 2048x2048x1024 volume.
+  CHECK(lr::gpu::tiled_offset_3d(2047, 2047, 1023, 2048, 2048, 16) > (uint64_t{1} << 32));
+}
+
+TEST_CASE("packed 16 and 32-bit formats convert to their host values", "[unit][gpu]") {
+  Guest g(1 << 16);
+  const MemoryAccess mem = g.access();
+  auto halves = [&](uint32_t at, uint16_t v) {  // a 16-bit texel, big-endian (read with 8in16)
+    g.bytes[at] = uint8_t(v >> 8);
+    g.bytes[at + 1] = uint8_t(v);
+  };
+  // k_1_5_5_5: X 31, Y 0, Z 16, W 1 -> 255, 0, round(16 * 255 / 31) = 132, 255.
+  halves(0x1000, uint16_t(31 | (0 << 5) | (16 << 10) | (1 << 15)));
+  auto r1555 = load(make_fetch({.format = XenosFormat::k_1_5_5_5, .w = 1, .endian = 1, .base = 0x1000}), mem);
+  REQUIRE(r1555.ok());
+  CHECK(r1555.value().bytes == std::vector<uint8_t>{255, 0, 132, 255});
+  // k_4_4_4_4: X 15, Y 8, Z 0, W 3 -> 255, 136, 0, 51.
+  halves(0x2000, uint16_t(15 | (8 << 4) | (0 << 8) | (3 << 12)));
+  auto r4444 = load(make_fetch({.format = XenosFormat::k_4_4_4_4, .w = 1, .endian = 1, .base = 0x2000}), mem);
+  REQUIRE(r4444.ok());
+  CHECK(r4444.value().bytes == std::vector<uint8_t>{255, 136, 0, 51});
+  auto u16 = [](const std::vector<uint8_t>& b) {
+    std::array<uint16_t, 4> v{};
+    std::memcpy(v.data(), b.data(), 8);
+    return v;
+  };
+  // k_10_11_11: X 11 bits 2047, Y 11 bits 0, Z 10 bits 512 -> 65535, 0, round(512 * 65535 / 1023) = 32800, A 65535.
+  g.put_be32(0x3000, 2047u | (0u << 11) | (512u << 22));
+  auto r101111 = load(make_fetch({.format = XenosFormat::k_10_11_11, .w = 1, .endian = 2, .base = 0x3000}), mem);
+  REQUIRE(r101111.ok());
+  CHECK(u16(r101111.value().bytes) == std::array<uint16_t, 4>{65535, 0, 32800, 65535});
+  // k_11_11_10: X 10 bits 1023, Y 11 bits 1024, Z 11 bits 0 -> 65535, round(1024 * 65535 / 2047) = 32784, 0, 65535.
+  g.put_be32(0x4000, 1023u | (1024u << 10) | (0u << 21));
+  auto r111110 = load(make_fetch({.format = XenosFormat::k_11_11_10, .w = 1, .endian = 2, .base = 0x4000}), mem);
+  REQUIRE(r111110.ok());
+  CHECK(u16(r111110.value().bytes) == std::array<uint16_t, 4>{65535, 32784, 0, 65535});
+}
+
+TEST_CASE("a guest write during a load is never left stale", "[unit][vulkan]") {
+  auto h = lr::testing::ShaderHarness::create();
+  if (!h.ok()) SKIP("no Vulkan ICD installed");
+  ValidationErrors vk_errors;
+  {
+    Guest g(1 << 20);
+    g.put_be32(0x6000, 0xAAAAAAAAu);
+    auto cache = vk::TextureCache::create(h.value().device(), g.access());
+    REQUIRE(cache.ok());
+    vk::TextureCache& tc = *cache.value();
+    const TextureFetch f = make_fetch({.w = 4, .h = 4, .endian = 2, .base = 0x6000});
+    // The guest writes between the hash and the read of the first load.
+    bool written = false;
+    tc.set_after_hash_hook([&] {
+      if (written) return;
+      g.put_be32(0x6000, 0xBBBBBBBBu);
+      written = true;
+    });
+    REQUIRE(tc.get(f).ok());
+    CHECK(tc.uploads() == 1);
+    auto texel = [&] {
+      auto b = tc.download(f, 0);
+      REQUIRE(b.ok());
+      return le32(b.value().data());
+    };
+    CHECK(texel() == 0xBBBBBBBBu);  // the load read the new bytes
+    // The hash was of the old bytes: the next frame uploads once more, then stays put.
+    tc.begin_frame();
+    REQUIRE(tc.get(f).ok());
+    CHECK(tc.uploads() == 2);
+    CHECK(texel() == 0xBBBBBBBBu);
+    tc.begin_frame();
+    REQUIRE(tc.get(f).ok());
+    CHECK(tc.uploads() == 2);
   }
   CHECK(vk_errors.errors.empty());
 }

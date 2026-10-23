@@ -23,6 +23,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -75,6 +76,9 @@ class TextureCache {
   void invalidate_range(uint32_t phys, uint32_t size);
   // A new frame: every texture's guest bytes are hashed again at its first use.
   void begin_frame();
+  // Tests only: `hook` runs during every (re)load, after the guest bytes were hashed and before they are read (to
+  // write guest memory at the worst moment deterministically).
+  void set_after_hash_hook(std::function<void()> hook);
 
   VkDescriptorSetLayout set_layout(uint32_t set) const;  // contract set 0, 1 or 2
   VkDescriptorSet set(uint32_t set) const;

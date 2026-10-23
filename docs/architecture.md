@@ -831,14 +831,16 @@ MPEG/entrelaçados, `k_32_32_32_FLOAT`, `k_DXT3A*`) são um erro que nomeia o fo
 RRRR, CTX1 e DXN são RGGG, 565 e 10_11_11 são RGBB). Sinais: um componente **com sinal** é erro no M3 (`signed
 texture formats are not supported in M3 (...)`) até o jogo precisar; "sem sinal deslocado" (2v - 1) e o
 `exp_adjust` não cabem numa view e são ignorados, com uma linha `[gpu] textures:` no stderr na primeira vez; gamma em
-X, Y ou Z vira o formato `SRGB` (R8, R8G8, RGBA8 e BC1-3; nos outros é ignorado, também registrado uma vez). O swizzle
+X, Y ou Z vira o formato `SRGB` (R8, R8G8, RGBA8 e BC1-3; nos outros é ignorado, também registrado uma vez; se o
+dispositivo não amostra a variante `SRGB`, conferida com `vkGetPhysicalDeviceFormatProperties`, fica o `UNORM` com um
+registro único). O swizzle
 do fetch constant vira o `VkComponentMapping` da view e faz parte da chave da view: uma imagem, uma view por swizzle.
 
 **Endereço e endian.** Tiling 2D: tiles de 32×32 blocos em ordem de linhas; dentro de um, o deslocamento linear
 (índice do tile · 64 + micro (y[3:1] · 8 + x[2:0])) · bytes por bloco tem os bits espalhados com o banco (y[4], bit
 11), o pipe (x[4:3] ^ y[3]·2, bits 6-7) e y[0] (bit 4) (`tiled_offset_2d`, conferido bloco a bloco com a referência
 independente `tests/support/xenos_tiling.h` e com vetores à mão). 3D: tiles de 32×16×4, micro de 8×8×4, banco
-y[3] ^ z[2] (`tiled_offset_3d`). O endian vale por palavra de 32 bits lida da memória (0 nenhum, 1 8in16, 2 8in32,
+y[3] ^ z[2] (`tiled_offset_3d`, em 64 bits: um volume grande passa de 4 GiB). O endian vale por palavra de 32 bits lida da memória (0 nenhum, 1 8in16, 2 8in32,
 3 16in32); blocos de 1 e 2 bytes tiram seus bytes da palavra já trocada.
 
 **Layout dos níveis** (semântica do `texture_util` do Xenia): o nível base fica no endereço base com o pitch do fetch
@@ -886,7 +888,11 @@ faixa do nível base e a dos mips) e o compara na primeira vez que é usada em c
 swap); se mudou, a textura é reenviada. Proteção de página teria de conviver com o código recompilado escrevendo na
 memória do convidado e com o handler de falhas (saída 4). Limite: uma escrita da CPU entre dois draws do mesmo quadro
 só aparece no quadro seguinte. Escritas da própria GPU não esperam: o resolve da EDRAM informa a faixa que escreveu
-(`Edram::set_write_observer`) e `invalidate_range` marca as texturas que a cobrem para reenvio no próximo uso.
+(`Edram::set_write_observer`) e `invalidate_range` marca as texturas que a cobrem para reenvio no próximo uso. A
+ordem no envio importa: primeiro o hash, depois a leitura. Uma escrita do convidado entre os dois deixa o hash dos
+bytes antigos com os dados novos enviados, e o próximo quadro reenvia uma vez a mais; na ordem inversa, o hash
+poderia ser de bytes mais novos que os enviados e a textura ficaria velha até a próxima mudança (teste
+`a guest write during a load is never left stale`, com um gancho entre o hash e a leitura).
 
 **Samplers** (`samplers.h`, set 3). `sampler_create_info(fetch, limites)` é uma função pura: endereçamento por eixo
 (repeat, mirrored repeat, clamp to edge, mirror once = `MIRROR_CLAMP_TO_EDGE`, clamp to border; os modos "halfway"
@@ -900,14 +906,32 @@ sempre normalizadas. O `SamplerCache` cria um `VkSampler` por estado distinto e 
 (`kSamplerHeapSize`); o índice 0 é um sampler padrão (nearest, clamp). `samplerAnisotropy` e
 `samplerMirrorClampToEdge` são opcionais: o `Device` os liga quando existem (não entram no piso).
 
-Testes (`tests/test_gpu_textures.cpp`): `tiled offset matches known values`, `tiled extents cover every block`,
+**Para a Tarefa 20** (o que o cache ainda supõe e o fluxo de desenho precisa resolver):
+- destruição por LRU e reenvio numa imagem existente só depois da fence do quadro que a usa (hoje tudo é esperado na
+  hora, então nada está em voo);
+- reuso de índices dos heaps enquanto um command buffer pendente pode lê-los: ou
+  `VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT` com reciclagem adiada dos índices liberados, ou gravações de
+  descritor adiadas para depois da fence;
+- `bind` de toda fetch constant usada a cada draw (os registradores mudam entre draws; `heap_index` só guarda o último
+  `bind`);
+- erro de `bind` (formato não suportado, com sinal, fora da memória, grande demais) vira `guest_fatal` (saída 5);
+- filtros por instrução do `tfetch` (`mag/min/mip/aniso_filter` diferentes de "da fetch constant") hoje são ignorados
+  pelo tradutor; se o jogo os usar, o sampler precisa da sobreposição;
+- filtro linear num formato sem `VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT` (por exemplo `R32_SFLOAT` em
+  alguns dispositivos) precisa virar nearest;
+- opcionalmente, refazer o hash quando a fetch constant de uma textura é reescrita no meio do quadro (escrita da CPU
+  entre draws do mesmo quadro).
+
+Testes (`tests/test_gpu_textures.cpp`): `tiled offset matches known values`, `tiled 3D offset matches hand-worked
+values`, `packed 16 and 32-bit formats convert to their host values`, `tiled extents cover every block`,
 `endian swap modes`, `CTX1 decode`, `packed mips sit in the tail of the last unpacked level`, `mip range follows the
 fetch constant`, `edge-size and unsupported-format textures` (1×1, 1000×3, 8192×8192 RGBA8 dentro da memória, além do
 fim da alocação, grande demais, fora da memória), `tiled front buffer decodes with the fetch constant's format`,
 `format table`, `fetch constant swizzle maps to the view` e `sampler fields come from the fetch constant` sem
 dispositivo; com o lavapipe e a camada de validação (`[unit][vulkan]`): `equal sampler states share one heap entry`,
 `DXT1 tiled texture uploads correctly`, `1D texture uploads as a height-1 2D image`, `fetch constant swizzle selects
-one image and two views` e `modified guest memory invalidates the texture`. O teste do jogo falso `tiled front buffer
+one image and two views`, `modified guest memory invalidates the texture` e `a guest write during a load is never left
+stale`. O teste do jogo falso `tiled front buffer
 frame is captured` pinta o front buffer em tiles com um padrão por pixel e confere a captura inteira.
 
 ## Contrato dos shaders traduzidos (plano B)
