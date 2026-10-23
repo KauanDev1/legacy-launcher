@@ -104,7 +104,8 @@ fingerprint = "..."
   `recompile`, `build`.
 - O carregamento é tolerante: chave ausente ou com tipo errado significa "não completo" e só causa
   re-execução. TOML ilegível é `InvalidFormat`.
-- O fingerprint do `doctor` é constante (`doctor-1`): ele é cacheado como as outras etapas, então mudanças
+- O fingerprint do `doctor` é constante (`doctor-2` desde a Tarefa 17, que acrescentou a sonda Vulkan; a troca
+  faz uma instalação existente rodar todas as etapas de novo uma vez): ele é cacheado como as outras etapas, então mudanças
   no ambiente (instalar/remover clang) só são notadas se uma etapa posterior rodar e falhar, ou com
   `--force doctor`. `legacyrecomp doctor` sempre confere o sistema.
 - `legacyrecomp build` roda `recompile` + `build` sem ISO. Sem `--iso`, o `extract` só vale se já estiver

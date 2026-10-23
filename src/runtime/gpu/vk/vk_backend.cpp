@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "runtime/gpu/vk/vk_backend.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <optional>
@@ -53,6 +54,9 @@ struct VkBackend::Impl {
 
   uint64_t swaps = 0;
   bool warned_size = false, warned_unmapped = false;
+  // request_stop (another thread): fence waits give up, swap() does nothing more.
+  std::atomic<bool> stopping{false};
+  bool abandoned = false;  // an upload wait gave up: its fence may still be pending, nothing more is submitted
 
   explicit Impl(Device d) : device(std::move(d)) {}
   Impl(const Impl&) = delete;
@@ -175,16 +179,20 @@ struct VkBackend::Impl {
     si.pCommandBuffers = &cmd;
     if (VkResult r = vkQueueSubmit(device.graphics_queue(), 1, &si, fence); r != VK_SUCCESS)
       return vk_error("vkQueueSubmit (front buffer upload)", r);
-    vkWaitForFences(d, 1, &fence, VK_TRUE, UINT64_MAX);
+    if (!wait_fence(d, fence, &stopping)) {
+      abandoned = true;
+      return Error{ErrorCode::Cancelled, "front buffer upload abandoned: the GPU is stopping", ""};
+    }
     vkResetFences(d, 1, &fence);
     frame_written = true;
     return {};
   }
 
   void swap(uint32_t phys, uint32_t w, uint32_t h) {
+    if (abandoned || stopping.load(std::memory_order_acquire)) return;
     const uint64_t n = ++swaps;
     present_front_buffer(phys, w, h);
-    if (options.screenshot_after != 0 && n == options.screenshot_after) {
+    if (options.screenshot_after != 0 && n == options.screenshot_after && !stopping.load(std::memory_order_acquire)) {
       Result<void> written = presenter->capture_png(options.screenshot_path);
       if (options.on_screenshot) options.on_screenshot(n, written);
     }
@@ -197,6 +205,9 @@ struct VkBackend::Impl {
       return;
     }
     const uint64_t bytes = uint64_t{w} * h * 4;
+    // Checked against the guest address space only, not against the physical heap's committed pages: a front
+    // buffer on uncommitted memory would fault (exit 4, reported). Task 19 replaces this copy with the texture
+    // path, which reads the surface through the physical heap's committed ranges.
     const std::optional<uint32_t> guest = options.mem.to_guest ? options.mem.to_guest(phys & 0x1FFFFFFFu) : std::nullopt;
     if (!guest || *guest + bytes > options.mem.size) {
       if (!warned_unmapped)
@@ -211,7 +222,7 @@ struct VkBackend::Impl {
     }
     convert(options.mem.base + *guest, w, h);
     if (auto r = upload(w, h); !r) {
-      std::fprintf(stderr, "error: [gpu] swap: %s\n", r.error().message.c_str());
+      if (!abandoned) std::fprintf(stderr, "error: [gpu] swap: %s\n", r.error().message.c_str());
       return;
     }
     presenter->present(frame, w, h);
@@ -228,6 +239,7 @@ Result<std::unique_ptr<VkBackend>> VkBackend::create(VkBackendOptions options) {
   LR_TRY(impl->init());
   LR_TRY_ASSIGN(presenter, Presenter::create(impl->device, options.sdl_window));
   impl->presenter.emplace(std::move(presenter));
+  impl->presenter->set_stop_flag(&impl->stopping);
   impl->options = std::move(options);
   std::string name = impl->device.device_name();
   auto backend = std::unique_ptr<VkBackend>(new VkBackend(std::move(impl)));
@@ -251,6 +263,14 @@ void VkBackend::wait_idle() {
   if (impl_) vkQueueWaitIdle(impl_->device.graphics_queue());
 }
 
-void VkBackend::shutdown() { impl_.reset(); }
+void VkBackend::request_stop() {
+  if (impl_) impl_->stopping.store(true, std::memory_order_release);
+}
+
+void VkBackend::shutdown() {
+  if (!impl_) return;
+  impl_.reset();
+  std::fprintf(stderr, "[gpu] vulkan: shut down\n");
+}
 
 }  // namespace lr::gpu::vk

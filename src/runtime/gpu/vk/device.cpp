@@ -110,6 +110,19 @@ std::string check_device_limits(const VkPhysicalDeviceLimits& limits) {
   return {};
 }
 
+bool wait_fence(VkDevice device, VkFence fence, const std::atomic<bool>* stop) {
+  constexpr std::uint64_t kSliceNs = 100'000'000;
+  for (;;) {
+    const VkResult r = vkWaitForFences(device, 1, &fence, VK_TRUE, kSliceNs);
+    if (r == VK_SUCCESS) return true;
+    if (r != VK_TIMEOUT) {
+      log::error("[gpu] vkWaitForFences failed (VkResult " + std::to_string(r) + ")");
+      return false;
+    }
+    if (stop != nullptr && stop->load(std::memory_order_acquire)) return false;
+  }
+}
+
 Result<Device> Device::create(const DeviceOptions& options) {
   if (volkInitialize() != VK_SUCCESS) return no_driver("libvulkan.so.1 could not be loaded");
 

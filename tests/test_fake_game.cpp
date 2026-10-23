@@ -685,7 +685,77 @@ TEST_CASE("closing during rendering exits cleanly", "[unit][gpu][vulkan]") {
   REQUIRE(WIFEXITED(st));
   CHECK(WEXITSTATUS(st) == 0);
   CHECK(out.find("[game] signal 15: exiting") != std::string::npos);
+  CHECK(out.find("[gpu] vulkan: shut down") != std::string::npos);  // the teardown ran to the end
+  CHECK(out.find("[game] shutdown timed out") == std::string::npos);
   check_validation_clean(out);
+}
+
+namespace {
+// Waits until out.log contains `text` (or the game ended, or 30 s passed).
+bool wait_for_output(const fs::path& dir, pid_t pid, const std::string& text) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (read_text(dir / "out.log").find(text) != std::string::npos) return true;
+    int st = 0;
+    if (waitpid(pid, &st, WNOHANG) == pid) return false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  return false;
+}
+
+// Waits up to `limit` for the game to exit; -2 when it did not (it is then killed), -1 when a signal ended it.
+int wait_exit(pid_t pid, std::chrono::seconds limit) {
+  const auto deadline = std::chrono::steady_clock::now() + limit;
+  int st = 0;
+  pid_t done = 0;
+  while ((done = waitpid(pid, &st, WNOHANG)) == 0 && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  if (done == 0) {
+    kill(pid, SIGKILL);
+    waitpid(pid, &st, 0);
+    return -2;
+  }
+  return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+}  // namespace
+
+// Fix round 1: the orderly exit is bounded. With --gpu test-stall the GPU thread hangs in its first swap, so
+// GpuSystem::stop() never returns: the shutdown watchdog ends the run after 5 s ("[game] shutdown timed out", exit
+// 0), and a second SIGTERM during the shutdown ends it at once.
+TEST_CASE("shutdown is bounded when the GPU thread hangs", "[unit][gpu]") {
+  using Clock = std::chrono::steady_clock;
+  TempDir td;
+  const std::string image = write_image(td.path, 0x820004E0);
+  {
+    const pid_t pid = spawn_game(td.path, {"--headless", "--gpu", "test-stall", "--image", image}, {}, false);
+    REQUIRE(wait_for_output(td.path, pid, "[gpu] test-stall: swap blocked"));
+    const auto sent = Clock::now();
+    REQUIRE(kill(pid, SIGTERM) == 0);
+    const int code = wait_exit(pid, std::chrono::seconds(20));
+    const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - sent);
+    const std::string out = read_text(td.path / "out.log");
+    INFO(out << "exit after " << took.count() << " ms");
+    CHECK(code == 0);
+    CHECK(out.find("[game] signal 15: exiting") != std::string::npos);
+    CHECK(out.find("[game] shutdown timed out") != std::string::npos);
+    CHECK(took >= std::chrono::milliseconds(4500));  // the watchdog waited its 5 s
+    CHECK(took < std::chrono::milliseconds(7000));   // and no longer
+  }
+  {
+    const pid_t pid = spawn_game(td.path, {"--headless", "--gpu", "test-stall", "--image", image}, {}, false);
+    REQUIRE(wait_for_output(td.path, pid, "[gpu] test-stall: swap blocked"));
+    REQUIRE(kill(pid, SIGTERM) == 0);
+    REQUIRE(wait_for_output(td.path, pid, "[game] signal 15: exiting"));
+    const auto sent = Clock::now();
+    REQUIRE(kill(pid, SIGTERM) == 0);
+    const int code = wait_exit(pid, std::chrono::seconds(20));
+    const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - sent);
+    const std::string out = read_text(td.path / "out.log");
+    INFO(out << "exit after " << took.count() << " ms");
+    CHECK(code == 0);
+    CHECK(out.find("[game] shutdown timed out") != std::string::npos);
+    CHECK(took < std::chrono::milliseconds(2000));  // immediately, not after the 5 s
+  }
 }
 #else
 TEST_CASE("fake game tests need SDL2 (target lr_fake_game not built)", "[unit]") { SKIP("SDL2 not found"); }

@@ -4,6 +4,7 @@
 // system libvulkan.so.1; no loader or driver is ever shipped.
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -19,6 +20,11 @@ namespace lr::gpu::vk {
 // otherwise the first one that is not ("maxVertexOutputComponents >= 64 (device has 32)"). Plan B passes up to 16
 // interpolators of 4 components between the stages, the Vulkan guaranteed minimum of 64 (carried Task 13 item).
 std::string check_device_limits(const VkPhysicalDeviceLimits& limits);
+
+// Waits for `fence` in 100 ms slices instead of forever: true once it is signalled; false when `stop` (may be null)
+// was raised first, or the wait failed (device lost). Used by every per-frame wait, so an orderly exit
+// (VkBackend::request_stop) never hangs on a GPU that stopped answering.
+bool wait_fence(VkDevice device, VkFence fence, const std::atomic<bool>* stop);
 
 struct DeviceOptions {
   bool validation = false;     // enable VK_LAYER_KHRONOS_validation when installed (warns and continues if not)

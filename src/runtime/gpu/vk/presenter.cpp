@@ -11,6 +11,11 @@
 #include "runtime/gpu/screenshot.h"
 #include "vk_mem_alloc.h"
 
+#ifdef LR_HAVE_SDL2
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_vulkan.h>
+#endif
+
 namespace lr::gpu::vk {
 namespace {
 
@@ -126,6 +131,10 @@ Presenter& Presenter::operator=(Presenter&& o) noexcept {
     images_ = std::move(o.images_);
     rendered_ = std::move(o.rendered_);
     recreate_ = o.recreate_;
+    drawable_w_ = o.drawable_w_;
+    drawable_h_ = o.drawable_h_;
+    stop_ = std::exchange(o.stop_, nullptr);
+    abandoned_ = o.abandoned_;
   }
   return *this;
 }
@@ -167,12 +176,17 @@ Result<void> Presenter::create_swapchain() {
   VkSurfaceCapabilitiesKHR caps;
   if (VkResult r = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(pd, surface, &caps); r != VK_SUCCESS)
     return vk_error("vkGetPhysicalDeviceSurfaceCapabilitiesKHR", r);
+  int dw = 0, dh = 0;
+  drawable_size(dw, dh);
   VkExtent2D extent = caps.currentExtent;
-  if (extent.width == UINT32_MAX) {  // the surface takes the swapchain's size (Wayland): use the frame's
-    extent.width = std::clamp(last_w_, caps.minImageExtent.width, caps.maxImageExtent.width);
-    extent.height = std::clamp(last_h_, caps.minImageExtent.height, caps.maxImageExtent.height);
+  if (extent.width == UINT32_MAX) {  // the surface takes the swapchain's size (Wayland): the window's drawable size
+    extent.width = std::clamp(dw > 0 ? uint32_t(dw) : last_w_, caps.minImageExtent.width, caps.maxImageExtent.width);
+    extent.height = std::clamp(dh > 0 ? uint32_t(dh) : last_h_, caps.minImageExtent.height, caps.maxImageExtent.height);
   }
-  if (extent.width == 0 || extent.height == 0) return {};  // minimised: no swapchain until it is shown again
+  if (extent.width == 0 || extent.height == 0) {  // minimised: no swapchain until it is shown again
+    destroy_swapchain();
+    return {};
+  }
   LR_TRY_ASSIGN(format, pick_surface_format(pd, surface));
 
   std::uint32_t count = caps.minImageCount + 1;
@@ -199,14 +213,29 @@ Result<void> Presenter::create_swapchain() {
   sci.compositeAlpha = alpha;
   sci.presentMode = VK_PRESENT_MODE_FIFO_KHR;  // always supported; paces the window at the display rate
   sci.clipped = VK_TRUE;
-  if (VkResult r = vkCreateSwapchainKHR(d, &sci, nullptr, &swapchain_); r != VK_SUCCESS)
-    return vk_error("vkCreateSwapchainKHR", r);
+  sci.oldSwapchain = swapchain_;  // the old one (if any) hands its resources over; the device is idle
+  VkSwapchainKHR created = VK_NULL_HANDLE;
+  const VkResult cr = vkCreateSwapchainKHR(d, &sci, nullptr, &created);
+  if (swapchain_) vkDestroySwapchainKHR(d, swapchain_, nullptr);  // retired either way
+  swapchain_ = VK_NULL_HANDLE;
+  if (cr != VK_SUCCESS) {
+    destroy_swapchain();
+    return vk_error("vkCreateSwapchainKHR", cr);
+  }
+  swapchain_ = created;
   swapchain_format_ = format.format;
   extent_ = extent;
+  drawable_w_ = dw;
+  drawable_h_ = dh;
   std::uint32_t n = 0;
   vkGetSwapchainImagesKHR(d, swapchain_, &n, nullptr);
   images_.resize(n);
   vkGetSwapchainImagesKHR(d, swapchain_, &n, images_.data());
+  // The "rendered" semaphores outlive a recreation while the image count stays the same (the device is idle, so
+  // none is still waited on); otherwise they are made again, one per image.
+  if (rendered_.size() == n) return {};
+  for (VkSemaphore s : rendered_) vkDestroySemaphore(d, s, nullptr);
+  rendered_.clear();
   VkSemaphoreCreateInfo semi = make<VkSemaphoreCreateInfo>(VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
   for (std::uint32_t i = 0; i < n; ++i) {
     VkSemaphore s = VK_NULL_HANDLE;
@@ -214,6 +243,13 @@ Result<void> Presenter::create_swapchain() {
     rendered_.push_back(s);
   }
   return {};
+}
+
+void Presenter::drawable_size(int& w, int& h) const {
+  w = h = 0;
+#ifdef LR_HAVE_SDL2
+  if (window_ != nullptr) SDL_Vulkan_GetDrawableSize(static_cast<SDL_Window*>(window_), &w, &h);
+#endif
 }
 
 Result<void> Presenter::ensure_last_frame(uint32_t w, uint32_t h) {
@@ -245,7 +281,7 @@ Result<void> Presenter::ensure_last_frame(uint32_t w, uint32_t h) {
 }
 
 void Presenter::present(VkImage frame, uint32_t w, uint32_t h) {
-  if (device_ == nullptr || frame == VK_NULL_HANDLE || w == 0 || h == 0) return;
+  if (device_ == nullptr || abandoned_ || frame == VK_NULL_HANDLE || w == 0 || h == 0) return;
   const VkDevice d = device_->device();
   if (auto r = ensure_last_frame(w, h); !r) {
     log::error("[gpu] present: " + r.error().message);
@@ -255,9 +291,12 @@ void Presenter::present(VkImage frame, uint32_t w, uint32_t h) {
   // Window: the swapchain image this frame goes to (none when minimised, out of date or not ready in time).
   std::uint32_t index = UINT32_MAX;
   if (window_ != nullptr) {
+    // A resized window: Wayland reports no out-of-date swapchain, and X11 may report it late.
+    int dw = 0, dh = 0;
+    drawable_size(dw, dh);
+    if (swapchain_ != VK_NULL_HANDLE && (dw != drawable_w_ || dh != drawable_h_)) recreate_ = true;
     if (recreate_ || swapchain_ == VK_NULL_HANDLE) {
       vkDeviceWaitIdle(d);
-      destroy_swapchain();
       recreate_ = false;
       if (auto r = create_swapchain(); !r) log::error("[gpu] present: " + r.error().message);
     }
@@ -353,13 +392,16 @@ void Presenter::present(VkImage frame, uint32_t w, uint32_t h) {
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) recreate_ = true;
     else if (r != VK_SUCCESS) log::error("[gpu] vkQueuePresentKHR: " + std::to_string(r));
   }
-  vkWaitForFences(d, 1, &fence_, VK_TRUE, UINT64_MAX);
+  if (!wait_fence(d, fence_, stop_)) {
+    abandoned_ = true;  // stopping (or device lost): this frame is dropped and the presenter does nothing more
+    return;
+  }
   vkResetFences(d, 1, &fence_);
   ++frames_;
 }
 
 Result<void> Presenter::capture_png(const std::filesystem::path& path) {
-  if (device_ == nullptr || frames_ == 0 || last_ == VK_NULL_HANDLE)
+  if (device_ == nullptr || abandoned_ || frames_ == 0 || last_ == VK_NULL_HANDLE)
     return Error{ErrorCode::IoError, "cannot capture " + path.string() + ": no frame was presented yet", ""};
   const VkDevice d = device_->device();
   const VkDeviceSize bytes = VkDeviceSize{last_w_} * last_h_ * 4;
@@ -394,7 +436,10 @@ Result<void> Presenter::capture_png(const std::filesystem::path& path) {
   si.pCommandBuffers = &cmd_;
   VkResult r = vkQueueSubmit(device_->graphics_queue(), 1, &si, fence_);
   if (r == VK_SUCCESS) {
-    vkWaitForFences(d, 1, &fence_, VK_TRUE, UINT64_MAX);
+    if (!wait_fence(d, fence_, stop_)) {
+      abandoned_ = true;  // the copy may still run: the buffer is left to the device teardown
+      return Error{ErrorCode::Cancelled, "cannot capture " + path.string() + ": the GPU is stopping", ""};
+    }
     vkResetFences(d, 1, &fence_);
   }
   std::vector<uint8_t> pixels;

@@ -27,8 +27,10 @@
 // the fault handler prints "[gpu] shaders: keys=N vs=N ps=N translated=N disk=N failed=N new_last_100_swaps=N" on
 // stderr (lr::gpu::format_shader_summary, through lr::kernel::set_exit_report_hook).
 // SIGTERM, SIGINT and SIGHUP (and closing the window) end the run in order with exit code 0: the GPU thread stops
-// (any frame in flight finishes), the Vulkan backend waits for the device to be idle and destroys everything, then
-// the process exits. The signals are blocked in every thread and taken by one watcher thread (sigwait).
+// (any frame in flight finishes or, after 100 ms slices, is abandoned), the Vulkan backend waits for the device to be
+// idle and destroys everything ("[gpu] vulkan: shut down"), then the process exits. The signals are blocked in every
+// thread and taken by one watcher thread (sigwait). The orderly exit is bounded: a second signal, or 5 s, ends the
+// process at once ("[game] shutdown timed out"). --gpu test-stall (tests only) hangs the GPU thread in its first swap.
 // Exit codes: 0 ok (also: window closed by the user, SIGTERM/SIGINT/SIGHUP), 2 usage/load error (also: no usable
 // Vulkan device), 3 unimplemented import, 4 fault, 5 guest fatal (lr::kernel::guest_fatal), 6 deadlock.
 
@@ -37,14 +39,18 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <csignal>
 #include <cstdio>
+#include <ctime>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -91,6 +97,7 @@ struct Options {
   std::string shader_cache_dir;    // empty: translated shaders in memory only
   bool dump_shaders = false;
   bool null_gpu = false;           // --gpu null: NullBackend instead of the Vulkan backend
+  bool stall_gpu = false;          // --gpu test-stall (tests only): StallBackend
   uint64_t screenshot_after = 0;   // 0: no screenshot
   std::string screenshot_path;
 };
@@ -140,19 +147,6 @@ bool is_xex2(const std::vector<char>& b) { return b.size() >= 4 && std::memcmp(b
 lr::gpu::vk::VkBackend* g_vk_backend = nullptr;
 bool g_kernel_ready = false;  // init_kernel succeeded (set on the main thread before any watcher can run)
 
-// Orderly end (a signal, the window closed, the main guest thread returned): stops the GPU thread (a frame in
-// flight finishes), waits for the Vulkan device to be idle and destroys every Vulkan object, then exit_now. Never
-// called on the GPU thread (it joins it). A second caller, while the first is tearing down, just waits for the exit.
-[[noreturn]] void shutdown_and_exit(int rc) {
-  static std::atomic<bool> started{false};
-  if (started.exchange(true)) {
-    for (;;) pause();
-  }
-  if (g_kernel_ready) lr::kernel::kernel().gpu().stop();
-  if (g_vk_backend != nullptr) g_vk_backend->shutdown();
-  exit_now(rc);
-}
-
 // SIGTERM, SIGINT and SIGHUP: blocked in every thread (block_exit_signals runs before the first thread starts) and
 // taken by one watcher thread, which ends the run in order with exit code 0.
 sigset_t exit_signals() {
@@ -163,6 +157,60 @@ sigset_t exit_signals() {
   sigaddset(&set, SIGHUP);
   return set;
 }
+
+constexpr int kShutdownTimeoutSeconds = 5;
+
+// The orderly exit's bound: another exit signal, or kShutdownTimeoutSeconds without the exit, ends the process at
+// once with "[game] shutdown timed out" (a GPU thread stuck in the backend, a driver that never answers).
+void start_shutdown_watchdog(int rc) {
+  std::thread([rc] {
+    const sigset_t set = exit_signals();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(kShutdownTimeoutSeconds);
+    for (;;) {
+      const auto left = std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - std::chrono::steady_clock::now());
+      if (left.count() <= 0) break;
+      timespec ts{};
+      ts.tv_sec = static_cast<time_t>(left.count() / 1'000'000'000);
+      ts.tv_nsec = static_cast<long>(left.count() % 1'000'000'000);
+      siginfo_t info{};
+      if (sigtimedwait(&set, &info, &ts) > 0) break;  // a second exit signal
+      if (errno != EINTR) break;                     // EAGAIN: the time is up
+    }
+    std::fprintf(stderr, "[game] shutdown timed out\n");
+    exit_now(rc);
+  }).detach();
+}
+
+// Orderly end (a signal, the window closed, the main guest thread returned): stops the GPU thread (a frame in
+// flight finishes, or is abandoned: VkBackend::request_stop), waits for the Vulkan device to be idle and destroys
+// every Vulkan object, then exit_now. Bounded by start_shutdown_watchdog. Never called on the GPU thread (it joins
+// it). A second caller, while the first is tearing down, just waits for the exit.
+[[noreturn]] void shutdown_and_exit(int rc) {
+  static std::atomic<bool> started{false};
+  if (started.exchange(true)) {
+    for (;;) pause();
+  }
+  start_shutdown_watchdog(rc);
+  if (g_vk_backend != nullptr) g_vk_backend->request_stop();
+  if (g_kernel_ready) lr::kernel::kernel().gpu().stop();
+  if (g_vk_backend != nullptr) g_vk_backend->shutdown();
+  exit_now(rc);
+}
+
+// --gpu test-stall (tests only): a backend whose first swap() never returns, so the GPU thread hangs mid-frame and the
+// shutdown watchdog has to end the run. Prints "[gpu] test-stall: swap blocked" when it starts blocking.
+class StallBackend final : public lr::gpu::Backend {
+ public:
+  void load_shader(lr::gpu::ShaderStage, uint32_t, uint32_t) override {}
+  void draw(const lr::gpu::RegisterFile&, const lr::gpu::DrawInfo&, const lr::gpu::ActiveShaders&) override {}
+  void resolve(const lr::gpu::RegisterFile&) override {}
+  void swap(uint32_t, uint32_t, uint32_t) override {
+    std::fprintf(stderr, "[gpu] test-stall: swap blocked\n");
+    std::fflush(stderr);
+    for (;;) std::this_thread::sleep_for(std::chrono::hours(1));
+  }
+  void wait_idle() override {}
+};
 
 void block_exit_signals() {
   const sigset_t set = exit_signals();
@@ -367,8 +415,9 @@ int main(int argc, char** argv) {
     } else if (a == "--gpu") {
       if (i + 1 >= argc) return usage("missing value for --gpu");
       const std::string v = argv[++i];
-      if (v != "vulkan" && v != "null") return usage("--gpu must be vulkan or null");
-      opt.null_gpu = v == "null";
+      if (v != "vulkan" && v != "null" && v != "test-stall") return usage("--gpu must be vulkan or null");
+      opt.null_gpu = v == "null" || v == "test-stall";
+      opt.stall_gpu = v == "test-stall";
     } else if (a == "--image" || a == "--data" || a == "--user" || a == "--trace-file" || a == "--gpu-trace-file" ||
                a == "--shader-cache-dir") {
       if (i + 1 >= argc) return usage(("missing value for " + a).c_str());
@@ -431,7 +480,53 @@ int main(int argc, char** argv) {
   lr::kernel::kernel().gpu().set_dump_shaders(opt.dump_shaders);
   lr::kernel::set_exit_report_hook(&print_shader_summary);
 
-  // The window (SDL_WINDOW_VULKAN with the Vulkan backend) and the GPU backend, before the guest runs.
+
+  const auto image_bytes = std::as_bytes(std::span(bytes));
+  auto img = load_image(mem.value(), image_bytes);
+  if (!img) {
+    std::fprintf(stderr, "error: cannot load %s: %s\n", opt.image.c_str(), img.error().message.c_str());
+    exit_now(kExitUsage);
+  }
+  if (img.value().base != PPC_IMAGE_BASE) {
+    std::fprintf(stderr, "error: image base 0x%08X does not match the recompiled build (0x%08llX)\n", img.value().base,
+                 static_cast<unsigned long long>(PPC_IMAGE_BASE));
+    exit_now(kExitUsage);
+  }
+  // Every guest thread gets a copy of the XEX TLS template; ExCreateThread with stack size 0 uses the image's.
+  // Before resolve_variable_imports: importing KeTimeStampBundle starts the kernel worker, whose TLS block copies the
+  // template too.
+  if (auto r = lr::kernel::kernel().threads().set_image(img.value().tls, img.value().stack_size, img.value().base,
+                                                        img.value().size);
+      !r) {
+    std::fprintf(stderr, "error: cannot load %s: %s\n", opt.image.c_str(), r.error().message.c_str());
+    exit_now(kExitUsage);
+  }
+  if (is_xex2(bytes)) {  // the test ELF images have no import records
+    auto header = lr::formats::parse_xex2(image_bytes);
+    lr::Result<void> r = header ? lr::kernel::resolve_variable_imports(mem.value(), img.value(), header.value())
+                                : lr::Result<void>(header.error());
+    if (!r) {
+      std::fprintf(stderr, "error: cannot resolve the imports of %s: %s\n", opt.image.c_str(), r.error().message.c_str());
+      exit_now(kExitUsage);
+    }
+  }
+
+  std::vector<FuncMapping> maps;
+  PPCFunc* entry_fn = nullptr;
+  for (const PPCFuncMapping* m = PPCFuncMappings; m->host != nullptr; ++m) {
+    maps.push_back({static_cast<uint32_t>(m->guest), reinterpret_cast<void*>(m->host)});
+    if (m->guest == img.value().entry) entry_fn = m->host;
+  }
+  if (auto r = install_function_table(mem.value(), PPC_IMAGE_BASE + PPC_IMAGE_SIZE, PPC_CODE_BASE, PPC_CODE_SIZE, maps); !r) {
+    std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
+    exit_now(kExitUsage);
+  }
+  if (!entry_fn) {
+    std::fprintf(stderr, "error: no recompiled function at entry point 0x%08X\n", img.value().entry);
+    exit_now(kExitUsage);
+  }
+  // The window (SDL_WINDOW_VULKAN with the Vulkan backend) and the GPU backend: after the image checked out (a bad
+  // image never touches the GPU), before the fault handlers and the guest.
   SDL_Window* window = nullptr;
   if (!opt.headless) {
     window = create_window(!opt.null_gpu);
@@ -463,53 +558,11 @@ int main(int argc, char** argv) {
     }
     g_vk_backend = backend.value().get();
     lr::kernel::kernel().gpu().set_backend(std::move(backend.value()));
+  } else if (opt.stall_gpu) {
+    lr::kernel::kernel().gpu().set_backend(std::make_unique<StallBackend>());
   }
   start_signal_watcher();
 
-  const auto image_bytes = std::as_bytes(std::span(bytes));
-  auto img = load_image(mem.value(), image_bytes);
-  if (!img) {
-    std::fprintf(stderr, "error: cannot load %s: %s\n", opt.image.c_str(), img.error().message.c_str());
-    return kExitUsage;
-  }
-  if (img.value().base != PPC_IMAGE_BASE) {
-    std::fprintf(stderr, "error: image base 0x%08X does not match the recompiled build (0x%08llX)\n", img.value().base,
-                 static_cast<unsigned long long>(PPC_IMAGE_BASE));
-    return kExitUsage;
-  }
-  // Every guest thread gets a copy of the XEX TLS template; ExCreateThread with stack size 0 uses the image's.
-  // Before resolve_variable_imports: importing KeTimeStampBundle starts the kernel worker, whose TLS block copies the
-  // template too.
-  if (auto r = lr::kernel::kernel().threads().set_image(img.value().tls, img.value().stack_size, img.value().base,
-                                                        img.value().size);
-      !r) {
-    std::fprintf(stderr, "error: cannot load %s: %s\n", opt.image.c_str(), r.error().message.c_str());
-    return kExitUsage;
-  }
-  if (is_xex2(bytes)) {  // the test ELF images have no import records
-    auto header = lr::formats::parse_xex2(image_bytes);
-    lr::Result<void> r = header ? lr::kernel::resolve_variable_imports(mem.value(), img.value(), header.value())
-                                : lr::Result<void>(header.error());
-    if (!r) {
-      std::fprintf(stderr, "error: cannot resolve the imports of %s: %s\n", opt.image.c_str(), r.error().message.c_str());
-      exit_now(kExitUsage);
-    }
-  }
-
-  std::vector<FuncMapping> maps;
-  PPCFunc* entry_fn = nullptr;
-  for (const PPCFuncMapping* m = PPCFuncMappings; m->host != nullptr; ++m) {
-    maps.push_back({static_cast<uint32_t>(m->guest), reinterpret_cast<void*>(m->host)});
-    if (m->guest == img.value().entry) entry_fn = m->host;
-  }
-  if (auto r = install_function_table(mem.value(), PPC_IMAGE_BASE + PPC_IMAGE_SIZE, PPC_CODE_BASE, PPC_CODE_SIZE, maps); !r) {
-    std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
-    exit_now(kExitUsage);
-  }
-  if (!entry_fn) {
-    std::fprintf(stderr, "error: no recompiled function at entry point 0x%08X\n", img.value().entry);
-    exit_now(kExitUsage);
-  }
   if (auto r = install_fault_handlers(mem.value()); !r) {
     std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
     exit_now(kExitUsage);

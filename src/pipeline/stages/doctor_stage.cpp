@@ -26,7 +26,7 @@ class DoctorStage : public Stage {
   }
 
  private:
-  static constexpr std::string_view kFingerprint = "doctor-1";
+  static constexpr std::string_view kFingerprint = "doctor-2";
   DoctorProbe& probe_;
 };
 

@@ -7,8 +7,10 @@
 // colour attachment or compute writes; present() makes them visible with a barrier of its own). It stays in that
 // layout. present() copies it to the presenter's last-frame image and, with a window, blits that image to the
 // acquired swapchain image (scaled to fit, aspect kept, black bars) and queues it for presentation (FIFO). Each call
-// waits for its own submission to finish, so nothing is in flight between calls. A swapchain that is out of date
-// (resized window) is recreated on the next present; a minimised window (extent 0) skips the window part.
+// waits for its own submission to finish (in 100 ms slices, giving up once the stop flag is raised: wait_fence), so
+// nothing is in flight between calls. A swapchain that is out of date or suboptimal, or whose window's drawable size
+// changed, is recreated on the next present (oldSwapchain passed, semaphores kept while the image count is the same);
+// a minimised window (extent 0) skips the window part.
 //
 // Every call comes from one thread at a time (the GPU thread); the Device must outlive the Presenter. Destruction
 // waits for the device to be idle first.
@@ -42,6 +44,8 @@ class Presenter {
 
   bool headless() const { return window_ == nullptr; }
   uint64_t frames_presented() const { return frames_; }
+  // Fence waits give up once *stop is true (VkBackend::request_stop): the frame is abandoned, the exit goes on.
+  void set_stop_flag(const std::atomic<bool>* stop) { stop_ = stop; }
 
  private:
   Presenter() = default;
@@ -49,6 +53,7 @@ class Presenter {
   Result<void> create_swapchain();
   void destroy_swapchain();
   Result<void> ensure_last_frame(uint32_t w, uint32_t h);
+  void drawable_size(int& w, int& h) const;  // the SDL window's drawable size; 0 x 0 headless
 
   Device* device_ = nullptr;
   void* window_ = nullptr;
@@ -70,6 +75,9 @@ class Presenter {
   std::vector<VkImage> images_;
   std::vector<VkSemaphore> rendered_;  // one per swapchain image: presentation may still hold the previous one
   bool recreate_ = false;
+  int drawable_w_ = 0, drawable_h_ = 0;  // the window's drawable size when the swapchain was created
+  const std::atomic<bool>* stop_ = nullptr;
+  bool abandoned_ = false;  // a fence wait gave up (stopping): nothing more is submitted
 };
 
 }  // namespace lr::gpu::vk

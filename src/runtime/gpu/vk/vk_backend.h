@@ -51,8 +51,11 @@ class VkBackend final : public Backend {
   bool binds_shaders() const override { return false; }
 
   const std::string& device_name() const { return name_; }
-  // Waits for the device to be idle and destroys every Vulkan object (orderly exit, after GpuSystem::stop()); later
-  // calls do nothing. Not thread-safe against the other calls.
+  // Any thread, any time: the per-frame fence waits (100 ms slices) give up and swap() stops submitting, so the GPU
+  // thread leaves a frame in flight instead of hanging; the orderly exit calls it before GpuSystem::stop().
+  void request_stop();
+  // Waits for the device to be idle and destroys every Vulkan object (orderly exit, after GpuSystem::stop()), then
+  // prints "[gpu] vulkan: shut down" on stderr; later calls do nothing. Not thread-safe against the other calls.
   void shutdown();
 
  private:

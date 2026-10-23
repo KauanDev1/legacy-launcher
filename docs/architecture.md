@@ -672,8 +672,10 @@ memória do convidado, pula o quadro com um aviso no stderr (uma vez).
 **Presenter** (`presenter.h`): `present(frame, w, h)` copia o quadro para uma imagem própria (o último quadro) e, com
 janela, faz um blit dele para a imagem adquirida da swapchain (escala mantendo a proporção, com barras pretas; modo
 FIFO) e a apresenta. Cada chamada espera a própria submissão, então nada fica em voo entre quadros. Uma swapchain
-desatualizada (janela redimensionada) é recriada no quadro seguinte; janela minimizada pula a parte da janela; a
-aquisição tem limite de 1 s, para uma janela escondida não prender a thread da GPU. `capture_png(path)` lê o último
+desatualizada ou subótima, ou cuja janela mudou de tamanho (`SDL_Vulkan_GetDrawableSize` diferente do tamanho da
+criação), é recriada no quadro seguinte, passando a antiga em `oldSwapchain` e mantendo os semáforos enquanto o número
+de imagens não muda; janela minimizada pula a parte da janela; a aquisição tem limite de 1 s, para uma janela
+escondida não prender a thread da GPU. `capture_png(path)` lê o último
 quadro de volta e grava um PNG RGBA (`runtime/gpu/screenshot.h`, stb_image_write).
 
 **`--screenshot-after <n> <png>`** (só com `--gpu vulkan`): depois de apresentar o swap `n`, grava o quadro, escreve
@@ -682,8 +684,18 @@ quadro de volta e grava um PNG RGBA (`runtime/gpu/screenshot.h`, stb_image_write
 
 **Saída ordenada.** SIGTERM, SIGINT e SIGHUP ficam bloqueados em todas as threads (o `main.cpp` os bloqueia antes do
 `init_kernel`, que cria as primeiras) e uma thread vigia os recebe com `sigwait`. Ela escreve `[game] signal N:
-exiting`, para a thread da GPU (`GpuSystem::stop`: o quadro em andamento termina), chama `VkBackend::shutdown`
-(dispositivo ocioso, todos os objetos Vulkan destruídos, depois o `Device`) e sai com 0 por `exit_now`. Fechar a
+exiting`, chama `VkBackend::request_stop`, para a thread da GPU (`GpuSystem::stop`: o quadro em andamento termina ou
+é abandonado), chama `VkBackend::shutdown` (dispositivo ocioso, todos os objetos Vulkan destruídos, depois o `Device`;
+escreve `[gpu] vulkan: shut down`) e sai com 0 por `exit_now`.
+
+A saída ordenada tem limite. Ao começar, ela inicia uma thread de guarda que espera com `sigtimedwait` pelos mesmos
+três sinais, por até 5 s. Se chegar um segundo sinal, ou se o tempo acabar antes da saída, a guarda escreve
+`[game] shutdown timed out` e sai na hora por `exit_now`, com o mesmo código. Isso cobre uma thread da GPU presa no
+backend ou um driver que não responde. As esperas por fence do `Presenter` e do `VkBackend` também têm limite: esperam
+em fatias de 100 ms (`wait_fence`, `device.h`) e desistem quando `request_stop` foi chamado. O quadro é então
+abandonado e nada mais é enviado à GPU. Só a espera final pelo dispositivo ocioso, na destruição, fica sem limite
+próprio; a guarda cobre essa espera. Para os testes, `--gpu test-stall` instala um backend cujo primeiro `swap()`
+nunca volta (`shutdown is bounded when the GPU thread hangs`). Fechar a
 janela e o fim normal da thread principal do convidado passam pelo mesmo caminho. Os outros caminhos de saída
 (`--exit-after-swaps`, `--screenshot-after`, saídas 3 a 6) continuam saindo direto com `_exit`, sem destruir nada.
 Os handlers de sinal do próprio SDL ficam desligados (`SDL_HINT_NO_SIGNAL_HANDLERS`).
