@@ -926,7 +926,7 @@ Modify `tests/CMakeLists.txt`.
   - `relative constant with aL`;
   - `second constant operand uses const_1 addressing`;
   - `out-of-range relative constant reads zero`;
-  - `cube op output layout` (sc, tc, major-axis, face id; the fetch half is in 15.9);
+  - `cube op output layout` (tc, sc, 2·major-axis, face id — per Xenos ucode and Xenia; the fetch half is in 15.9);
   - `kill ops discard the pixel` (a fetch after the kill in the same shader still validates).
 - [ ] **Step 2:** FAIL. **Step 3:** Implement. **Step 4:** PASS.
 - [ ] **Step 5: Commit** `feat(shaders): translate Xenos vector ALU operations`.
@@ -1026,7 +1026,7 @@ Modify `tests/CMakeLists.txt`, and extend the harness with a vertex-fetch table.
 **Interfaces:**
 - Consumes: 15.8, and `contract.h`'s texture index tables and sets 0..3.
 - Produces: `tfetch` for 1D (sampled from a height-1 `Texture2D` at v = 0.5), 2D, 3D and cube.
-  - Cube coordinates come from the `CUBE` vector op layout (sc, tc, face) and are converted to a direction.
+  - Cube coordinates come from the `CUBE` vector op layout (tc, sc, 2·major-axis, face id; x = tc, y = sc) and are converted to a direction.
   - LOD:
     - the PS uses implicit LOD unless the instruction asks otherwise;
     - **the VS always uses explicit LOD** (0 + bias);
