@@ -2,8 +2,9 @@
 // Fetch instructions. Vertex fetch (Task 15.8) reads the vertex data inside the shader, so pipelines have no vertex
 // input state: the per-draw vertex-fetch table (contract.h, push-constant offset 24) gives each fetch constant's
 // buffer device address, size in bytes and endian swap mode, and the instruction gives the format, stride and offset
-// (so they are part of the microcode hash). Texture fetch is Task 15.9. Semantics per Xenia's SPIR-V translator and
-// xenos.h (reference only, nothing copied):
+// (so they are part of the microcode hash). Texture fetch (Task 15.9) is below emit_vertex_fetch; its semantics and
+// what it leaves to the sampler/texture cache are in docs/architecture.md "Texture fetch". Vertex fetch semantics per
+// Xenia's SPIR-V translator and xenos.h (reference only, nothing copied):
 //   - index: the source register component, floor(x + 0.5) when is_index_rounded, else floor(x); no index when the
 //     stride is 0. A mini fetch reuses index * stride of the last full fetch the shader ran (a Function variable;
 //     the decoder already gave it that fetch's register, slot and stride) with its own offset and format;
@@ -79,7 +80,17 @@ constexpr double kIndexSpan = double(1u << 30) + double(1u << 23);
 }  // namespace
 
 Result<void> Translator::emit_fetch(uint32_t slot, const FetchInstr& f) {
-  if (f.op == FetchOp::VertexFetch) return emit_vertex_fetch(slot, f);
+  switch (f.op) {
+    case FetchOp::VertexFetch: return emit_vertex_fetch(slot, f);
+    case FetchOp::TextureFetch: return emit_texture_fetch(slot, f);
+    case FetchOp::SetTextureLod:
+    case FetchOp::SetTextureGradientsHorz:
+    case FetchOp::SetTextureGradientsVert:
+    case FetchOp::GetTextureGradients: return emit_texture_op(slot, f);
+    case FetchOp::GetTextureComputedLod:  // getCompTexLOD, getWeights and getBCF: until the game shows it needs one
+    case FetchOp::GetTextureWeights:
+    case FetchOp::GetTextureBorderColorFrac: break;
+  }
   return unsupported(slot, "fetch", fetch_op_name(f.op));
 }
 
@@ -242,8 +253,11 @@ Result<void> Translator::emit_vertex_fetch(uint32_t slot, const FetchInstr& f) {
                {result_var, b_.op(spv::OpCompositeConstruct, t_.vec4, {comp[0], comp[1], comp[2], comp[3]})});
     return {};
   }));
-  const Id fetched = b_.op(spv::OpLoad, t_.vec4, {result_var});
+  store_fetch_result(f, b_.op(spv::OpLoad, t_.vec4, {result_var}), predicate);
+  return {};
+}
 
+void Translator::store_fetch_result(const FetchInstr& f, Id fetched, Id predicate) {
   // The destination swizzle: x..w, 0 (and the invalid 6), 1, or keep.
   uint32_t mask = 0;
   std::array<uint32_t, 4> pick{};
@@ -256,18 +270,247 @@ Result<void> Translator::emit_vertex_fetch(uint32_t slot, const FetchInstr& f) {
     mask |= 1u << j;
     pick[j] = sel < 4 ? sel : (sel == kFetchSwizzleOne ? 5 : 4);  // 4, 5: the (0, 1) constant's x, y
   }
-  if (mask == 0) return {};
+  if (mask == 0) return;
   const Id value = b_.op(spv::OpVectorShuffle, t_.vec4,
                          {fetched, const_vec4(0, 1, 0, 0), pick[0], pick[1], pick[2], pick[3]});
   const Id dst = temp_index(f.dst_reg, f.dst_rel);
   if (!predicate) {
     store_reg_masked_at(dst, value, mask);
-    return {};
+    return;
   }
   const Id ptr = reg_ptr(dst);
   const Id old = b_.op(spv::OpLoad, t_.vec4, {ptr});
   const Id merged = merge_masked(old, value, mask);
   b_.op_void(spv::OpStore, {ptr, b_.op(spv::OpSelect, t_.vec4, {predicate, merged, old})});
+}
+
+// --- texture fetch (Task 15.9) ------------------------------------------------------------------------------------
+
+namespace {
+
+// The heap of a fetch dimension: 1D and 2D share the Texture2D heap (a 1D texture is a height-1 2D texture).
+uint32_t texture_set(uint32_t dimension) {
+  if (dimension <= 1) return kSetTexture2D;
+  return dimension == 2 ? kSetTexture3D : kSetTextureCube;
+}
+
+// The shared block's index table of a heap.
+uint32_t index_table(uint32_t set) {
+  switch (set) {
+    case kSetTexture2D: return kSharedTexture2DIndex;
+    case kSetTexture3D: return kSharedTexture3DIndex;
+    case kSetTextureCube: return kSharedTextureCubeIndex;
+    default: return kSharedSamplerIndex;
+  }
+}
+
+}  // namespace
+
+Id Translator::heap_element_type(uint32_t set) {
+  if (set == kSetSamplers) return b_.type_sampler();
+  const spv::Dim dim = set == kSetTexture3D ? spv::Dim3D : set == kSetTextureCube ? spv::DimCube : spv::Dim2D;
+  return b_.type_image(t_.f32, dim, false, false, false, 1);
+}
+
+Id Translator::texture_heap(uint32_t set) {
+  if (set >= heaps_.size()) {
+    record_internal("texture_heap: set " + std::to_string(set) + " is not a heap");
+    set = kSetSamplers;
+  }
+  if (heaps_[set]) return heaps_[set];
+  // Runtime arrays indexed by a dynamically uniform value (read from the shared block): no NonUniform decoration.
+  b_.capability(spv::CapabilityRuntimeDescriptorArray);
+  b_.capability(spv::CapabilitySampledImageArrayDynamicIndexing);
+  static constexpr std::array<const char*, 4> kNames = {"textures_2d", "textures_3d", "textures_cube", "samplers"};
+  const Id heap = global_var(spv::StorageClassUniformConstant, b_.type_runtime_array(heap_element_type(set)),
+                             kNames[set]);
+  b_.decorate(heap, spv::DecorationDescriptorSet, {set});
+  b_.decorate(heap, spv::DecorationBinding, {kHeapBinding});
+  heaps_[set] = heap;
+  return heap;
+}
+
+Id Translator::load_heap_descriptor(uint32_t set, uint32_t const_index) {
+  const Id heap = texture_heap(set);
+  const Id type = heap_element_type(set);
+  // const_index is a 5-bit field (0..31), so the table read is always in bounds; the heap index itself is the
+  // runtime's (the table holds a valid descriptor for every fetch constant).
+  const Id index = load_shared_u32(index_table(set), const_index);
+  const Id ptr = b_.op(spv::OpAccessChain, b_.type_pointer(spv::StorageClassUniformConstant, type), {heap, index});
+  return b_.op(spv::OpLoad, type, {ptr});
+}
+
+std::array<Id, 3> Translator::texture_operand(const FetchInstr& f) {
+  const Id src = b_.op(spv::OpLoad, t_.vec4, {reg_ptr(temp_index(f.src_reg, f.src_rel))});
+  std::array<Id, 3> c{};
+  for (uint32_t i = 0; i < 3; ++i) c[i] = extract(src, (f.src_swizzle >> (2 * i)) & 3);
+  return c;
+}
+
+void Translator::declare_texture_state() {
+  bool sets_lod = false, sets_gradients = false;
+  for (const auto& s : program_.slots) {
+    const auto* f = std::get_if<FetchInstr>(&s);
+    if (!f) continue;
+    sets_lod |= f->op == FetchOp::SetTextureLod;
+    sets_gradients |= f->op == FetchOp::SetTextureGradientsHorz || f->op == FetchOp::SetTextureGradientsVert;
+  }
+  if (sets_lod) {
+    tex_lod_ = b_.variable(spv::StorageClassFunction, b_.type_pointer(spv::StorageClassFunction, t_.f32), "tex_lod");
+    b_.op_void(spv::OpStore, {tex_lod_, const_f(0.0f)});
+  }
+  if (sets_gradients) {
+    const Id ptr = b_.type_pointer(spv::StorageClassFunction, t_.vec4);
+    grad_h_ = b_.variable(spv::StorageClassFunction, ptr, "grad_h");
+    grad_v_ = b_.variable(spv::StorageClassFunction, ptr, "grad_v");
+    b_.op_void(spv::OpStore, {grad_h_, const_vec4(0, 0, 0, 0)});
+    b_.op_void(spv::OpStore, {grad_v_, const_vec4(0, 0, 0, 0)});
+  }
+}
+
+Result<void> Translator::emit_texture_op(uint32_t slot, const FetchInstr& f) {
+  if (f.op == FetchOp::GetTextureGradients) {
+    // Screen-space derivatives exist only in the pixel shader.
+    if (is_vs()) return unsupported(slot, "fetch", "get_gradients in a vertex shader");
+    const Id predicate = f.predicated ? pred_matches(f.pred_condition) : 0;
+    const auto c = texture_operand(f);
+    const auto d = [&](spv::Op op, Id v) { return b_.op(op, t_.f32, {v}); };
+    const Id value = b_.op(spv::OpCompositeConstruct, t_.vec4,
+                           {d(spv::OpDPdx, c[0]), d(spv::OpDPdy, c[0]), d(spv::OpDPdx, c[1]), d(spv::OpDPdy, c[1])});
+    store_fetch_result(f, value, predicate);
+    return {};
+  }
+  const Id predicate = f.predicated ? pred_matches(f.pred_condition) : 0;
+  const auto c = texture_operand(f);
+  Id var = 0, type = 0, value = 0;
+  if (f.op == FetchOp::SetTextureLod) {
+    var = tex_lod_;
+    type = t_.f32;
+    value = c[0];
+  } else {
+    var = f.op == FetchOp::SetTextureGradientsHorz ? grad_h_ : grad_v_;
+    type = t_.vec4;
+    value = b_.op(spv::OpCompositeConstruct, t_.vec4, {c[0], c[1], c[2], const_f(0.0f)});
+  }
+  if (!var) return internal(std::string(fetch_op_name(f.op)) + " without its state variable");
+  if (predicate) value = b_.op(spv::OpSelect, type, {predicate, value, b_.op(spv::OpLoad, type, {var})});
+  b_.op_void(spv::OpStore, {var, value});
+  return {};
+}
+
+Result<void> Translator::emit_texture_fetch(uint32_t, const FetchInstr& f) {
+  if (f.dimension > 3 || f.const_index >= 32) return internal("tfetch dimension or fetch constant out of range");
+  const bool cube = f.dimension == 3;
+  const uint32_t set = texture_set(f.dimension);
+  // The coordinates the size and the offsets apply to: x (1D), xy (2D), xyz (3D), the face's S and T (cube).
+  const uint32_t axes = f.dimension == 0 ? 1 : f.dimension == 2 ? 3 : 2;
+  const Id predicate = f.predicated ? pred_matches(f.pred_condition) : 0;
+  const auto c = texture_operand(f);
+  const Id image_type = heap_element_type(set);
+  const Id image = load_heap_descriptor(set, f.const_index);
+  const Id sampler = load_heap_descriptor(kSetSamplers, f.const_index);
+
+  // Unnormalized coordinates and offsets need the texture size (mip 0; a cube's face size). Samplers are always
+  // normalized: Vulkan's unnormalized samplers forbid mips, 3D and cube textures.
+  const std::array<float, 3> offset = {f.offset_x, f.offset_y, f.offset_z};
+  const bool unnormalized = f.unnormalized && !cube;  // cube face coordinates are never scaled (as in Xenia)
+  bool needs_size = unnormalized;
+  for (uint32_t i = 0; i < axes; ++i) needs_size |= offset[i] != 0.0f;
+  std::array<Id, 3> size{};
+  if (needs_size) {
+    b_.capability(spv::CapabilityImageQuery);
+    const uint32_t n = f.dimension == 2 ? 3 : 2;
+    const Id query = b_.op(spv::OpImageQuerySizeLod, b_.type_vector(t_.i32, n), {image, b_.constant_i32(0)});
+    for (uint32_t i = 0; i < n; ++i)
+      size[i] = b_.op(spv::OpConvertSToF, t_.f32, {extract(query, i, t_.i32)});
+  }
+  std::array<Id, 3> coord = c;
+  for (uint32_t i = 0; i < axes; ++i) {
+    if (unnormalized) {
+      // (texel coordinate + offset) / size
+      Id v = offset[i] != 0.0f ? arith(spv::OpFAdd, t_.f32, {c[i], const_f(offset[i])}) : c[i];
+      coord[i] = arith(spv::OpFDiv, t_.f32, {v, size[i]});
+    } else if (offset[i] != 0.0f) {
+      // normalized coordinate + offset / size
+      coord[i] = arith(spv::OpFAdd, t_.f32, {c[i], arith(spv::OpFDiv, t_.f32, {const_f(offset[i]), size[i]})});
+    }
+  }
+
+  const Id vec3 = b_.type_vector(t_.f32, 3);
+  Id coordinate = 0;
+  if (cube) {
+    // The CUBE op's face coordinates back to a direction: S and T from 1..2 to -1..1, the face from z (plus the z
+    // offset) clamped to 0..5 (NaN to 0) and truncated; then the direction whose CUBE result (Vulkan's cube rule)
+    // gives that face, S and T: +X (1, -T, -S), -X (-1, -T, S), +Y (S, 1, T), -Y (S, -1, -T), +Z (S, -T, 1),
+    // -Z (-S, -T, -1).
+    const auto to_signed = [&](Id v) {
+      return arith(spv::OpFSub, t_.f32, {arith(spv::OpFMul, t_.f32, {v, const_f(2.0f)}), const_f(3.0f)});
+    };
+    const Id s = to_signed(coord[0]), t = to_signed(coord[1]);
+    const Id ns = arith(spv::OpFNegate, t_.f32, {s}), nt = arith(spv::OpFNegate, t_.f32, {t});
+    Id face_f = f.offset_z != 0.0f ? arith(spv::OpFAdd, t_.f32, {c[2], const_f(f.offset_z)}) : c[2];
+    face_f = glsl(t_.f32, GLSLstd450NMax, {face_f, const_f(0.0f)});
+    face_f = glsl(t_.f32, GLSLstd450NMin, {face_f, const_f(5.0f)});
+    const Id face = b_.op(spv::OpConvertFToU, t_.u32, {face_f});
+    const auto pick = [&](const std::array<Id, 6>& per_face) {
+      Id v = per_face[5];
+      for (uint32_t k = 5; k-- > 0;)
+        v = b_.op(spv::OpSelect, t_.f32, {b_.op(spv::OpIEqual, t_.bool_, {face, const_u(k)}), per_face[k], v});
+      return v;
+    };
+    const Id one = const_f(1.0f), minus_one = const_f(-1.0f);
+    coordinate = b_.op(spv::OpCompositeConstruct, vec3,
+                       {pick({one, minus_one, s, s, s, ns}), pick({nt, nt, one, minus_one, nt, nt}),
+                        pick({ns, s, t, nt, one, minus_one})});
+  } else if (f.dimension == 0) {
+    coordinate = b_.op(spv::OpCompositeConstruct, t_.vec2, {coord[0], const_f(0.5f)});  // row 0 of a height-1 2D
+  } else if (f.dimension == 1) {
+    coordinate = b_.op(spv::OpCompositeConstruct, t_.vec2, {coord[0], coord[1]});
+  } else {
+    coordinate = b_.op(spv::OpCompositeConstruct, vec3, {coord[0], coord[1], coord[2]});
+  }
+
+  // LOD: the register LOD (setTexLOD) when use_register_lod, plus the instruction's bias. The fetch constant's own
+  // LOD bias is the sampler's mipLodBias (the runtime's), which Vulkan adds to implicit and explicit LODs alike.
+  Id lod = 0;
+  if (f.use_register_lod && tex_lod_) lod = b_.op(spv::OpLoad, t_.f32, {tex_lod_});
+  if (f.lod_bias != 0.0f) lod = lod ? arith(spv::OpFAdd, t_.f32, {lod, const_f(f.lod_bias)}) : const_f(f.lod_bias);
+  // A computed LOD needs derivatives: the pixel shader's, or the register gradients. A vertex shader without them
+  // always samples with an explicit LOD (0 + bias).
+  const bool computed = f.use_computed_lod && (!is_vs() || f.use_register_gradients);
+  const Id sampled = b_.op(spv::OpSampledImage, b_.type_sampled_image(image_type), {image, sampler});
+  Id fetched = 0;
+  if (computed && f.use_register_gradients) {
+    // The register gradients (setGradientsH/V): x (1D, y = 0), xy (2D), xyz (3D, cube), divided by the size for
+    // unnormalized coordinates and scaled by 2^lod (a gradient sample takes no bias).
+    const uint32_t n = f.dimension <= 1 ? 2 : 3;
+    const uint32_t used = f.dimension == 0 ? 1 : n;
+    const Id scale = lod ? glsl(t_.f32, GLSLstd450Exp2, {lod}) : 0;
+    const auto gradient = [&](Id var) {
+      const Id g = var ? b_.op(spv::OpLoad, t_.vec4, {var}) : const_vec4(0, 0, 0, 0);
+      std::array<Id, 3> comp{};
+      for (uint32_t i = 0; i < n; ++i) {
+        if (i >= used) {
+          comp[i] = const_f(0.0f);
+          continue;
+        }
+        comp[i] = extract(g, i);
+        if (unnormalized) comp[i] = arith(spv::OpFDiv, t_.f32, {comp[i], size[i]});
+        if (scale) comp[i] = arith(spv::OpFMul, t_.f32, {comp[i], scale});
+      }
+      return n == 2 ? b_.op(spv::OpCompositeConstruct, t_.vec2, {comp[0], comp[1]})
+                    : b_.op(spv::OpCompositeConstruct, vec3, {comp[0], comp[1], comp[2]});
+    };
+    const Id gx = gradient(grad_h_), gy = gradient(grad_v_);
+    fetched = b_.op(spv::OpImageSampleExplicitLod, t_.vec4, {sampled, coordinate, spv::ImageOperandsGradMask, gx, gy});
+  } else if (computed) {
+    fetched = lod ? b_.op(spv::OpImageSampleImplicitLod, t_.vec4, {sampled, coordinate, spv::ImageOperandsBiasMask, lod})
+                  : b_.op(spv::OpImageSampleImplicitLod, t_.vec4, {sampled, coordinate});
+  } else {
+    fetched = b_.op(spv::OpImageSampleExplicitLod, t_.vec4,
+                    {sampled, coordinate, spv::ImageOperandsLodMask, lod ? lod : const_f(0.0f)});
+  }
+  store_fetch_result(f, fetched, predicate);
   return {};
 }
 

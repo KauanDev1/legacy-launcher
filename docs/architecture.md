@@ -639,7 +639,11 @@ vértice do Vulkan (`VkPipelineVertexInputState` vazio).
 **Texturas e samplers (bindless)**: set 0 `Texture2D` (texturas 1D são `Texture2D` de altura 1), set 1 `Texture3D`,
 set 2 `TextureCube`, set 3 samplers; binding 0 em cada um, arrays de tamanho de execução (descriptor indexing:
 partially bound, update-after-bind). Um `tfetch` da fetch constant k lê o heap no índice da tabela do bloco
-compartilhado.
+compartilhado. O índice vem do bloco compartilhado com posição constante, então é dinamicamente uniforme: não há
+decoração `NonUniform`, e o dispositivo liga `shaderSampledImageArrayDynamicIndexing` (o módulo declara a
+capacidade `SampledImageArrayDynamicIndexing`). O `k` é um campo de 5 bits (0..31), então a leitura da tabela nunca
+sai dela; o runtime precisa pôr em toda entrada da tabela um descritor válido (uma textura nula quando a fetch
+constant não tem textura, ver "Texture fetch" abaixo).
 
 **Especialização**: constante de especialização 0 (`uint`, pixel shader): bit 1 liga o alpha test; bits 2..4 são a
 função de comparação do Xenos (`RB_COLORCONTROL.ALPHA_FUNC`: 0 nunca, 1 menor, 2 igual, 3 menor ou igual, 4 maior,
@@ -789,6 +793,46 @@ executado (uma variável local; o decodificador já lhe deu o registrador, o slo
 offset e formato. Um `vfetch` predicado é avaliado sempre e mesclado com `OpSelect` (o registrador e a base do mini
 fetch). Formato desconhecido: erro `vertex format <n> is not supported`.
 
+**Texture fetch** (`translator_fetch.cpp`, Tarefa 15.9; semântica conferida com o tradutor SPIR-V do Xenia, só como
+referência): a imagem vem do heap da dimensão (1D e 2D no set 0, 3D no set 1, cubo no set 2) e o sampler do set 3,
+os dois pelo índice da tabela da fetch constant. Coordenadas: o swizzle de origem dá 2 bits por coordenada; o 1D lê
+x e amostra a `Texture2D` de altura 1 em v = 0,5, o 2D lê xy, o 3D xyz. O cubo lê (S, T, face) nas coordenadas x, y,
+z, com S e T na faixa 1..2 que o código compilado produz depois do `CUBE` (`S = sc / |2·ma| + 1,5`); como o `CUBE`
+devolve `(tc, sc, 2·ma, face)`, o shader passa `.yxw` ao `tfetch` (é o que o Xenia supõe: a coordenada x é S). O
+tradutor leva S e T para -1..1 (`2c - 3`), limita a face a 0..5 (NaN vira 0), trunca e monta a direção cuja regra de
+cubo do Vulkan dá essa face: +X (1, -T, -S), -X (-1, -T, S), +Y (S, 1, T), -Y (S, -1, -T), +Z (S, -T, 1),
+-Z (-S, -T, -1). Offsets da instrução (em meio texel, já divididos por 2 no decodificador) valem nos eixos da
+dimensão (no cubo, só S e T; o offset z soma na face): coordenada normalizada `c + offset / tamanho`, ou, com
+`tx_coord_denorm`, `(c + offset) / tamanho`. O tamanho vem de `OpImageQuerySizeLod` no mip 0 (capacidade
+`ImageQuery`), porque os samplers são sempre normalizados (os samplers não normalizados do Vulkan proíbem mips, 3D e
+cubo); coordenadas de cubo nunca são escaladas. LOD: o LOD de registrador (`setTexLOD`, x do operando; 0 se o
+shader nunca o define) quando `use_register_lod`, mais o `lod_bias` da instrução (campo de 7 bits com sinal / 16).
+O LOD calculado (`use_computed_lod`) vale no PS, ou com gradientes de registrador: no PS sem gradientes é
+`OpImageSampleImplicitLod` com esse total como `Bias`; com `use_register_gradients`, `OpImageSampleExplicitLod` com
+`Grad` = os gradientes de `setGradientsH`/`setGradientsV` (x no 1D, xy no 2D, xyz no 3D e no cubo; divididos pelo
+tamanho com coordenadas não normalizadas; multiplicados por 2^total, já que `Grad` não aceita `Bias`). Sem LOD
+calculado, e **sempre no VS** sem gradientes, o LOD é explícito: o total (0 + bias). `getGradients` (só PS) devolve
+`(dPdx(x), dPdy(x), dPdx(y), dPdy(y))` do operando; num VS é erro. `getCompTexLOD`, `getWeights` e `getBCF` falham
+a tradução com o nome (`get_comp_tex_lod`, `get_weights`, `get_border_color_frac`) até o jogo mostrar que precisa
+deles. O swizzle de destino é o do `vfetch` (x..w, 0, 1 ou manter). Um `tfetch` (e `setTexLOD`/`setGradients*`/
+`getGradients`) predicado é avaliado sempre e mesclado com `OpSelect`, então a amostragem com LOD implícito nunca
+fica em fluxo divergente por predicado. `fetch_valid_only` é ignorado, como no Xenia (afeta só invocações auxiliares
+do quad). Os filtros por instrução (`mag/min/mip/aniso/vol_*_filter`) são ignorados: o filtro é o do sampler da
+fetch constant (o código do D3D usa "da fetch constant" nesses campos).
+
+**Divisão de responsabilidades do texture fetch** (shader × cache de texturas/samplers, Tarefa 19/20):
+- shader (tradutor): coordenadas, dimensão, offsets da instrução, coordenadas não normalizadas, LOD de registrador,
+  `lod_bias` da instrução, gradientes, escolha implícito/explícito, swizzle de destino, predicado;
+- cache de samplers: tudo da fetch constant que é estado de sampler: filtros, endereçamento (clamp/wrap/mirror),
+  cor de borda, anisotropia, mip mínimo/máximo e o LOD bias da fetch constant (palavra 4, bits 12..21, /32), que vira
+  `mipLodBias` do `VkSampler` (o Vulkan o soma ao LOD implícito e ao explícito);
+- cache de texturas: formato, sinal por componente (views `SNORM`/`UNORM`), gamma (formato `SRGB`, uma aproximação
+  da curva por partes do Xenos), o swizzle da fetch constant (`VkComponentMapping` da view), o tiling e o endian. O
+  `exp_adjust` da fetch constant e o modo de sinal "unsigned biased" (`2v - 1`) não cabem numa view: o Xenia os
+  aplica no shader, mas o contrato não leva dados por fetch constant além das tabelas de índice, então ficam como
+  limite do M3 (a Tarefa 19 deve registrá-los quando aparecerem);
+- textura ausente: o runtime põe na tabela uma textura nula que lê (0, 0, 0, 0) (o Xenia liga imagens nulas zeradas).
+
 **Limites conhecidos do M3** (falham alto, salvo onde indicado): exportação de memória; o tamanho de ponto exportado
 é descartado (informado em `ShaderInfo`); fetches com LOD implícito dentro de um caso do `switch` de pc alcançado por
 um `cond_jmp` que depende de predicado podem perder as derivadas; o z do `param_gen` vale 0 para linhas, onde o Xenia
@@ -801,8 +845,12 @@ lanes (qualquer lane / todos os lanes), e aqui, como no Xenia, cada invocação 
 sinal, infinitos e NaN; só os casos de borda da unidade escalar acima, decididos por selects, não dependem disso
 (silencioso); os formatos `*_FLOAT` de 16 bits são lidos como meia precisão IEEE, não com a faixa estendida do
 Xenos (expoente 31 é inf/NaN aqui) (silencioso); componentes ausentes valem (0, 0, 0, 1) como no Direct3D, onde o
-Xenia preenche com 0 (silencioso). A partir da Tarefa 15.8 o tradutor aceita todo o controle de fluxo, toda a ALU e
-o vertex fetch; o texture fetch é um erro `is not supported` até a Tarefa 15.9.
+Xenia preenche com 0 (silencioso); no texture fetch: `getCompTexLOD`, `getWeights`, `getBCF` e `getGradients` num VS
+falham; texturas empilhadas (dimensão 2 com dados 2D em camadas) são amostradas como 3D (silencioso); o épsilon de
+arredondamento que o Xenia soma aos offsets (1,5/1024) não é somado, então um offset de meio texel com filtro
+nearest cai exatamente na borda entre texels (silencioso); os filtros por instrução, `fetch_valid_only`,
+`exp_adjust` e o modo "unsigned biased" da fetch constant são ignorados (silencioso). A partir da Tarefa 15.9 o
+tradutor aceita todo o controle de fluxo, toda a ALU, o vertex fetch e o texture fetch.
 
 ## Diagnóstico
 

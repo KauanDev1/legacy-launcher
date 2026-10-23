@@ -77,6 +77,7 @@ TEST_CASE("headless device has the required features", "[unit][vulkan]") {
   f2.pNext = &f12;
   vkGetPhysicalDeviceFeatures2(d.physical_device(), &f2);
   CHECK(f2.features.textureCompressionBC);
+  CHECK(f2.features.shaderSampledImageArrayDynamicIndexing);
   CHECK(f12.runtimeDescriptorArray);
   CHECK(f12.descriptorBindingPartiallyBound);
   CHECK(f12.descriptorBindingSampledImageUpdateAfterBind);

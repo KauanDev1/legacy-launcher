@@ -72,6 +72,7 @@ std::string check_floor(VkPhysicalDevice pd) {
   vkGetPhysicalDeviceFeatures2(pd, &f2);
 
   if (!f2.features.textureCompressionBC) return "textureCompressionBC";
+  if (!f2.features.shaderSampledImageArrayDynamicIndexing) return "shaderSampledImageArrayDynamicIndexing";
   if (!f12.runtimeDescriptorArray) return "runtimeDescriptorArray";
   if (!f12.descriptorBindingPartiallyBound) return "descriptorBindingPartiallyBound";
   if (!f12.descriptorBindingSampledImageUpdateAfterBind) return "descriptorBindingSampledImageUpdateAfterBind";
@@ -236,6 +237,7 @@ Result<Device> Device::create(const DeviceOptions& options) {
   en2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
   en2.pNext = &en12;
   en2.features.textureCompressionBC = VK_TRUE;
+  en2.features.shaderSampledImageArrayDynamicIndexing = VK_TRUE;  // translated tfetch: heaps indexed by the shared block
 
   const float priority = 1.0f;
   VkDeviceQueueCreateInfo qci{};

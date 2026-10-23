@@ -192,6 +192,7 @@ void Translator::load_contract_pointers() {
   consts_ = b_.op(spv::OpBitcast, consts_ptr_type_, {address(is_vs() ? 0 : 1)});
   shared_ = b_.op(spv::OpBitcast, shared_ptr_type_, {address(2)});
   load_fetch_table_pointer();
+  declare_texture_state();
 }
 
 Id Translator::load_float_constant(Id index) {

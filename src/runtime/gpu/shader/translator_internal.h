@@ -14,9 +14,9 @@
 // Values that must dominate every later block (buffer pointers, CF state) are made in step 2/3, so the CF can put
 // the clauses in any blocks.
 //
-// Fetches: emit_fetch (translator_fetch.cpp): vertex fetch (15.8) is done; texture fetch plugs in there (15.9). A
-// predicated fetch evaluates unconditionally and merges with OpSelect on pred_matches(). What it cannot translate is
-// reported with unsupported().
+// Fetches: emit_fetch (translator_fetch.cpp): vertex fetch (15.8) and texture fetch (15.9). A predicated fetch
+// evaluates unconditionally and merges with OpSelect on pred_matches(). What it cannot translate is reported with
+// unsupported().
 #pragma once
 
 #include <array>
@@ -168,8 +168,22 @@ class Translator {
   // --- fetch (translator_fetch.cpp; vertex fetch Task 15.8, texture fetch Task 15.9) ---
   Result<void> emit_fetch(uint32_t slot, const FetchInstr& f);
   Result<void> emit_vertex_fetch(uint32_t slot, const FetchInstr& f);
+  Result<void> emit_texture_fetch(uint32_t slot, const FetchInstr& f);  // tfetch
+  Result<void> emit_texture_op(uint32_t slot, const FetchInstr& f);     // setTexLOD, setGradients*, getGradients
   void declare_fetch_contract();       // the vertex-fetch table and vertex data pointer types (vfetch shaders only)
   void load_fetch_table_pointer();     // main's entry block: the table pointer and the mini-fetch base
+  void declare_texture_state();        // main's entry block: the register LOD and gradients (when set by the shader)
+  // The texture heap (kSetTexture2D / 3D / Cube) or the sampler heap (kSetSamplers), declared on first use.
+  Id texture_heap(uint32_t set);
+  Id heap_element_type(uint32_t set);  // the image type of a texture heap, or the sampler type
+  // The descriptor of fetch constant `const_index` (< 32) in heap `set`, through the shared block's index table.
+  Id load_heap_descriptor(uint32_t set, uint32_t const_index);
+  // The destination swizzle (x..w, 0, 1 or keep per component) of `fetched` into the fetch's destination register;
+  // with `predicate` (non-zero), merged with OpSelect so the old value stays where it is false.
+  void store_fetch_result(const FetchInstr& f, Id fetched, Id predicate);
+  // The coordinate operand of a texture instruction: component i (< 3) is the source register's component
+  // (src_swizzle >> 2i) & 3.
+  std::array<Id, 3> texture_operand(const FetchInstr& f);
 
   // --- stage interface and exports (translator_export.cpp) ---
   void declare_stage_interface();
@@ -202,6 +216,10 @@ class Translator {
   Id vertex_data_ptr_type_ = 0;  // PhysicalStorageBuffer pointer to { uint[] }
   Id fetch_table_ = 0;           // the table (pointer value, entry block)
   Id vfetch_base_ = 0;           // Function i32: index * stride of the last full vfetch (mini fetches reuse it)
+  // texture fetch (Task 15.9)
+  std::array<Id, 4> heaps_{};  // UniformConstant runtime arrays, by set (0 = not declared)
+  Id tex_lod_ = 0;             // Function f32: the register LOD (setTexLOD); 0 when the shader never sets it
+  Id grad_h_ = 0, grad_v_ = 0;  // Function vec4: the register gradients (setGradientsH/V); 0 when never set
   std::vector<std::pair<uint32_t, Id>> shared_members_;  // (contract offset, member type) in member order
 
   // exports: Function vec4 variables, by export register (0 = the register is never exported)
