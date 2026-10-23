@@ -202,3 +202,31 @@ Formato: o quê, por quê, custo se estiver errada.
     isso pelas chaves novas nos últimos 100 swaps (`new_last_100_swaps`, na linha de resumo da saída).
   - O limite de 2^20 desvios para trás por invocação corta um laço legítimo de 4 níveis com 255 iterações cada.
     Isso é documentado, e o limite sobe se aparecer um caso real.
+
+### M9. Portão do tradutor (Tarefa 15.11): aprovado
+- O quê: medição no jogo real (2026-10-23), com o tradutor da versão 9 (`kTranslatorVersion`), `NullBackend` e
+  `legacyrecomp run -- --headless --trace-gpu --exit-after-swaps 600`:
+  - execução 1, com `work/shaders/runtime/` vazio: saída 0 depois de 600 swaps, cerca de 110 s com a sincronização
+    do contêiner; `[gpu] shaders: keys=8 vs=3 ps=5 translated=8 disk=0 failed=0 new_last_100_swaps=0`;
+  - execução 2, com o cache da primeira: saída 0 depois de 600 swaps;
+    `keys=8 vs=3 ps=5 translated=0 disk=8 failed=0 new_last_100_swaps=0`, ou seja, 100% das chaves vieram do disco;
+  - `tools/shader_cache_stats.sh` (novo; `spirv-val --target-env vulkan1.2` sobre o SPIR-V de cada arquivo do cache,
+    depois do cabeçalho `LRSV` e do microcódigo): 8 arquivos, 8 válidos, 0 inválidos (3 VS, 5 PS);
+  - 7 microcódigos distintos carregados (4 VS, 3 PS), exatamente os 7 hashes do M7. As 8 chaves são 3 VS e 5 PS:
+    um mesmo PS de 9 dwords aparece com três modificadores (`0xFF`, `0x1000000FF` e `0x1000100FF`: nenhuma máscara,
+    centroide em `r0`, e centroide mais flat em `r0`), e outro PS tem flat em `r0`;
+  - um dos 7, o VS `0xAB1E86137A0240E8` (15 dwords), é carregado mas nunca usado num desenho: o jogo carrega outro
+    VS antes do próximo desenho, então a regra "o último carregado é o ativo" não gera chave para ele. Uma sonda só
+    do portão (não commitada) traduziu cada microcódigo no `IM_LOAD`: os 7 traduziram e passaram no `spirv-val`
+    (10 arquivos em outra pasta de cache, todos válidos);
+  - todas as chaves aparecem até o swap 40; nenhuma chave nova nos últimos 100 swaps, então o critério (c) da regra
+    de parada não se aplica e a execução com 900 swaps não foi necessária;
+  - nenhuma rodada de correção: 0 falhas na primeira execução. Nenhum shader carregado usa exportação de memória.
+- Por quê: os critérios do plano (0 `failed`, 0 erros do `spirv-val`, os 7 hashes do M7 traduzidos, segunda execução
+  toda do disco) foram cumpridos. O teste de integração `the game's loaded shaders all translate` (ISO, sem
+  interface, `--exit-after-swaps 300`) guarda o resultado: 0 linhas `failed` no trace e `failed=0` no resumo.
+- Custo se errado: 600 swaps cobrem só as telas iniciais. Os 15 contêineres do XEX com exportação de memória (M7)
+  e os shaders do mundo ainda não foram carregados; se algum deles chegar com `eA`/`eM` ou outra função fora das
+  Tarefas 15.4 a 15.9, a tradução falha (com o backend Vulkan, saída 5 nomeando o shader) e uma tarefa nova a
+  implementa. Os modificadores do PS já dividem um microcódigo em três chaves; se isso crescer dentro do jogo, o custo
+  é tempo de tradução no primeiro uso, visível em `new_last_100_swaps`.
