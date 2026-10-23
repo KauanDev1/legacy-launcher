@@ -20,7 +20,7 @@
 namespace lr::gpu::shader {
 
 // Bumped whenever the translated SPIR-V changes for the same input (the disk cache is keyed by it).
-inline constexpr uint32_t kTranslatorVersion = 5;
+inline constexpr uint32_t kTranslatorVersion = 6;
 inline constexpr uint32_t kNoParamGen = 0xFF;
 
 // A shader with jumps, calls or loops runs as a loop around a switch on its pc (translator_cf.cpp). Only taken

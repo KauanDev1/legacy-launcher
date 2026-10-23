@@ -572,3 +572,32 @@ TEST_CASE("export constant masks write 0 and 1", "[unit][vulkan]") {
   const HarnessResult res = draw_ok(h, vs, ps, in);
   for (const Pixel& p : res.color[0]) CHECK(p == Pixel{5, 1, 0, 0});
 }
+
+TEST_CASE("a scalar op with a zero write mask still reads its sources", "[unit]") {
+  // Every scalar op but RETAIN_PREV runs whatever its write mask (its result becomes ps), so its operands count.
+  SECTION("a temporary operand") {
+    xe::Alu add_s = mov(0, c(0), true);
+    add_s.scalar_op = xe::kScalarAdd;
+    add_s.scalar_mask = 0;
+    add_s.src3 = r(5);
+    const std::vector<uint32_t> code = ps_code({add_s});
+    auto program = sh::decode(ShaderStage::Pixel, code);
+    REQUIRE(program);
+    CHECK(program.value().temp_count == 6);
+    const auto ps = translate_ok(ShaderStage::Pixel, code);
+    CHECK(ps.info.interpolators_read == (1u << 5));  // r5 is an input at location 5
+  }
+  SECTION("a CONST op's temporary") {
+    // MUL_CONST_1 with temporary 9: bit 0 in the opcode, bit 1 (0) in src3's select bit, bits 2..5 in its swizzle.
+    xe::Alu mulc = mov(0, c(0), true);
+    mulc.scalar_op = xe::kScalarMulConst1;
+    mulc.scalar_mask = 0;
+    mulc.src3 = c(3, 9 & 0x3C);
+    const std::vector<uint32_t> code = ps_code({mulc});
+    auto program = sh::decode(ShaderStage::Pixel, code);
+    REQUIRE(program);
+    CHECK(program.value().temp_count == 10);
+    const auto ps = translate_ok(ShaderStage::Pixel, code);
+    CHECK(ps.info.interpolators_read == (1u << 9));
+  }
+}

@@ -750,10 +750,16 @@ menos `RETAIN_PREV` executa mesmo com máscara de escrita zero, porque o resulta
 (guardado antes da saturação, como no Xenia; começa em 0); `RETAIN_PREV` devolve `ps`. Semântica (Xenia, `ucode.h`):
 `MULs`, `MUL_PREVs`, `MUL_PREV2s` e `MUL_CONST_0/1` seguem a regra do 0× (só `MULs` com `a` e `b` no mesmo
 componente dispensa o teste); `MUL_PREV2s` dá `-FLT_MAX` quando `ps` é `-FLT_MAX` ou não finito, ou quando `b` não
-é finito ou não é > 0; `MAXs`/`MINs` como os vetoriais; `SETEs/GTs/GTEs/NEs` comparam `a` com 0; `EXP_IEEE`,
+é finito ou não é > 0; `MAXs`/`MINs` como os vetoriais (`a >= b ? a : b` e `a < b ? a : b`, como no `ucode.h`:
+`MINs(+0, -0)` devolve -0 e `MAXs(-0, +0)` devolve -0); `SETEs/GTs/GTEs/NEs` comparam `a` com 0; `EXP_IEEE`,
 `LOG_*`, `RECIP_*`, `RECIPSQ_*`, `SQRT_IEEE`, `SIN` e `COS` (em radianos, sem escala) vêm do GLSL.std.450, com o
-valor exato em `a = 1` para log, recíproco e raiz recíproca; as variantes `_CLAMP` trocam ±inf por ±`FLT_MAX`
-(`LOG_CLAMP` só -inf) e as `_FF` por ±0. `MOVAs` e `MOVA_FLOORs` devolvem `max(a, b)` e põem em `a0`
+valor exato em `a = 1` para log, recíproco e raiz recíproca. Os casos de borda são decididos pela entrada, com
+selects, e não testando o resultado do driver (o GLSL.std.450 deixa `log2(0)`, `inversesqrt(0)` etc. indefinidos);
+o sinal vem do bit de sinal (-0 conta como negativo) e um denormal conta como zero com sinal (a ALU do Xenos os
+zera): `RECIP_*` de ±0 dá ±inf (`IEEE`), ±`FLT_MAX` (`CLAMP`) ou ±0 (`FF`), e de ±inf dá ±0; `RECIPSQ_*` de ±0 dá
+±inf, ±`FLT_MAX` ou ±0, de +inf dá +0 e de um negativo NaN; `LOG_*` de ±0 dá -inf (`IEEE`) ou -`FLT_MAX` (`CLAMP`),
+de +inf dá +inf e de um negativo NaN; `EXP_IEEE` de ±0 dá exatamente 1, de -inf +0 e de +inf +inf; `SQRT_IEEE`
+devolve ±0 com o sinal, +inf para +inf e NaN para um negativo. `MOVAs` e `MOVA_FLOORs` devolvem `max(a, b)` e põem em `a0`
 `clamp(floor(a + 0,5), -256, 255)` e `clamp(floor(a), -256, 255)`. Predicados: `PRED_SETE/NE/GT/GTEs` fazem
 `p0 = a <op> 0` e devolvem 0 quando vale, senão 1; `PRED_SET_INVs` faz `p0 = a == 1` e devolve 0, ou senão 1 se
 `a == 0` e `a` nos outros casos; `PRED_SET_POPs` faz `p0 = a - 1 <= 0` e devolve 0, ou senão `a - 1`;
@@ -769,7 +775,10 @@ põe -0,0 (o bit de sinal marca linha), porque a chave não tem flag de linha (s
 desvios para trás terminam cedo (silencioso); o predicado é avaliado por invocação, não por wave: no hardware,
 `cond_exec_pred`, `cond_jmp`/`cond_call` predicados e a saída predicada do `loop_end` decidem uma vez para os 64
 lanes (qualquer lane / todos os lanes), e aqui, como no Xenia, cada invocação segue o próprio `p0` (silencioso); um
-`kill` num vertex shader só produz o resultado, sem descartar nada (silencioso). Até a Tarefa 15.7 o tradutor aceita
+`kill` num vertex shader só produz o resultado, sem descartar nada (silencioso); o módulo não habilita
+`SignedZeroInfNanPreserve` (float controls), então no restante da aritmética o driver pode não preservar zeros com
+sinal, infinitos e NaN; só os casos de borda da unidade escalar acima, decididos por selects, não dependem disso
+(silencioso). Até a Tarefa 15.7 o tradutor aceita
 todo o controle de fluxo e toda a ALU (vetorial e escalar); o fetch é um erro `is not supported` até as Tarefas 15.8
 e 15.9.
 

@@ -340,17 +340,39 @@ Result<Translator::UnitResult> Translator::emit_scalar_op(uint32_t slot, const A
   const auto bool_to_float = [&](Id c) { return sel(c, one, zero); };
   // ucode.h: the transcendentals of 1.0 give their exact value (log 0, 1/x and 1/sqrt(x) 1).
   const auto at_one = [&](Id exact, Id value) { return sel(cmp(spv::OpFOrdEqual, sa, one), exact, value); };
-  // *_CLAMP: an infinite result becomes +-FLT_MAX; *_FF: +-0.
-  const auto clamp_inf = [&](Id t) {
-    t = sel(cmp(spv::OpFOrdEqual, t, neg_inf), neg_flt_max, t);
-    return sel(cmp(spv::OpFOrdEqual, t, inf), flt_max, t);
+  // The edge cases of the transcendentals are decided from the input with selects, never by testing a driver's result
+  // (GLSL.std.450 leaves log2(0), inversesqrt(0) and friends undefined, and SignedZeroInfNanPreserve is not enabled).
+  // The sign comes from the sign bit, so -0 counts as negative. Denormals count as a signed zero (the Xenos ALU
+  // flushes them; it also keeps 1/x finite for every other finite input).
+  const auto constant_by_sign = [&](float v) {
+    const Id sign_bit = b_.op(spv::OpBitwiseAnd, t_.u32, {b_.op(spv::OpBitcast, t_.u32, {sa}), const_u(0x80000000u)});
+    return sel(b_.op(spv::OpINotEqual, t_.bool_, {sign_bit, const_u(0)}), const_f(-v), const_f(v));
   };
-  const auto flush_inf = [&](Id t) {
-    t = sel(cmp(spv::OpFOrdEqual, t, neg_inf), const_f(-0.0f), t);
-    return sel(cmp(spv::OpFOrdEqual, t, inf), zero, t);
+  const auto abs_a = [&] { return glsl(t_.f32, GLSLstd450FAbs, {sa}); };
+  const auto is_tiny = [&] { return cmp(spv::OpFOrdLessThan, abs_a(), const_f(std::numeric_limits<float>::min())); };
+  const auto is_inf = [&] { return cmp(spv::OpFOrdEqual, abs_a(), inf); };
+  const auto is_pos_inf = [&] { return cmp(spv::OpFOrdEqual, sa, inf); };
+  // Negative and not a (flushed) zero: log, sqrt and 1/sqrt give NaN.
+  const auto is_negative = [&] {
+    return both(cmp(spv::OpFOrdLessThan, sa, zero), b_.op(spv::OpLogicalNot, t_.bool_, {is_tiny()}));
   };
-  const auto recip = [&] { return at_one(one, arith(spv::OpFDiv, t_.f32, {one, sa})); };
-  const auto recip_sqrt = [&] { return at_one(one, glsl(t_.f32, GLSLstd450InverseSqrt, {sa})); };
+  const Id nan = const_f(std::numeric_limits<float>::quiet_NaN());
+  // RECIP_*: +-0 gives +-zero_result (inf, FLT_MAX or 0 by variant), +-inf gives +-0.
+  const auto recip = [&](float zero_result) {
+    const Id general = at_one(one, arith(spv::OpFDiv, t_.f32, {one, sa}));
+    return sel(is_tiny(), constant_by_sign(zero_result), sel(is_inf(), constant_by_sign(0.0f), general));
+  };
+  // RECIPSQ_*: +-0 gives +-zero_result, +inf gives +0, a negative input NaN.
+  const auto recip_sqrt = [&](float zero_result) {
+    const Id general = at_one(one, glsl(t_.f32, GLSLstd450InverseSqrt, {sa}));
+    return sel(is_tiny(), constant_by_sign(zero_result),
+               sel(is_pos_inf(), zero, sel(is_negative(), nan, general)));
+  };
+  // LOG_*: +-0 gives zero_result (-inf, or -FLT_MAX clamped), +inf gives +inf, a negative input NaN.
+  const auto log_of = [&](float zero_result) {
+    const Id general = at_one(zero, glsl(t_.f32, GLSLstd450Log2, {sa}));
+    return sel(is_tiny(), const_f(zero_result), sel(is_pos_inf(), inf, sel(is_negative(), nan, general)));
+  };
   // p0 = a <op> 0 for PRED_SET{E,NE,GT,GTE}s and the kills: "not equal" is unordered (NaN holds), the others ordered.
   const auto compare_zero = [&](ScalarOp o) {
     switch (o) {
@@ -411,20 +433,24 @@ Result<Translator::UnitResult> Translator::emit_scalar_op(uint32_t slot, const A
     case ScalarOp::Frac: r = glsl(t_.f32, GLSLstd450Fract, {sa}); break;
     case ScalarOp::Trunc: r = glsl(t_.f32, GLSLstd450Trunc, {sa}); break;
     case ScalarOp::Floor: r = glsl(t_.f32, GLSLstd450Floor, {sa}); break;
-    case ScalarOp::Exp: r = glsl(t_.f32, GLSLstd450Exp2, {sa}); break;
-    case ScalarOp::Log: r = at_one(zero, glsl(t_.f32, GLSLstd450Log2, {sa})); break;
-    case ScalarOp::LogClamp: {
-      const Id t = at_one(zero, glsl(t_.f32, GLSLstd450Log2, {sa}));
-      r = sel(cmp(spv::OpFOrdEqual, t, neg_inf), neg_flt_max, t);  // only -inf (log of 0) is clamped
+    case ScalarOp::Exp:
+      // ucode.h: exactly 1 at +-0; -inf gives +0, +inf gives +inf.
+      r = sel(is_tiny(), one,
+              sel(cmp(spv::OpFOrdEqual, sa, neg_inf), zero, sel(is_pos_inf(), inf, glsl(t_.f32, GLSLstd450Exp2, {sa}))));
       break;
-    }
-    case ScalarOp::Recip: r = recip(); break;
-    case ScalarOp::RecipClamp: r = clamp_inf(recip()); break;
-    case ScalarOp::RecipFixedFunc: r = flush_inf(recip()); break;
-    case ScalarOp::RecipSqrt: r = recip_sqrt(); break;
-    case ScalarOp::RecipSqrtClamp: r = clamp_inf(recip_sqrt()); break;
-    case ScalarOp::RecipSqrtFixedFunc: r = flush_inf(recip_sqrt()); break;
-    case ScalarOp::Sqrt: r = glsl(t_.f32, GLSLstd450Sqrt, {sa}); break;
+    case ScalarOp::Log: r = log_of(-kInf); break;
+    case ScalarOp::LogClamp: r = log_of(-kFltMax); break;
+    case ScalarOp::Recip: r = recip(kInf); break;
+    case ScalarOp::RecipClamp: r = recip(kFltMax); break;
+    case ScalarOp::RecipFixedFunc: r = recip(0.0f); break;
+    case ScalarOp::RecipSqrt: r = recip_sqrt(kInf); break;
+    case ScalarOp::RecipSqrtClamp: r = recip_sqrt(kFltMax); break;
+    case ScalarOp::RecipSqrtFixedFunc: r = recip_sqrt(0.0f); break;
+    case ScalarOp::Sqrt:
+      // +-0 passes through (with its sign), +inf gives +inf, a negative input NaN.
+      r = sel(is_tiny(), constant_by_sign(0.0f),
+              sel(is_pos_inf(), inf, sel(is_negative(), nan, glsl(t_.f32, GLSLstd450Sqrt, {sa}))));
+      break;
     case ScalarOp::Sin: r = glsl(t_.f32, GLSLstd450Sin, {sa}); break;  // radians, unscaled
     case ScalarOp::Cos: r = glsl(t_.f32, GLSLstd450Cos, {sa}); break;
     case ScalarOp::PredSetEq:
