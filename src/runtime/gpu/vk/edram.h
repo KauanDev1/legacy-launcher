@@ -118,10 +118,12 @@ struct RenderTarget {
   VkFramebuffer framebuffer = VK_NULL_HANDLE;
   uint64_t last_use = 0;
 
-  // Host sample of guest sample s. Guest 2x on a 4x host image: guest sample s covers host samples 2s and 2s+1
-  // (the upper and lower halves of the pixel in the standard 4x pattern); reads use 2s.
+  // Host sample of guest sample s, from the Xenos order (2x: top, bottom; 4x: TL, BL, TR, BR) to Vulkan's standard
+  // patterns: native 2x 1 - s; 4x {0, 2, 1, 3}[s]; guest 2x on a 4x host image: guest sample s covers host samples
+  // 2s and 2s+1 (the top and bottom halves of the pixel), reads use 2s. 1x: 0.
   uint32_t host_sample(uint32_t guest_sample) const;
-  // Host sample mask covering the guest samples in guest_mask.
+  // Host sample mask covering the guest samples in guest_mask (bits permuted as host_sample does; 2x on 4x sets
+  // both host samples of each guest sample). Task 20 draws with it.
   uint32_t host_sample_mask(uint32_t guest_mask) const;
 };
 
@@ -142,9 +144,12 @@ class Edram {
   // resolve_rect(regs, mem).
   Result<void> clear(const RegisterFile& regs, const MemoryAccess* mem = nullptr);
   // Copies (copy_command 0 raw or 1 convert; 2 and 3 copy nothing) then clears, as above. The guest destination is
-  // bounds-checked: bytes past the guest memory size, or a base that maps to no guest memory, are dropped (with one
-  // warning), never written. An unsupported destination (3D/array, a format or endian it cannot write) skips the
-  // copy with a warning and still clears.
+  // bounds-checked: bytes past the guest memory size or past the physical allocation holding the first touched byte
+  // (MemoryAccess::allocation_end), or a base that maps to no guest memory, are dropped (with one warning), never
+  // written. The touched range is whole 32x32 macro tiles, read from the guest and written back whole (bytes outside
+  // the rectangle keep the value read just before). An unsupported destination (3D/array, endian 8in128, a format
+  // it cannot write) skips the copy with a warning and still clears; endian 8in64 on a 32bpp destination is
+  // treated as 8in32 (warned once).
   Result<void> resolve(const RegisterFile& regs, const MemoryAccess& mem);
 
   std::size_t render_target_count() const;

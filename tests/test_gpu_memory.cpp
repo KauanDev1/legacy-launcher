@@ -75,6 +75,24 @@ TEST_CASE("physical addresses outside memory or unallocated are not translated",
   CHECK_FALSE(heap.guest_from_physical(0xFFFFFFFF).has_value());
 }
 
+TEST_CASE("physical allocation end bounds GPU writes to one allocation", "[unit][gpu]") {
+  PhysicalHeap heap;
+  auto g = heap.allocate(0x20000, PhysicalHeap::kMemLargePages | kRW, 0, 0xFFFFFFFF, 0);
+  REQUIRE(g);
+  const uint32_t phys = PhysicalHeap::physical_address(g.value());
+  CHECK(heap.physical_allocation_end(phys) == phys + 0x20000);
+  CHECK(heap.physical_allocation_end(phys + 0x1FFFF) == phys + 0x20000);
+  CHECK_FALSE(heap.physical_allocation_end(phys + 0x20000).has_value());  // the next page is unallocated
+  CHECK_FALSE(heap.physical_allocation_end(runtime::kPhysicalSize).has_value());
+  lr::testing::KernelFixture f;
+  auto& k = kernel::kernel();
+  auto kg = k.physical().allocate(0x1000, kRW, 0, 0xFFFFFFFF, 0);
+  REQUIRE(kg);
+  const uint32_t kphys = PhysicalHeap::physical_address(kg.value());
+  REQUIRE(k.gpu_memory_access().allocation_end);
+  CHECK(k.gpu_memory_access().allocation_end(kphys + 4) == kphys + 0x1000);
+}
+
 TEST_CASE("untranslatable physical address is reported", "[unit][gpu]") {
   lr::testing::KernelFixture f;
   auto& k = kernel::kernel();

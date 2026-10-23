@@ -121,4 +121,15 @@ std::optional<uint32_t> PhysicalHeap::guest_from_physical(uint32_t phys) const {
   return static_cast<uint32_t>(guest + offset);
 }
 
+std::optional<uint32_t> PhysicalHeap::physical_allocation_end(uint32_t phys) const {
+  if (phys >= kPhysicalSize) return std::nullopt;
+  std::lock_guard<std::mutex> lock(mu_);
+  auto it = by_phys_.upper_bound(phys);
+  if (it == by_phys_.begin()) return std::nullopt;
+  --it;
+  const uint64_t end = uint64_t{it->first} + allocs_.at(it->second).size;
+  if (phys >= end) return std::nullopt;
+  return static_cast<uint32_t>(end);
+}
+
 }  // namespace lr::runtime

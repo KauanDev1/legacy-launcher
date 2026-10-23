@@ -42,7 +42,7 @@ struct Fixture {
                                      if (phys >= kPhysSize) return std::nullopt;
                                      return phys + kPhysToGuest + skew;
                                    },
-                                   kMemSize},
+                                   kMemSize, {}},
                       regs, backend, [this](uint32_t source, uint32_t cpu) { interrupts.emplace_back(source, cpu); }};
 
   uint8_t* guest(uint32_t addr) { return mem.data() + addr; }

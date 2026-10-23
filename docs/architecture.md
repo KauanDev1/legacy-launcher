@@ -729,10 +729,15 @@ de posse entre superfícies nem o caminho preciso por interlock (o spec deixa os
 | `D24S8` | `D24_UNORM_S8_UINT`, ou `D32_SFLOAT_S8_UINT` sem suporte |
 | `D24FS8` (profundidade 20e4, [0, 2)) | `D32_SFLOAT_S8_UINT`, com [0, 2) guardado como [0, 1) |
 
-Os outros formatos de cor (`k_16_16`, `k_16_16_16_16`, `k_2_10_10_10_FLOAT`) dão erro `InvalidFormat` no `bind`. MSAA
-2x usa uma imagem 2x do host quando há. Senão usa 4x (o lavapipe só tem 1, 4 e 8): a amostra `s` do convidado cobre
-as amostras `2s` e `2s+1` do host (metades de cima e de baixo do pixel no padrão 4x), e a leitura usa `2s`
-(`RenderTarget::host_sample`, `host_sample_mask`).
+Os outros formatos de cor (`k_16_16`, `k_16_16_16_16`, `k_2_10_10_10_FLOAT`) dão erro `InvalidFormat` no `bind`.
+
+**Ordem das amostras.** A ordem do Xenos (conferida no `spirv_shader_translator_rb.cc` do Xenia, só referência) é
+(cima, baixo) no 2x e (sup. esq., inf. esq., sup. dir., inf. dir.) no 4x. Os padrões padrão do Vulkan são
+(inf. dir., sup. esq.) no 2x e (sup. esq., sup. dir., inf. esq., inf. dir.) no 4x. Então
+`RenderTarget::host_sample(s)` é `1 - s` num 2x nativo e `{0, 2, 1, 3}[s]` no 4x, e `host_sample_mask` permuta os
+bits da máscara do mesmo jeito (a Tarefa 20 desenha com ela). Sem 2x no host (o lavapipe só tem 1, 4 e 8), o 2x usa
+uma imagem 4x: a amostra `s` do convidado cobre as amostras `2s` e `2s+1` do host (metade de cima ou de baixo do
+pixel), e a leitura usa `2s`.
 
 **Retângulo.** O Direct3D 9 desenha o resolve como três vértices `k_32_32_FLOAT` no vertex fetch constant 0.
 `resolve_rect` usa a caixa deles, com o meio pixel desfeito quando `PA_SU_VTX_CNTL.pix_center` é 0, a regra
@@ -757,14 +762,19 @@ uma amostra, ou a média de 01, 23 ou 0123. O valor é ajustado ao modo de MSAA,
 (usa a primeira amostra do grupo).
 
 Destino 3D/array, endian 5 ou mais e formato sem empacotamento pulam a cópia com um aviso, mas a limpeza acontece.
+Endian 4 (8in64) num destino de 32 bits não tem unidade de 64 bits para inverter: vira 8in32, com um aviso.
 O endereço do pixel (x, y) é o tiling 2D do Xenos (a fórmula está em `resolve_common.glsl`), com a mesma origem do
 alvo e do destino, como no D3D9. A cópia é um compute shader (`resolve_{color,depth}[_ms].comp`). Ele escreve num
 buffer que espelha a faixa da memória do convidado tocada (os macrotiles 32×32 inteiros, do primeiro ao último).
-Esse buffer chega preenchido com os bytes atuais do convidado e volta inteiro depois. Cada operação é gravada,
+Esse buffer chega preenchido com os bytes atuais do convidado e volta inteiro depois. É uma leitura-modificação-escrita
+de macrotiles inteiros: bytes desses macrotiles fora do retângulo voltam com o valor lido logo antes, então uma
+escrita da CPU neles durante o resolve se perde. Cada operação é gravada,
 enviada e esperada na hora; a Tarefa 20 junta isso ao fluxo de desenho.
 
 **Segurança.** Base, pitch e tamanho vêm do convidado. A faixa é limitada ao tamanho da memória do convidado, ao
-espaço físico de 512 MiB e a 64 MiB por resolve, e precisa mapear linearmente. Uma base fora da memória descarta a
+espaço físico de 512 MiB, a 64 MiB por resolve e ao fim da alocação física que contém o primeiro byte
+(`MemoryAccess::allocation_end`, do `PhysicalHeap::physical_allocation_end`), e precisa mapear linearmente.
+Alocações vizinhas e páginas não alocadas nunca são tocadas. Uma base fora da memória descarta a
 cópia. O shader confere cada escrita contra o tamanho do buffer. Escritas fora da faixa são descartadas com um aviso
 (uma vez por mensagem), nunca escritas fora. O teste `resolve never writes outside guest memory` cobre isso.
 
@@ -773,6 +783,11 @@ tiled guest surface`, `2x MSAA resolve averages samples` e `depth resolve format
 convidado com a referência de tiling em CPU de `tests/support/xenos_tiling.h`. Essa referência só existe nos testes
 e é escrita de outro jeito que o shader (campo a campo, não por somas), para um erro em qualquer um dos dois
 aparecer. A Tarefa 19 a reaproveita.
+
+**A reconfirmar na Tarefa 20.** A ordem das metades da palavra de limpeza de 64 bits (`RB_COLOR_CLEAR` como os 32 bits
+de baixo, `RB_COLOR_CLEAR_LO` como os de cima, como o Xenia junta) ainda não foi vista num jogo. A destruição LRU
+de render targets supõe que cada operação já terminou na GPU; quando a Tarefa 20 juntar o trabalho num command
+buffer por quadro, a destruição tem de esperar o fim do uso da imagem.
 
 ## Contrato dos shaders traduzidos (plano B)
 

@@ -259,6 +259,13 @@ TEST_CASE("xenos tiling reference places every block once", "[unit][gpu]") {
   CHECK(xenos_tiled_offset_2d(32, 0, 64, 2) == 4096);  // the second 32x32 macro tile
   CHECK(xenos_tiled_offset_2d(0, 32, 64, 2) == 2 * 4096);
   CHECK(xenos_tiled_offset_2d(0, 32, 64, 3) == 2 * 8192);
+  // Hand-computed from the bit layout (pitch 64, 4-byte pixels): pipe = {x[4] ^ y[3], x[3]} at bits 6-7, micro
+  // row y[3:1] through linear[7:5] at bits 8-10, bank y[4] at bit 11.
+  CHECK(xenos_tiled_offset_2d(8, 0, 64, 2) == 64);
+  CHECK(xenos_tiled_offset_2d(16, 0, 64, 2) == 128);
+  CHECK(xenos_tiled_offset_2d(0, 8, 64, 2) == 1152);
+  CHECK(xenos_tiled_offset_2d(8, 8, 64, 2) == 1216);
+  CHECK(xenos_tiled_offset_2d(0, 16, 64, 2) == 2048);
   for (uint32_t b : {2u, 3u}) {
     std::set<uint32_t> seen;
     for (uint32_t y = 0; y < 64; ++y)
@@ -273,6 +280,48 @@ TEST_CASE("xenos tiling reference places every block once", "[unit][gpu]") {
         seen.insert(off);
       }
     CHECK(seen.size() == 64u * 64u);
+  }
+}
+
+TEST_CASE("Xenos MSAA samples map to the Vulkan sample order", "[unit][gpu]") {
+  RenderTarget rt;
+  SECTION("1x") {
+    rt.key.msaa = edram::kMsaa1x;
+    rt.samples = VK_SAMPLE_COUNT_1_BIT;
+    CHECK(rt.host_sample(0) == 0);
+    CHECK(rt.host_sample_mask(0x1) == 0x1);
+    CHECK(rt.host_sample_mask(0xF) == 0x1);
+  }
+  SECTION("native 2x: Xenos (top, bottom), Vulkan (bottom, top)") {
+    rt.key.msaa = edram::kMsaa2x;
+    rt.samples = VK_SAMPLE_COUNT_2_BIT;
+    CHECK(rt.host_sample(0) == 1);
+    CHECK(rt.host_sample(1) == 0);
+    CHECK(rt.host_sample_mask(0x1) == 0x2);
+    CHECK(rt.host_sample_mask(0x2) == 0x1);
+    CHECK(rt.host_sample_mask(0x3) == 0x3);
+  }
+  SECTION("4x: Xenos TL, BL, TR, BR; Vulkan TL, TR, BL, BR") {
+    rt.key.msaa = edram::kMsaa4x;
+    rt.samples = VK_SAMPLE_COUNT_4_BIT;
+    CHECK(rt.host_sample(0) == 0);
+    CHECK(rt.host_sample(1) == 2);
+    CHECK(rt.host_sample(2) == 1);
+    CHECK(rt.host_sample(3) == 3);
+    CHECK(rt.host_sample_mask(0x2) == 0x4);
+    CHECK(rt.host_sample_mask(0x4) == 0x2);
+    CHECK(rt.host_sample_mask(0x9) == 0x9);
+    CHECK(rt.host_sample_mask(0x6) == 0x6);
+    CHECK(rt.host_sample_mask(0x3) == 0x5);
+  }
+  SECTION("2x on a 4x host image: top half {0, 1}, bottom half {2, 3}") {
+    rt.key.msaa = edram::kMsaa2x;
+    rt.samples = VK_SAMPLE_COUNT_4_BIT;
+    CHECK(rt.host_sample(0) == 0);
+    CHECK(rt.host_sample(1) == 2);
+    CHECK(rt.host_sample_mask(0x1) == 0x3);
+    CHECK(rt.host_sample_mask(0x2) == 0xC);
+    CHECK(rt.host_sample_mask(0x3) == 0xF);
   }
 }
 
@@ -560,6 +609,40 @@ TEST_CASE("resolve never writes outside guest memory", "[unit][vulkan]") {
         }
       INFO("first difference: " << first_difference(g.bytes, want));
       CHECK(g.bytes == want);
+    }
+    SECTION("destination running past its physical allocation") {
+      // Allocations [0x1000, 0x5000) and [0x5000, 0x7000); the rest is unallocated. A 64x64 32bpp resolve at 0x5000
+      // (16 KiB of macro tiles) must stop at 0x7000.
+      mem.allocation_end = [](uint32_t phys) -> std::optional<uint32_t> {
+        if (phys >= 0x1000 && phys < 0x5000) return 0x5000u;
+        if (phys >= 0x5000 && phys < 0x7000) return 0x7000u;
+        return std::nullopt;
+      };
+      set_dest(regs, 0x5000, kPitch, 64, edram::kDest_8_8_8_8, lr::gpu::pm4::kEndianNone);
+      regs.write(reg::RB_COPY_CONTROL, copy_control(0, 0, true, false, 0));
+      REQUIRE(edram_.clear(regs).ok());
+      REQUIRE(edram_.resolve(regs, mem).ok());
+      std::vector<uint8_t> want(kReachable + kCanary, kSentinel);
+      uint32_t written = 0;
+      for (uint32_t y = 0; y < 64; ++y)
+        for (uint32_t x = 0; x < kPitch; ++x) {
+          const uint32_t off = 0x5000 + lr::testing::xenos_tiled_offset_2d(x, y, kPitch, 2);
+          if (off + 4 <= 0x7000) {
+            put_word(want, off, 0x01020304u);
+            ++written;
+          }
+        }
+      CHECK(written == 2u * 1024u);  // the first two macro tiles
+      INFO("first difference: " << first_difference(g.bytes, want));
+      CHECK(g.bytes == want);
+    }
+    SECTION("destination not in a physical allocation") {
+      mem.allocation_end = [](uint32_t) -> std::optional<uint32_t> { return std::nullopt; };
+      set_dest(regs, 0x2000, kPitch, 64, edram::kDest_8_8_8_8, lr::gpu::pm4::kEndianNone);
+      regs.write(reg::RB_COPY_CONTROL, copy_control(0, 0, true, false, 0));
+      REQUIRE(edram_.clear(regs).ok());
+      REQUIRE(edram_.resolve(regs, mem).ok());
+      CHECK(g.bytes == std::vector<uint8_t>(kReachable + kCanary, kSentinel));
     }
     SECTION("destination base outside guest memory") {
       set_dest(regs, 0x1FFFF000, kPitch, 64, edram::kDest_8_8_8_8, lr::gpu::pm4::kEndianNone);

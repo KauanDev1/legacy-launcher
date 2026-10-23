@@ -49,6 +49,9 @@ class PhysicalHeap {
   // + offset inside it, linear across the whole allocation); nullopt when the page is unallocated or phys is
   // outside the 512 MiB. A page belongs to one view only, so the answer is never ambiguous. The GPU uses this.
   std::optional<uint32_t> guest_from_physical(uint32_t phys) const;
+  // Physical address one past the last byte of the allocation that owns `phys`; nullopt when the page is
+  // unallocated or phys is outside the 512 MiB. Bounds GPU writes (EDRAM resolves) to one allocation.
+  std::optional<uint32_t> physical_allocation_end(uint32_t phys) const;
 
  private:
   struct Alloc {

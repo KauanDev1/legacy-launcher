@@ -114,7 +114,8 @@ void Kernel::on_commit(uint32_t addr, uint32_t size, bool committed, bool zero) 
 
 gpu::MemoryAccess Kernel::gpu_memory_access() {
   return gpu::MemoryAccess{mem_.base(), [this](uint32_t phys) { return physical_.guest_from_physical(phys); },
-                           mem_.size()};
+                           mem_.size(),
+                           [this](uint32_t phys) { return physical_.physical_allocation_end(phys); }};
 }
 
 runtime::PageHeap* Kernel::virtual_heap_for(uint32_t addr) {

@@ -27,6 +27,11 @@ struct MemoryAccess {
   // Bytes of guest memory reachable from base (the runtime maps the whole 4 GiB space, GuestMemory::size()).
   // Every access is checked against it: [guest, guest + n) must lie in [0, size). Interface addition (Task 8).
   uint64_t size = 0;
+  // Physical address one past the end of the physical allocation holding `phys` (already masked); nullopt when
+  // phys is in no allocation. Empty: no allocation bookkeeping (tests), only `size` bounds accesses. The EDRAM
+  // resolve (Task 18) clamps its guest writes to it, so a resolve never spills into a neighbouring allocation or
+  // unallocated (uncommitted) pages. Interface addition (Task 18 fix round 1).
+  std::function<std::optional<uint32_t>(uint32_t phys)> allocation_end;
 };
 
 namespace pm4 {

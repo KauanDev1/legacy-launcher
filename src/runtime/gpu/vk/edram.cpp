@@ -306,15 +306,34 @@ ResolveRect resolve_rect(const RegisterFile& regs, const MemoryAccess* mem) {
   return ResolveRect{uint32_t(x0), uint32_t(y0), uint32_t(x1), uint32_t(y1)};
 }
 
+// Xenos sample order (Xenia spirv_shader_translator_rb.cc, reference only): 2x is (top, bottom); 4x is top-left,
+// bottom-left, top-right, bottom-right. Vulkan's standard 2x pattern is (bottom-right, top-left), so a native 2x
+// host image swaps the two; its standard 4x pattern is (top, right, left, bottom) = TL, TR, BL, BR in quadrant
+// terms, so guest 4x sample s is host sample {0, 2, 1, 3}[s]. Guest 2x on a 4x host image: guest sample s covers
+// the host samples of its half of the pixel, 2s and 2s+1 (0, 1 lie in the top half, 2, 3 in the bottom).
 uint32_t RenderTarget::host_sample(uint32_t guest_sample) const {
-  if (key.msaa == edram::kMsaa2x && samples == VK_SAMPLE_COUNT_4_BIT) return guest_sample * 2;
-  return guest_sample;
+  guest_sample &= 3u;
+  if (key.msaa == edram::kMsaa2x) {
+    if (samples == VK_SAMPLE_COUNT_4_BIT) return (guest_sample & 1u) * 2;
+    return 1u - (guest_sample & 1u);
+  }
+  if (key.msaa == edram::kMsaa4x) {
+    static constexpr uint32_t kXenos4xToVulkan[4] = {0, 2, 1, 3};
+    return kXenos4xToVulkan[guest_sample];
+  }
+  return 0;
 }
 
 uint32_t RenderTarget::host_sample_mask(uint32_t guest_mask) const {
-  if (key.msaa == edram::kMsaa2x && samples == VK_SAMPLE_COUNT_4_BIT)
-    return ((guest_mask & 1u) ? 0x3u : 0u) | ((guest_mask & 2u) ? 0xCu : 0u);
-  return guest_mask & ((1u << uint32_t(samples)) - 1u);
+  const uint32_t guest_samples = key.msaa == edram::kMsaa4x ? 4 : key.msaa == edram::kMsaa2x ? 2 : 1;
+  uint32_t mask = 0;
+  for (uint32_t s = 0; s < guest_samples; ++s) {
+    if (!(guest_mask & (1u << s))) continue;
+    const uint32_t h = host_sample(s);
+    mask |= 1u << h;
+    if (key.msaa == edram::kMsaa2x && samples == VK_SAMPLE_COUNT_4_BIT) mask |= 1u << (h + 1);
+  }
+  return mask;
 }
 
 struct Edram::Impl {
@@ -788,6 +807,8 @@ struct Edram::Impl {
       pack = *p;
     }
     const uint32_t b = (pack == kPack16x4Float || pack == kPack32x2Float) ? 3 : 2;
+    if (endian == 4 && b == 2)  // 8in64 has no 64-bit unit to reverse in a 32bpp pixel
+      warn_once("resolve endian 8in64 on a 32bpp destination is treated as 8in32");
     const uint32_t dest_pitch = (bits(regs.read(RB_COPY_DEST_PITCH), 0, 14) + 31u) & ~31u;
     if (dest_pitch == 0) return {};
 
@@ -809,9 +830,20 @@ struct Edram::Impl {
       return {};
     }
     uint64_t len = hi - lo;
-    const uint64_t room = std::min({mem.size - *guest, kPhysicalSpace - phys_lo, kMaxResolveBytes});
+    uint64_t room = std::min({mem.size - *guest, kPhysicalSpace - phys_lo, kMaxResolveBytes});
+    if (mem.allocation_end) {
+      // Never past the physical allocation holding the first byte: neighbouring allocations and unallocated
+      // (uncommitted) pages stay untouched.
+      const std::optional<uint32_t> end = mem.allocation_end(uint32_t(phys_lo));
+      if (!end || *end <= phys_lo) {
+        warn_once("resolve destination is not in a physical allocation; copy dropped");
+        return {};
+      }
+      room = std::min(room, uint64_t{*end} - phys_lo);
+    }
     if (len > room) {
-      warn_once("resolve destination runs past guest memory (or the per-resolve limit); the rest is dropped");
+      warn_once("resolve destination runs past its allocation or guest memory (or the per-resolve limit); the rest "
+                "is dropped");
       len = room & ~uint64_t{3};
     }
     if (len == 0) return {};
