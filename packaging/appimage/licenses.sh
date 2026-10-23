@@ -56,9 +56,10 @@ LegacyRecomp                       MIT                                       lau
 XenonRecomp/XenonAnalyse/XenonUtils MIT                                      tools; XenonUtils in the launchers
 Xenia (code in XenonUtils)         BSD-3-Clause                              launchers, tools (in XenonUtils), note 5
 Dear ImGui                         MIT                                       legacyrecomp-gui
-volk (v1.4.309)                    MIT                                       not linked yet (M3)
-VulkanMemoryAllocator (v3.2.1)     MIT                                       not linked yet (M3)
-Vulkan-Headers (1.4.309)           Apache-2.0                                not linked yet (M3)
+volk (v1.4.309)                    MIT                                       runtime/lib/liblr_vulkan.a, vkprobe
+VulkanMemoryAllocator (v3.2.1)     MIT                                       runtime/lib/liblr_vulkan.a
+Vulkan-Headers (1.4.309)           Apache-2.0                                runtime/include (headers)
+stb_image_write (v1.16, 013ac3be)  MIT (or public domain)                    runtime/lib/liblr_runtime_core.a
 SPIRV-Headers (1.4.363)            MIT (Khronos variant)                     runtime/include/spirv (headers)
 toml++                             MIT                                       launchers, XenonRecomp
 {fmt}                              MIT                                       launchers, tools
@@ -128,6 +129,10 @@ section "Dear ImGui (MIT)" "$repo/thirdparty/imgui/LICENSE.txt"
 section "volk (MIT)" "$repo/thirdparty/volk/LICENSE.md"
 section "Vulkan Memory Allocator (MIT)" "$repo/thirdparty/VulkanMemoryAllocator/LICENSE.txt"
 section "Vulkan-Headers (Apache-2.0)" "$repo/thirdparty/Vulkan-Headers/LICENSES/Apache-2.0.txt"
+printf '\n\nstb_image_write (MIT or public domain), nothings/stb commit 013ac3beddff3dbffafd5177e7972067cd2b5083\n'
+printf '===========================================================================================\n\n'
+printf -- '--- license text at the end of thirdparty/stb/stb_image_write.h ---\n\n'
+sed -n '/^This software is available under 2 licenses/,/^\*\/$/p' "$repo/thirdparty/stb/stb_image_write.h"
 section "SPIRV-Headers (MIT, Khronos variant; the CC-BY-4.0 part covers only its .md files, not shipped)" \
   "$repo/thirdparty/SPIRV-Headers/LICENSE"
 section "toml++ (MIT)" "$tp/tomlplusplus/LICENSE"

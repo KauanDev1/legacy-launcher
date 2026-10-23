@@ -26,8 +26,8 @@ Error no_driver(const std::string& detail) {
 
 Error missing(const std::string& what) {
   return Error{ErrorCode::ToolMissing, "Vulkan device lacks " + what,
-               "LegacyRecomp needs Vulkan 1.2 with swapchain, BC textures, descriptor indexing and buffer device "
-               "address; update the driver or pick another GPU"};
+               "LegacyRecomp needs Vulkan 1.2 with swapchain, BC textures, descriptor indexing, buffer device "
+               "address and 64 vertex output / fragment input components; update the driver or pick another GPU"};
 }
 
 VKAPI_ATTR VkBool32 VKAPI_CALL on_debug(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT,
@@ -63,6 +63,7 @@ std::string check_floor(VkPhysicalDevice pd) {
   VkPhysicalDeviceProperties props;
   vkGetPhysicalDeviceProperties(pd, &props);
   if (props.apiVersion < VK_API_VERSION_1_2) return "Vulkan 1.2";
+  if (std::string limit = check_device_limits(props.limits); !limit.empty()) return limit;
 
   VkPhysicalDeviceVulkan12Features f12{};
   f12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -99,6 +100,15 @@ int device_rank(VkPhysicalDevice d) {
 }
 
 }  // namespace
+
+std::string check_device_limits(const VkPhysicalDeviceLimits& limits) {
+  constexpr std::uint32_t kComponents = 64;
+  if (limits.maxVertexOutputComponents < kComponents)
+    return "maxVertexOutputComponents >= 64 (device has " + std::to_string(limits.maxVertexOutputComponents) + ")";
+  if (limits.maxFragmentInputComponents < kComponents)
+    return "maxFragmentInputComponents >= 64 (device has " + std::to_string(limits.maxFragmentInputComponents) + ")";
+  return {};
+}
 
 Result<Device> Device::create(const DeviceOptions& options) {
   if (volkInitialize() != VK_SUCCESS) return no_driver("libvulkan.so.1 could not be loaded");
@@ -297,6 +307,8 @@ Device& Device::operator=(Device&& o) noexcept {
 Device::~Device() { destroy(); }
 
 void Device::destroy() {
+  // Work still queued (a frame in flight when the process is told to stop) must finish first.
+  if (device_) vkDeviceWaitIdle(device_);
   if (allocator_) vmaDestroyAllocator(allocator_);
   if (device_) vkDestroyDevice(device_, nullptr);
   if (instance_) {

@@ -103,6 +103,27 @@ bool SystemDoctorProbe::cpu_supports_avx() {
 #endif
 }
 
+Result<std::string> SystemDoctorProbe::vulkan_device(const fs::path& resources) {
+  const fs::path probe = resources / "tools" / "legacyrecomp-vkprobe";
+  std::error_code ec;
+  if (resources.empty() || !fs::exists(probe, ec))
+    return Error{ErrorCode::ToolMissing, "Vulkan probe not found (" + probe.string() + ")",
+                 "reinstall LegacyRecomp (the probe is part of share/legacyrecomp/tools)"};
+  LR_TRY_ASSIGN(out, capture_output(probe, {}));
+  // "ok<TAB><name>" or "missing<TAB><message><TAB><hint>", then a newline (src/runtime/vkprobe.cpp).
+  if (!out.empty() && out.back() == '\n') out.pop_back();
+  std::vector<std::string> fields;
+  for (size_t start = 0;;) {
+    const size_t tab = out.find('\t', start);
+    fields.push_back(out.substr(start, tab == std::string::npos ? std::string::npos : tab - start));
+    if (tab == std::string::npos) break;
+    start = tab + 1;
+  }
+  if (fields.size() == 2 && fields[0] == "ok") return fields[1];
+  if (fields.size() == 3 && fields[0] == "missing") return Error{ErrorCode::ToolMissing, fields[1], fields[2]};
+  return Error{ErrorCode::ToolFailed, "unexpected output from " + probe.string() + ": " + out, ""};
+}
+
 Result<DoctorReport> run_doctor(DoctorProbe& probe, const fs::path& root, const fs::path& resources) {
   std::vector<std::string> notes;  // non-fatal findings, reported as warnings
   // Checked first: no toolchain install can fix it. InsufficientResources (a property of the machine, like RAM/disk).
@@ -135,6 +156,14 @@ Result<DoctorReport> run_doctor(DoctorProbe& probe, const fs::path& root, const 
 
   DoctorReport report;
   report.warnings = std::move(notes);
+  // Vulkan: reported, not required (an install can be built on a machine without a GPU and run elsewhere).
+  if (auto vk = probe.vulkan_device(resources)) {
+    report.vulkan_device = vk.value();
+  } else {
+    std::string w = "no usable Vulkan device: " + vk.error().message;
+    if (!vk.error().hint.empty()) w += " (" + vk.error().hint + ")";
+    report.warnings.push_back(w + "; the game will not start until this is fixed");
+  }
   uint64_t ram = probe.total_ram();
   if (ram < 8 * kGiB)
     report.warnings.push_back("only " + std::to_string(ram / (1024 * 1024)) +

@@ -57,6 +57,7 @@ struct HealthyProbe : DoctorProbe {
   uint64_t total_ram() override { return 16ull << 30; }
   bool pkg_config_exists(std::string_view) override { return false; }
   bool cpu_supports_avx() override { return true; }
+  Result<std::string> vulkan_device(const fs::path&) override { return std::string("Fake GPU"); }
 };
 
 }  // namespace

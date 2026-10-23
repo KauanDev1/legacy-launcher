@@ -10,10 +10,18 @@
 #                                     template_compiles_with_staged_headers (tests/CMakeLists.txt) checks it
 #   runtime/include/simde/            SIMD Everywhere headers (ppc_context.h includes <x86/avx.h>)
 #   runtime/include/spirv/            SPIRV-Headers' spirv.hpp and GLSL.std.450.h (unified1/) and its LICENSE
+#   runtime/include/runtime/gpu/vk/   the Vulkan backend's headers (main.cpp includes vk_backend.h, which has no
+#                                     Vulkan types; device.h / presenter.h need the next two entries)
+#   runtime/include/volk.h            volk (and volk-LICENSE.md)
+#   runtime/include/vulkan/, vk_video/ the Vulkan-Headers C headers volk.h includes (vk_platform.h, vulkan_core.h
+#                                     and the vk_video codec headers), with LICENSE-Apache-2.0.txt
 #   runtime/lib/                      liblr_runtime_core.a (sanitizer-free staged variant, see src/runtime),
-#                                     libXenonUtils.a. Not libdisasm.a: XenonUtils' PowerPC disassembler is
-#                                     GPL-2.0-or-later (binutils) and the game uses none of it (ADR 0002).
-# and the GUI launcher's fonts (assets/fonts: Inter, JetBrains Mono and their OFL licence texts) under fonts/.
+#                                     liblr_vulkan.a (staged lr_vulkan: Device, Presenter, VkBackend, volk, VMA and the
+#                                     built-in shaders; ruling R-stage), libXenonUtils.a. Not libdisasm.a: XenonUtils'
+#                                     PowerPC disassembler is GPL-2.0-or-later (binutils) and the game uses none of it
+#                                     (ADR 0002).
+# the doctor's Vulkan probe as tools/legacyrecomp-vkprobe (src/runtime/vkprobe.cpp), and the GUI launcher's fonts
+# (assets/fonts: Inter, JetBrains Mono and their OFL licence texts) under fonts/.
 # ppc_context.h itself is not staged under runtime/: XenonRecomp copies it into work/generated.
 set(LR_RESOURCES_DIR "${CMAKE_BINARY_DIR}/share/legacyrecomp" CACHE INTERNAL "Staged resources dir (build tree)")
 set(_lr_src_root "${CMAKE_SOURCE_DIR}")
@@ -52,6 +60,7 @@ set(_lr_runtime_dir "${LR_RESOURCES_DIR}/runtime")
 file(GLOB _lr_runtime_headers CONFIGURE_DEPENDS RELATIVE "${_lr_src_root}/src"
   "${_lr_src_root}/src/runtime/*.h" "${_lr_src_root}/src/runtime/kernel/*.h" "${_lr_src_root}/src/runtime/memory/*.h"
   "${_lr_src_root}/src/runtime/gpu/*.h" "${_lr_src_root}/src/runtime/gpu/shader/*.h"
+  "${_lr_src_root}/src/runtime/gpu/vk/*.h"
   "${_lr_src_root}/src/common/*.h"
   "${_lr_src_root}/src/formats/xex2.h")
 set(_lr_runtime_files "")
@@ -64,6 +73,17 @@ set(_lr_spirv "thirdparty/SPIRV-Headers")
 list(APPEND _lr_runtime_files "${_lr_spirv}/include/spirv/unified1/spirv.hpp=include/spirv/unified1/spirv.hpp"
   "${_lr_spirv}/include/spirv/unified1/GLSL.std.450.h=include/spirv/unified1/GLSL.std.450.h"
   "${_lr_spirv}/LICENSE=include/spirv/LICENSE")
+# volk and the Vulkan C headers it includes: runtime/gpu/vk/device.h includes volk.h.
+list(APPEND _lr_runtime_files "thirdparty/volk/volk.h=include/volk.h" "thirdparty/volk/LICENSE.md=include/volk-LICENSE.md")
+set(_lr_vkh "thirdparty/Vulkan-Headers")
+list(APPEND _lr_runtime_files "${_lr_vkh}/include/vulkan/vk_platform.h=include/vulkan/vk_platform.h"
+  "${_lr_vkh}/include/vulkan/vulkan_core.h=include/vulkan/vulkan_core.h"
+  "${_lr_vkh}/LICENSES/Apache-2.0.txt=include/vulkan/LICENSE-Apache-2.0.txt")
+file(GLOB _lr_vk_video CONFIGURE_DEPENDS RELATIVE "${_lr_src_root}/${_lr_vkh}/include"
+  "${_lr_src_root}/${_lr_vkh}/include/vk_video/*.h")
+foreach(_h IN LISTS _lr_vk_video)
+  list(APPEND _lr_runtime_files "${_lr_vkh}/include/${_h}=include/${_h}")
+endforeach()
 foreach(_pair IN LISTS _lr_runtime_files)
   string(REPLACE "=" ";" _pair "${_pair}")
   list(GET _pair 0 _from)
@@ -109,7 +129,7 @@ add_custom_command(OUTPUT "${_lr_simde_stamp}"
 list(APPEND _lr_staged "${_lr_simde_stamp}")
 
 add_custom_target(lr_resources ALL
-  DEPENDS ${_lr_staged} XenonAnalyse XenonRecomp lr_runtime_core_staged XenonUtils
+  DEPENDS ${_lr_staged} XenonAnalyse XenonRecomp lr_runtime_core_staged lr_vulkan_staged legacyrecomp-vkprobe XenonUtils
   COMMAND ${CMAKE_COMMAND} -E make_directory "${_lr_runtime_dir}/lib"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:XenonUtils>" "${_lr_runtime_dir}/lib/libXenonUtils.a"
   # Older builds staged libdisasm.a; remove it so `cmake --install` never ships it.
@@ -117,7 +137,9 @@ add_custom_target(lr_resources ALL
   COMMAND ${CMAKE_COMMAND} -E make_directory "${LR_RESOURCES_DIR}/tools"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:XenonAnalyse>" "${LR_RESOURCES_DIR}/tools/XenonAnalyse"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:XenonRecomp>" "${LR_RESOURCES_DIR}/tools/XenonRecomp"
-  COMMENT "Staging XenonAnalyse, XenonRecomp and the runtime libraries")
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:legacyrecomp-vkprobe>"
+          "${LR_RESOURCES_DIR}/tools/legacyrecomp-vkprobe"
+  COMMENT "Staging XenonAnalyse, XenonRecomp, the Vulkan probe and the runtime libraries")
 
 # Commit of the XenonRecomp submodule: part of the analyse/recompile fingerprints.
 execute_process(COMMAND git -C "${_lr_src_root}/thirdparty/XenonRecomp" rev-parse HEAD

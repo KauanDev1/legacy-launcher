@@ -361,7 +361,11 @@ constexpr uint32_t kWptrMmio = 0x7FC80000 + 4 * 0x1C5;  // CP_RB_WPTR in the MMI
 constexpr uint32_t kFrames = 3;
 // Offsets inside the data block D (physical memory): write-back, interrupt counters, fence, VdSwap arguments.
 constexpr uint32_t kWriteBack = 0x00, kVblanks = 0x10, kCpInterrupts = 0x14, kSwapFence = 0x20, kFetch = 0x40,
-                   kFrontPtr = 0x60, kWidth = 0x64, kHeight = 0x68, kFrontBuffer = 0x1000;
+                   kFrontPtr = 0x60, kWidth = 0x64, kHeight = 0x68;
+// The front buffer: its own physical block, kWidth x kHeight linear 32-bit pixels, every one kFrontColor (big-endian
+// A8R8G8B8: R 0x20, G 0x40, B 0xC0). A solid colour, so the Vulkan backend's linear copy (Task 17; the tiled
+// layout comes with Task 19) shows exactly this colour.
+constexpr uint32_t kFbWidth = 1280, kFbHeight = 720, kFrontColor = 0xFF2040C0;
 // Synthetic Xenos microcode (host-order dwords, written to the ring big-endian by PPC_STORE_U32): exec_end of one
 // ALU slot, `max` exporting c0 to the position (VS) or r0 to colour 0 (PS). The same words the test builder
 // (tests/support/xenos_shader_builder.h) assembles; test_gpu_shader_cache.cpp checks they still match.
@@ -380,7 +384,8 @@ PPC_FUNC(sub_82000480) {
   ctx.r3.u64 = 0;
 }
 
-// Entry point: VdInitializeEngines (must be 1); a 32 KiB ring and a data block from MmAllocatePhysicalMemoryEx and
+// Entry point: VdInitializeEngines (must be 1); a 32 KiB ring, a data block and the front buffer (filled with
+// kFrontColor) from MmAllocatePhysicalMemoryEx and
 // their physical addresses (MmGetPhysicalAddress); VdSetGraphicsInterruptCallback(sub_82000480, D + kVblanks),
 // VdInitializeRingBuffer(ring, 12), VdEnableRingBufferRPtrWriteBack(D, 6). Then kFrames frames, each with (frame 0
 // only) an INTERRUPT packet, two shader loads and a draw, then the 64 dwords VdSwap fills (10 arguments, the last
@@ -388,8 +393,9 @@ PPC_FUNC(sub_82000480) {
 // counter at D + kSwapFence). It waits (KeDelayExecutionThread 1 ms, at most 5000 times) until the write-back RPTR
 // equals WPTR, kFrames vblanks and one CP interrupt arrived, and checks the fence holds kFrames: exit 0. Any
 // failure calls FakeMissing from 0x82000420 (exit 3).
-PPC_FUNC(sub_82000400) {
-  using namespace gpu_boot;
+namespace gpu_boot {
+// The body of sub_82000400 (frames = kFrames) and sub_820004E0 (frames = 0: forever, until the process is ended).
+static void run(PPCContext& ctx, uint8_t* base, uint32_t frames) {
   ctx.r1.u64 -= kFrame;
   const uint32_t l = uint32_t(ctx.r1.u64) + 0x60;  // locals: delay interval (be int64)
   bool failed = false;
@@ -426,6 +432,8 @@ PPC_FUNC(sub_82000400) {
 
   const auto [ring, ring_phys] = alloc_phys(kRingDwords * 4, 0x82000408);
   const auto [d, d_phys] = alloc_phys(0x10000, 0x82000410);
+  const auto [fb, fb_phys] = alloc_phys(kFbWidth * kFbHeight * 4, 0x82000430);
+  for (uint32_t i = 0; i < kFbWidth * kFbHeight; ++i) PPC_STORE_U32(fb + i * 4, kFrontColor);
 
   ctx.r3.u64 = 0x82000480;
   ctx.r4.u64 = d + kVblanks;
@@ -440,16 +448,26 @@ PPC_FUNC(sub_82000400) {
   ctx.lr = 0x82000424;
   __imp__VdEnableRingBufferRPtrWriteBack(ctx, base);
 
-  PPC_STORE_U32(d + kFetch + 4, d + kFrontBuffer);  // fetch constant base address = the front buffer (no warning)
-  PPC_STORE_U32(d + kFrontPtr, d + kFrontBuffer);
-  PPC_STORE_U32(d + kWidth, 1280);
-  PPC_STORE_U32(d + kHeight, 720);
+  PPC_STORE_U32(d + kFetch + 4, fb);  // fetch constant base address = the front buffer (no warning)
+  PPC_STORE_U32(d + kFrontPtr, fb);
+  PPC_STORE_U32(d + kWidth, kFbWidth);
+  PPC_STORE_U32(d + kHeight, kFbHeight);
   uint32_t wptr = 0;
   const auto put = [&](uint32_t v) {
     PPC_STORE_U32(ring + wptr * 4, v);
     wptr = (wptr + 1) % kRingDwords;
   };
-  for (uint32_t frame = 0; frame < kFrames; ++frame) {
+  PPC_STORE_U64(l, uint64_t(-10000));  // 1 ms, relative
+  const auto delay = [&](uint32_t lr) {
+    ctx.r3.u64 = 1;  // UserMode
+    ctx.r4.u64 = 0;  // not alertable
+    ctx.r5.u64 = l;
+    ctx.lr = lr;
+    __imp__KeDelayExecutionThread(ctx, base);
+  };
+  for (uint32_t frame = 0; frames == 0 || frame < frames; ++frame) {
+    // Endless mode: the ring holds one frame at a time, so wait until the GPU consumed the previous one.
+    while (frames == 0 && PPC_LOAD_U32(d + kWriteBack) != wptr) delay(0x82000434);
     if (frame == 0) {
       put((3u << 30) | (0u << 16) | (0x54u << 8));  // INTERRUPT, 1 payload dword
       put(1);                                       // CPU mask
@@ -490,19 +508,20 @@ PPC_FUNC(sub_82000400) {
   put(0);
   PPC_STORE_U32(kWptrMmio, wptr);
 
-  PPC_STORE_U64(l, uint64_t(-10000));  // 1 ms, relative
   for (int i = 0; i < 5000; ++i) {
     if (PPC_LOAD_U32(d + kWriteBack) == wptr && PPC_LOAD_U32(d + kVblanks) >= kFrames &&
         PPC_LOAD_U32(d + kCpInterrupts) >= 1)
       break;
-    ctx.r3.u64 = 1;  // UserMode
-    ctx.r4.u64 = 0;  // not alertable
-    ctx.r5.u64 = l;
-    ctx.lr = 0x8200042C;
-    __imp__KeDelayExecutionThread(ctx, base);
+    delay(0x8200042C);
   }
   if (PPC_LOAD_U32(d + kWriteBack) != wptr || PPC_LOAD_U32(d + kVblanks) < kFrames ||
       PPC_LOAD_U32(d + kCpInterrupts) < 1 || PPC_LOAD_U32(d + kSwapFence) != kFrames)
     fail();
   ctx.r1.u64 += kFrame;
 }
+}  // namespace gpu_boot
+
+PPC_FUNC(sub_82000400) { gpu_boot::run(ctx, base, gpu_boot::kFrames); }
+
+// The same GPU boot, swapping the solid front buffer forever (the SIGTERM test ends it).
+PPC_FUNC(sub_820004E0) { gpu_boot::run(ctx, base, 0); }

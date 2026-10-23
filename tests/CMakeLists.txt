@@ -2,6 +2,8 @@
 include(Catch)
 add_executable(lr_tests test_result.cpp test_sha256.cpp test_paths.cpp test_xdvdfs.cpp test_stfs.cpp test_xex2.cpp test_integration_formats.cpp test_runner.cpp test_game_config.cpp test_process.cpp test_doctor.cpp test_toolchain.cpp test_extract_verify.cpp test_recomp_config.cpp test_integration_pipeline.cpp test_switch_scan.cpp test_function_discovery.cpp test_runtime_core.cpp test_loader.cpp test_kernel_registry.cpp test_kernel_abi.cpp test_kernel_glue.cpp test_kernel_memory.cpp test_kernel_variables.cpp test_kernel_objects.cpp test_kernel_sync.cpp test_kernel_threads.cpp test_kernel_time.cpp test_kernel_critsec.cpp test_kernel_debug.cpp test_kernel_vfs.cpp test_kernel_files.cpp test_kernel_lzx.cpp test_kernel_rtl.cpp test_kernel_xex_config.cpp test_kernel_xam.cpp test_kernel_audio_ui.cpp test_sha1.cpp test_import_stubs.cpp test_guest_thread.cpp test_page_heap.cpp test_physical_heap.cpp test_fake_game.cpp test_build_stage.cpp test_integration_e2e.cpp test_integration_m3.cpp test_cli_args.cpp test_progress_bar.cpp test_queue_sink.cpp test_gui_model.cpp test_game_exit.cpp test_gpu_vk_device.cpp test_gpu_registers.cpp test_gpu_pm4.cpp test_gpu_memory.cpp test_gpu_system.cpp test_gpu_shader_cache.cpp test_gpu_shader_decode.cpp test_gpu_shader_builder.cpp test_gpu_shader_translate.cpp test_gpu_shader_cf.cpp test_gpu_shader_alu_vector.cpp test_gpu_shader_alu_scalar.cpp test_gpu_shader_vfetch.cpp test_gpu_shader_tfetch.cpp test_gpu_vk_blit.cpp support/vk_shader_harness.cpp)
 target_include_directories(lr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/support)
+# stb_image (test-only PNG decoder, thirdparty/stb): system include, its warnings are not ours.
+target_include_directories(lr_tests SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/thirdparty/stb)
 # lr_runtime_core is linked --whole-archive, as the game template does (see lr_fake_game below).
 target_link_libraries(lr_tests PRIVATE lr_common lr_formats lr_pipeline lr_cli lr_gui_core lr_vulkan "$<LINK_LIBRARY:WHOLE_ARCHIVE,lr_runtime_core>" XenonUtils tomlplusplus::tomlplusplus Catch2::Catch2WithMain)
 lr_configure_target(lr_tests)
@@ -27,7 +29,9 @@ if(TARGET SDL2::SDL2)
   target_include_directories(lr_fake_game PRIVATE ${LR_FAKE_DIR})
   # --whole-archive like the game template, so LR_KERNEL registrations inside lr_runtime_core are linked exactly as
   # in the real game (an object nothing references is otherwise dropped with its registration).
-  target_link_libraries(lr_fake_game PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,lr_runtime_core>" XenonUtils SDL2::SDL2)
+  # lr_vulkan: the Vulkan backend main.cpp selects by default (--gpu vulkan), as the template links liblr_vulkan.a.
+  target_link_libraries(lr_fake_game PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,lr_runtime_core>" lr_vulkan XenonUtils
+    SDL2::SDL2)
   # The same forced include as the game template, so the fake game exercises the real PPC_CALL_INDIRECT_FUNC.
   target_compile_options(lr_fake_game PRIVATE -include runtime/indirect_call.h)
   lr_configure_target(lr_fake_game)
@@ -36,7 +40,11 @@ if(TARGET SDL2::SDL2)
 
   # --- template guard: the STAGED main.cpp and rendered thunks compile with the staged headers only ---
   # lr_fake_game above compiles src/runtime/main.cpp with lr_runtime_core's include dirs (src/), so it cannot see
-  # a header resources.cmake forgot to stage; this test uses the game template's include path instead.
+  # a header resources.cmake forgot to stage; this test uses the game template's include path instead. It also
+  # compiles each staged runtime/gpu/vk/*.h on its own and links the fake game from the staged runtime libraries
+  # (liblr_runtime_core.a, liblr_vulkan.a, libXenonUtils.a), as the template links the real one.
+  file(GLOB _lr_vk_headers RELATIVE "${CMAKE_SOURCE_DIR}/src" CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/runtime/gpu/vk/*.h")
+  list(JOIN _lr_vk_headers "|" _lr_vk_headers)
   set(_lr_x86 0)
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     set(_lr_x86 1)
@@ -48,13 +56,17 @@ if(TARGET SDL2::SDL2)
             "-DRUNTIME_INCLUDE=${LR_RESOURCES_DIR}/runtime/include"
             "-DEXTRA_INCLUDES=$<JOIN:$<TARGET_PROPERTY:SDL2::SDL2,INTERFACE_INCLUDE_DIRECTORIES>,|>"
             "-DMARCH=${_lr_x86}"
+            "-DHEADERS=${_lr_vk_headers}"
+            "-DLINK_SOURCES=${LR_RESOURCES_DIR}/runtime/src/main.cpp|${LR_FAKE_STUBS}|${LR_FAKE_DIR}/fake_recomp.cpp|${LR_FAKE_DIR}/fake_kernel.cpp|${LR_FAKE_DIR}/ppc_func_mapping.cpp"
+            "-DRUNTIME_LIB=${LR_RESOURCES_DIR}/runtime/lib" "-DSDL2_LIB=$<TARGET_LINKER_FILE:SDL2::SDL2>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/template_guard"
             -P ${CMAKE_CURRENT_SOURCE_DIR}/support/check_template_compiles.cmake)
   set_tests_properties(template_compiles_with_staged_headers PROPERTIES LABELS unit)
 endif()
 
 # --- GPL tripwire: the binutils disassembler (GPL-2.0-or-later) must stay out of our binaries (ADR 0002) ---
 set(_lr_tripwire_bins "$<TARGET_FILE:legacyrecomp>")
-foreach(_t legacyrecomp-gui lr_fake_game)
+foreach(_t legacyrecomp-gui lr_fake_game legacyrecomp-vkprobe)
   if(TARGET ${_t})
     string(APPEND _lr_tripwire_bins "|$<TARGET_FILE:${_t}>")
   endif()
@@ -81,3 +93,10 @@ if(LR_BASH)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/support/check_appimage_glslang.cmake)
   set_tests_properties(appimage_build_refuses_without_glslangvalidator PROPERTIES LABELS unit)
 endif()
+
+# --- cmake/LrSpvEmbed.cmake survives an empty shader list (Task 16 review) ---
+add_test(NAME spv_embed_empty_list
+  COMMAND ${CMAKE_COMMAND} "-DCMAKE=${CMAKE_COMMAND}" "-DCXX=${CMAKE_CXX_COMPILER}"
+          "-DSCRIPT=${CMAKE_SOURCE_DIR}/cmake/LrSpvEmbed.cmake" "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/spv_embed_empty"
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/support/check_spv_embed_empty.cmake)
+set_tests_properties(spv_embed_empty_list PROPERTIES LABELS unit)

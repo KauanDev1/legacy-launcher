@@ -43,7 +43,9 @@ O `legacyrecomp-game` é um executável compilado na máquina do usuário na eta
 
 - o C++ gerado pelo XenonRecomp (`work/generated/`);
 - os thunks das importações (um por nome `__imp__*`, gerado a partir de `ppc_recomp_shared.h`; ver "Kernel");
-- as bibliotecas pré-compiladas do runtime (`lr_runtime_core` e XenonUtils), numa variante sem sanitizers;
+- as bibliotecas pré-compiladas do runtime (`lr_runtime_core`, `lr_vulkan` e XenonUtils), numa variante sem
+  sanitizers (`share/legacyrecomp/runtime/lib/`: `liblr_runtime_core.a`, `liblr_vulkan.a` com o volk, o VMA e os
+  shaders internos já dentro, e `libXenonUtils.a`; regra R-stage);
 - o `main.cpp` do runtime, copiado como **fonte** e compilado junto do código gerado.
 
 O `main.cpp` não pode ser uma biblioteca pré-compilada porque usa `PPC_IMAGE_BASE`, `PPC_CODE_SIZE`,
@@ -53,9 +55,12 @@ runtime nunca toca `PPCContext`: as threads do convidado (inclusive a principal,
 recompilado pela cola `GuestGlue` que o `main.cpp` instala (ver "Kernel").
 
 Linha de comando do jogo:
-`legacyrecomp-game --image <xex> [--data <dir>] [--headless] [--coverage] [--strict-memory]`. `--coverage` imprime
-a tabela de importações (ver `docs/kernel-coverage.md`); `--headless` não inicia SDL; `--strict-memory` liga o modo
-estrito de memória (`KernelConfig.strict_memory`, ver abaixo).
+`legacyrecomp-game --image <xex> [--data <dir>] [--headless] [--gpu vulkan|null] [--coverage] [--strict-memory]
+[--screenshot-after <n> <png>] ...` (a lista completa está no começo do `src/runtime/main.cpp`). `--coverage`
+imprime a tabela de importações (ver `docs/kernel-coverage.md`); `--headless` não inicia SDL; `--gpu` escolhe o
+backend (ver "Renderizador Vulkan"); `--strict-memory` liga o modo estrito de memória (`KernelConfig.strict_memory`,
+ver abaixo). Contagens (`--exit-after-swaps`, `--screenshot-after`) aceitam só dígitos decimais: sinal, espaços,
+`0x` ou 0 são erro de uso (saída 2).
 
 ## Mapa de memória do convidado
 
@@ -636,6 +641,57 @@ profundidade, `kill`, tamanho de ponto descartado). Microcódigo que o tradutor 
 `instruction <n> (<tipo>): <o quê> is not supported`, com `<n>` o índice do CF ou o endereço do slot da ALU/fetch;
 um erro do próprio tradutor também vira `Result`, nunca `abort`. Com um backend que liga shaders, o erro é
 `guest_fatal` (saída 5); com o `NullBackend` só é informado (ver acima). `kTranslatorVersion` sobe sempre que o SPIR-V gerado muda para a mesma entrada.
+
+## Renderizador Vulkan (M3, Tarefa 17)
+
+`runtime/gpu/vk/` (namespace `lr::gpu::vk`): `Device` (instância, dispositivo, fila gráfica, VMA), `Presenter` e
+`VkBackend`, a implementação Vulkan de `gpu::Backend`. O `main.cpp` escolhe o backend com `--gpu`:
+
+- `vulkan` (padrão): com janela, uma janela SDL com `SDL_WINDOW_VULKAN` e swapchain; com `--headless`, o mesmo
+  backend sem superfície (o quadro fica numa imagem fora da tela). Sem um dispositivo Vulkan utilizável o jogo para
+  antes de rodar o convidado, com saída 2, `error: <peça que falta>` (por exemplo `no Vulkan driver: ...` ou
+  `Vulkan device lacks textureCompressionBC`) e a dica de instalação. `LR_VULKAN_VALIDATION=1` liga a camada de
+  validação da Khronos (quando instalada); as mensagens dela vão para o stderr como `[vulkan] ...`.
+- `null`: o `NullBackend`, que não desenha nada e não precisa de Vulkan. Os testes unitários do jogo falso usam esse
+  backend, menos os que testam o Vulkan.
+
+O piso do dispositivo (`Device::create`) é o das restrições globais mais `maxVertexOutputComponents` e
+`maxFragmentInputComponents` ≥ 64 (16 interpoladores de 4 componentes, o mínimo garantido pelo Vulkan), conferidos
+por `check_device_limits`, uma função pura sobre `VkPhysicalDeviceLimits`. Antes de destruir qualquer coisa, o
+`Device` espera o dispositivo ficar ocioso (`vkDeviceWaitIdle`).
+
+**Swap.** Por enquanto o `VkBackend` só apresenta: `draw`, `resolve` e `load_shader` não fazem nada (EDRAM,
+texturas e desenho chegam nas Tarefas 18 a 21), e `binds_shaders()` continua falso até a Tarefa 20. Em cada
+`swap(phys, w, h)` (o pacote `LR_SWAP` que o `VdSwap` escreve), ele lê o front buffer direto da memória do convidado
+como uma superfície **linear** de `w × h` pixels de 32 bits A8R8G8B8 big-endian (o X8R8G8B8 do D3D; alfa vira 255),
+converte para RGBA8 na CPU, envia para uma imagem `R8G8B8A8_UNORM` e a entrega ao `Presenter`. O front buffer real é
+em tiles (tiling 2D do Xenos, formato no fetch constant que o `VdSwap` grava): o destile e o formato vêm com o
+caminho de texturas (Tarefa 19), que substitui essa cópia. Tamanho 0 ou acima de 8192, ou um endereço físico fora da
+memória do convidado, pula o quadro com um aviso no stderr (uma vez).
+
+**Presenter** (`presenter.h`): `present(frame, w, h)` copia o quadro para uma imagem própria (o último quadro) e, com
+janela, faz um blit dele para a imagem adquirida da swapchain (escala mantendo a proporção, com barras pretas; modo
+FIFO) e a apresenta. Cada chamada espera a própria submissão, então nada fica em voo entre quadros. Uma swapchain
+desatualizada (janela redimensionada) é recriada no quadro seguinte; janela minimizada pula a parte da janela; a
+aquisição tem limite de 1 s, para uma janela escondida não prender a thread da GPU. `capture_png(path)` lê o último
+quadro de volta e grava um PNG RGBA (`runtime/gpu/screenshot.h`, stb_image_write).
+
+**`--screenshot-after <n> <png>`** (só com `--gpu vulkan`): depois de apresentar o swap `n`, grava o quadro, escreve
+`[gpu] screenshot after n swaps: <png>` no stderr e sai com 0 pela thread da GPU, como o `--exit-after-swaps`
+(saída 2 se o arquivo não puder ser gravado).
+
+**Saída ordenada.** SIGTERM, SIGINT e SIGHUP ficam bloqueados em todas as threads (o `main.cpp` os bloqueia antes do
+`init_kernel`, que cria as primeiras) e uma thread vigia os recebe com `sigwait`. Ela escreve `[game] signal N:
+exiting`, para a thread da GPU (`GpuSystem::stop`: o quadro em andamento termina), chama `VkBackend::shutdown`
+(dispositivo ocioso, todos os objetos Vulkan destruídos, depois o `Device`) e sai com 0 por `exit_now`. Fechar a
+janela e o fim normal da thread principal do convidado passam pelo mesmo caminho. Os outros caminhos de saída
+(`--exit-after-swaps`, `--screenshot-after`, saídas 3 a 6) continuam saindo direto com `_exit`, sem destruir nada.
+Os handlers de sinal do próprio SDL ficam desligados (`SDL_HINT_NO_SIGNAL_HANDLERS`).
+
+**Sonda do `doctor`.** `tools/legacyrecomp-vkprobe` (`src/runtime/vkprobe.cpp`) cria o mesmo `Device` sem janela e
+imprime `ok<TAB><nome>` ou `missing<TAB><mensagem><TAB><dica>`. O `doctor` a roda num processo à parte (um driver que
+trava não derruba o launcher) e informa o dispositivo; sem um, avisa nomeando a peça que falta, mas não falha: a
+instalação funciona sem GPU, só o jogo se recusa a iniciar.
 
 ## Contrato dos shaders traduzidos (plano B)
 

@@ -230,3 +230,29 @@ Formato: o quê, por quê, custo se estiver errada.
   Tarefas 15.4 a 15.9, a tradução falha (com o backend Vulkan, saída 5 nomeando o shader) e uma tarefa nova a
   implementa. Os modificadores do PS já dividem um microcódigo em três chaves; se isso crescer dentro do jogo, o custo
   é tempo de tradução no primeiro uso, visível em `new_last_100_swaps`.
+
+### M10. Apresentação Vulkan (Tarefa 17): cópia linear do front buffer, `--gpu`, sonda à parte e saída ordenada
+- O quê:
+  - O `swap()` do `VkBackend` lê o front buffer como superfície **linear** de A8R8G8B8 big-endian, não como a
+    superfície em tiles que o console usa (o plano diz "cópia destilada"). O destile e o formato do fetch constant
+    dependem do caminho de texturas da Tarefa 19, que substitui essa cópia. O jogo falso pinta o front buffer de uma
+    cor só, então o teste `clear-color frame is captured` independe do layout.
+  - `--gpu vulkan|null` no jogo, com `vulkan` como padrão, também com `--headless` (o spec manda a GPU funcionar sem
+    interface). `null` mantém o `NullBackend` para os testes do jogo falso que não testam o Vulkan, e para quem quer
+    rodar sem GPU. `--screenshot-after` exige `vulkan`.
+  - O `doctor` roda `tools/legacyrecomp-vkprobe`, um executável pequeno, em vez do `legacyrecomp-game --probe-vulkan`:
+    o jogo ainda não existe quando o `doctor` roda pela primeira vez. A sonda roda num processo à parte (um driver
+    que trava não derruba o launcher, e as alocações do driver não aparecem para o LeakSanitizer do build `dev`). A
+    falta de Vulkan é **aviso**, não erro: a instalação funciona numa máquina sem GPU (o contêiner sem lavapipe, por
+    exemplo), e o jogo é que se recusa a iniciar com saída 2.
+  - SIGTERM, SIGINT e SIGHUP passam a sair com 0 de forma ordenada (thread vigia com `sigwait`; para a GPU, destrói o
+    Vulkan, sai). Antes, o sinal matava o processo com o código do sinal. Ctrl+C no terminal também sai com 0.
+  - Os cabeçalhos copiados para `runtime/include` incluem `volk.h` e os cabeçalhos C do Vulkan-Headers que ele usa,
+    para que os `runtime/gpu/vk/*.h` copiados compilem sozinhos. O `main.cpp` só inclui `vk_backend.h`, que não tem
+    tipos do Vulkan. O teste `template_compiles_with_staged_headers` também compila cada um desses cabeçalhos e liga
+    o jogo falso com as três bibliotecas copiadas (`liblr_runtime_core.a`, `liblr_vulkan.a`, `libXenonUtils.a`).
+- Por quê: cada ponto fecha um item da tarefa sem esperar as Tarefas 18 a 21 e sem mudar códigos de saída.
+- Custo se errado: a cópia linear mostra lixo listrado no jogo real até a Tarefa 19; isso é esperado e não deve ser
+  lido como erro de apresentação. Quem depender do código do sinal na saída (nada no projeto depende) passa a ver 0.
+  O modo com janela (swapchain) não roda no contêiner, que não tem servidor gráfico. Ele só foi compilado, e a
+  conferência fica para o ponto de controle com WSLg.

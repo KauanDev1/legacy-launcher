@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Game entry point. NOT part of a prebuilt library: the game template compiles this file together with the
 // generated ppc_config.h / ppc_recomp_*.cpp / ppc_func_mapping.cpp and the generated import thunks, and links
-// lr_runtime_core with --whole-archive so its LR_KERNEL / LR_KERNEL_STUB registrations are kept.
+// lr_runtime_core with --whole-archive so its LR_KERNEL / LR_KERNEL_STUB registrations are kept, then lr_vulkan
+// (the Vulkan backend, runtime/gpu/vk/vk_backend.h).
 //
-// Usage: <game> --image <xex> [--data <dir>] [--user <dir>] [--headless] [--coverage] [--strict-memory] [--trace-imports]
-//        [--trace-file <path>] [--trace-gpu] [--gpu-trace-file <path>] [--exit-after-swaps <n>]
-//        [--shader-cache-dir <dir>] [--dump-shaders]
+// Usage: <game> --image <xex> [--data <dir>] [--user <dir>] [--headless] [--gpu vulkan|null] [--coverage]
+//        [--strict-memory] [--trace-imports] [--trace-file <path>] [--trace-gpu] [--gpu-trace-file <path>]
+//        [--exit-after-swaps <n>] [--screenshot-after <n> <png>] [--shader-cache-dir <dir>] [--dump-shaders]
 // --trace-imports logs every import call (runtime/kernel/trace.h) to --trace-file, or stderr without one; the
 // launcher always passes --trace-file, which alone does nothing. --trace-gpu logs the GPU's PM4 packets, draws,
 // swaps and per-second counters (runtime/gpu/gpu_system.h) to --gpu-trace-file, or stderr without one (capped at
@@ -13,24 +14,38 @@
 // by swaps, window runs at 60 Hz of wall time. LR_DEADLOCK_SECONDS (default 10, 0 = off) sets the
 // deadlock detector threshold (runtime/kernel/deadlock.h). --exit-after-swaps <n> (n > 0) ends the run with exit code
 // 0 once the GPU has processed n swaps (KernelConfig::exit_after_swaps; the M3 integration test).
+// --gpu picks the backend: vulkan (default; runtime/gpu/vk/vk_backend.h: an SDL window with SDL_WINDOW_VULKAN, or
+// offscreen with --headless) or null (gpu/null_backend.h: renders nothing, needs no Vulkan; the unit tests use it).
+// Without a usable Vulkan device the vulkan backend fails at start with exit 2 and a message naming the missing
+// piece. LR_VULKAN_VALIDATION=1 enables VK_LAYER_KHRONOS_validation (when installed); its messages go to stderr.
+// --screenshot-after <n> <png> (vulkan only) writes the frame of swap n to <png> (runtime/gpu/screenshot.h), prints
+// "[gpu] screenshot after n swaps: <png>" and exits 0 (2 when the file cannot be written). Counts (--exit-after-swaps,
+// --screenshot-after) are plain decimal digits: a sign, spaces or 0 are usage errors (exit 2).
 // --shader-cache-dir <dir> keeps the translated shaders on disk (runtime/gpu/shader/disk_cache.h; the launcher passes
 // <root>/work/shaders/runtime); without it they stay in memory. --dump-shaders (needs --shader-cache-dir) also writes
 // the microcode disassembly next to each cache file (<name>.txt). Once the guest started the GPU, every exit path but
 // the fault handler prints "[gpu] shaders: keys=N vs=N ps=N translated=N disk=N failed=N new_last_100_swaps=N" on
 // stderr (lr::gpu::format_shader_summary, through lr::kernel::set_exit_report_hook).
-// Exit codes: 0 ok (also: window closed by the user), 2 usage/load error, 3 unimplemented import, 4 fault,
-// 5 guest fatal (lr::kernel::guest_fatal), 6 deadlock.
+// SIGTERM, SIGINT and SIGHUP (and closing the window) end the run in order with exit code 0: the GPU thread stops
+// (any frame in flight finishes), the Vulkan backend waits for the device to be idle and destroys everything, then
+// the process exits. The signals are blocked in every thread and taken by one watcher thread (sigwait).
+// Exit codes: 0 ok (also: window closed by the user, SIGTERM/SIGINT/SIGHUP), 2 usage/load error (also: no usable
+// Vulkan device), 3 unimplemented import, 4 fault, 5 guest fatal (lr::kernel::guest_fatal), 6 deadlock.
 
 #include <SDL.h>
+#include <pthread.h>
 #include <unistd.h>
 
 #include <atomic>
+#include <cstdint>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
@@ -41,6 +56,7 @@
 #include "runtime/fault.h"
 #include "runtime/func_table.h"
 #include "runtime/gpu/gpu_system.h"
+#include "runtime/gpu/vk/vk_backend.h"
 #include "runtime/guest_memory.h"
 #include "runtime/guest_thread.h"
 #include "runtime/kernel/glue.h"
@@ -74,15 +90,33 @@ struct Options {
   uint64_t exit_after_swaps = 0;  // 0: run until the game ends
   std::string shader_cache_dir;    // empty: translated shaders in memory only
   bool dump_shaders = false;
+  bool null_gpu = false;           // --gpu null: NullBackend instead of the Vulkan backend
+  uint64_t screenshot_after = 0;   // 0: no screenshot
+  std::string screenshot_path;
 };
 
 int usage(const char* msg) {
   if (msg) std::fprintf(stderr, "error: %s\n", msg);
   std::fprintf(stderr,
-               "usage: game --image <xex> [--data <dir>] [--user <dir>] [--headless] [--coverage] [--strict-memory] "
-               "[--trace-imports] [--trace-file <path>] [--trace-gpu] [--gpu-trace-file <path>] "
-               "[--exit-after-swaps <n>] [--shader-cache-dir <dir>] [--dump-shaders]\n");
+               "usage: game --image <xex> [--data <dir>] [--user <dir>] [--headless] [--gpu vulkan|null] [--coverage] "
+               "[--strict-memory] [--trace-imports] [--trace-file <path>] [--trace-gpu] [--gpu-trace-file <path>] "
+               "[--exit-after-swaps <n>] [--screenshot-after <n> <png>] [--shader-cache-dir <dir>] "
+               "[--dump-shaders]\n");
   return kExitUsage;
+}
+
+// A positive count written as plain decimal digits only: no sign, no spaces, no 0x, no overflow, not 0.
+std::optional<uint64_t> parse_count(const char* v) {
+  if (v == nullptr || *v == 0) return std::nullopt;
+  uint64_t n = 0;
+  for (const char* p = v; *p != 0; ++p) {
+    if (*p < '0' || *p > '9') return std::nullopt;
+    const uint64_t digit = static_cast<uint64_t>(*p - '0');
+    if (n > (UINT64_MAX - digit) / 10) return std::nullopt;
+    n = n * 10 + digit;
+  }
+  if (n == 0) return std::nullopt;
+  return n;
 }
 
 std::vector<char> read_file(const std::string& path, bool& ok) {
@@ -100,6 +134,56 @@ bool is_xex2(const std::vector<char>& b) { return b.size() >= 4 && std::memcmp(b
 [[noreturn]] void exit_now(int rc) {
   lr::kernel::flush_at_exit();  // the shader summary, stdio, the traces
   _exit(rc);
+}
+
+// The Vulkan backend, owned by the GpuSystem; shutdown_and_exit tears it down after the GPU thread stopped.
+lr::gpu::vk::VkBackend* g_vk_backend = nullptr;
+bool g_kernel_ready = false;  // init_kernel succeeded (set on the main thread before any watcher can run)
+
+// Orderly end (a signal, the window closed, the main guest thread returned): stops the GPU thread (a frame in
+// flight finishes), waits for the Vulkan device to be idle and destroys every Vulkan object, then exit_now. Never
+// called on the GPU thread (it joins it). A second caller, while the first is tearing down, just waits for the exit.
+[[noreturn]] void shutdown_and_exit(int rc) {
+  static std::atomic<bool> started{false};
+  if (started.exchange(true)) {
+    for (;;) pause();
+  }
+  if (g_kernel_ready) lr::kernel::kernel().gpu().stop();
+  if (g_vk_backend != nullptr) g_vk_backend->shutdown();
+  exit_now(rc);
+}
+
+// SIGTERM, SIGINT and SIGHUP: blocked in every thread (block_exit_signals runs before the first thread starts) and
+// taken by one watcher thread, which ends the run in order with exit code 0.
+sigset_t exit_signals() {
+  sigset_t set;
+  sigemptyset(&set);
+  sigaddset(&set, SIGTERM);
+  sigaddset(&set, SIGINT);
+  sigaddset(&set, SIGHUP);
+  return set;
+}
+
+void block_exit_signals() {
+  const sigset_t set = exit_signals();
+  pthread_sigmask(SIG_BLOCK, &set, nullptr);
+}
+
+void start_signal_watcher() {
+  std::thread([] {
+    const sigset_t set = exit_signals();
+    int sig = 0;
+    while (sigwait(&set, &sig) != 0) {
+    }
+    std::fprintf(stderr, "[game] signal %d: exiting\n", sig);
+    shutdown_and_exit(kExitOk);
+  }).detach();
+}
+
+// LR_VULKAN_VALIDATION=1: the Khronos validation layer (when installed).
+bool vulkan_validation() {
+  const char* v = std::getenv("LR_VULKAN_VALIDATION");
+  return v != nullptr && std::strcmp(v, "1") == 0;
 }
 
 // The exit report (lr::kernel::set_exit_report_hook): the shader summary, once the guest started the GPU.
@@ -216,18 +300,26 @@ bool glue_has_function(uint32_t fn) {
   return target != nullptr;
 }
 
-// Runs the main guest thread (waited for on a helper thread) and keeps the SDL window alive on the main thread.
-int run_with_window(uint32_t entry, uint32_t stack_size) {
+// The game window (SDL_WINDOW_VULKAN for the Vulkan backend), or nullptr after printing why. SDL's own signal
+// handlers stay off: the exit signals belong to the watcher thread.
+SDL_Window* create_window(bool vulkan) {
+  SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
   if (SDL_Init(SDL_INIT_VIDEO) != 0) {
     std::fprintf(stderr, "error: SDL_Init failed: %s (use --headless to run without a window)\n", SDL_GetError());
-    return kExitUsage;
+    return nullptr;
   }
-  SDL_Window* win = SDL_CreateWindow("LegacyRecomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, 0);
+  const Uint32 flags = SDL_WINDOW_RESIZABLE | (vulkan ? SDL_WINDOW_VULKAN : 0);
+  SDL_Window* win = SDL_CreateWindow("LegacyRecomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, flags);
   if (!win) {
     std::fprintf(stderr, "error: SDL_CreateWindow failed: %s (use --headless to run without a window)\n", SDL_GetError());
     SDL_Quit();
-    return kExitUsage;
+    return nullptr;
   }
+  return win;
+}
+
+// Runs the main guest thread (waited for on a helper thread) and keeps the SDL window alive on the main thread.
+int run_with_window(uint32_t entry, uint32_t stack_size) {
   std::atomic<bool> done{false};
   std::atomic<int> rc{0};
   std::thread runner([&] {
@@ -242,12 +334,10 @@ int run_with_window(uint32_t entry, uint32_t stack_size) {
   }
   if (closed && !done) {
     // The user closed the window while the guest is still running: report success and take the guest down with us.
-    exit_now(kExitOk);
+    shutdown_and_exit(kExitOk);
   }
   runner.join();
-  SDL_DestroyWindow(win);
-  SDL_Quit();
-  return rc;
+  return rc;  // main ends the process (shutdown_and_exit); the window goes with it
 }
 
 }  // namespace
@@ -264,11 +354,21 @@ int main(int argc, char** argv) {
     else if (a == "--dump-shaders") opt.dump_shaders = true;
     else if (a == "--exit-after-swaps") {
       if (i + 1 >= argc) return usage("missing value for --exit-after-swaps");
-      const char* v = argv[++i];
-      char* end = nullptr;
-      const unsigned long long n = std::strtoull(v, &end, 10);
-      if (v[0] == '-' || end == v || *end != 0 || n == 0) return usage("--exit-after-swaps needs a positive integer");
-      opt.exit_after_swaps = n;
+      const std::optional<uint64_t> n = parse_count(argv[++i]);
+      if (!n) return usage("--exit-after-swaps needs a positive integer (decimal digits only)");
+      opt.exit_after_swaps = *n;
+    } else if (a == "--screenshot-after") {
+      if (i + 2 >= argc) return usage("--screenshot-after needs a swap count and a PNG path");
+      const std::optional<uint64_t> n = parse_count(argv[++i]);
+      if (!n) return usage("--screenshot-after needs a positive integer (decimal digits only)");
+      opt.screenshot_after = *n;
+      opt.screenshot_path = argv[++i];
+      if (opt.screenshot_path.empty()) return usage("--screenshot-after needs a PNG path");
+    } else if (a == "--gpu") {
+      if (i + 1 >= argc) return usage("missing value for --gpu");
+      const std::string v = argv[++i];
+      if (v != "vulkan" && v != "null") return usage("--gpu must be vulkan or null");
+      opt.null_gpu = v == "null";
     } else if (a == "--image" || a == "--data" || a == "--user" || a == "--trace-file" || a == "--gpu-trace-file" ||
                a == "--shader-cache-dir") {
       if (i + 1 >= argc) return usage(("missing value for " + a).c_str());
@@ -285,6 +385,7 @@ int main(int argc, char** argv) {
   if (opt.coverage) return print_coverage(opt.image);
   if (opt.image.empty()) return usage("--image is required");
   if (opt.dump_shaders && opt.shader_cache_dir.empty()) return usage("--dump-shaders needs --shader-cache-dir");
+  if (opt.screenshot_after != 0 && opt.null_gpu) return usage("--screenshot-after needs the Vulkan backend (not --gpu null)");
 
   bool read_ok = false;
   const std::vector<char> bytes = read_file(opt.image, read_ok);
@@ -318,14 +419,52 @@ int main(int argc, char** argv) {
   cfg.vblank_paced_by_swap = opt.headless;  // spec section 11: a slow headless renderer must not starve waits
   cfg.exit_after_swaps = opt.exit_after_swaps;
   cfg.deadlock_seconds = deadlock_seconds();
+  // Before the first thread (the kernel's start in init_kernel): every thread inherits the blocked exit signals.
+  block_exit_signals();
   if (auto r = lr::kernel::init_kernel(mem.value(), std::move(cfg)); !r) {
     std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
     return kExitUsage;
   }
+  g_kernel_ready = true;
   // Before the guest runs (the GPU thread starts at VdInitializeRingBuffer).
   if (!opt.shader_cache_dir.empty()) lr::kernel::kernel().gpu().set_shader_cache_dir(opt.shader_cache_dir);
   lr::kernel::kernel().gpu().set_dump_shaders(opt.dump_shaders);
   lr::kernel::set_exit_report_hook(&print_shader_summary);
+
+  // The window (SDL_WINDOW_VULKAN with the Vulkan backend) and the GPU backend, before the guest runs.
+  SDL_Window* window = nullptr;
+  if (!opt.headless) {
+    window = create_window(!opt.null_gpu);
+    if (window == nullptr) exit_now(kExitUsage);
+  }
+  if (!opt.null_gpu) {
+    lr::gpu::vk::VkBackendOptions vk;
+    vk.mem = lr::kernel::kernel().gpu_memory_access();
+    vk.sdl_window = window;
+    vk.validation = vulkan_validation();
+    vk.screenshot_after = opt.screenshot_after;
+    vk.screenshot_path = opt.screenshot_path;
+    vk.on_screenshot = [path = opt.screenshot_path](uint64_t swap, const lr::Result<void>& written) {
+      // On the GPU thread: exit right here, like --exit-after-swaps (no teardown needed, nothing is destroyed).
+      if (!written) {
+        std::fprintf(stderr, "error: %s\n", written.error().message.c_str());
+        exit_now(kExitUsage);
+      }
+      std::fprintf(stderr, "[gpu] screenshot after %llu swaps: %s\n", static_cast<unsigned long long>(swap),
+                   path.c_str());
+      exit_now(kExitOk);
+    };
+    auto backend = lr::gpu::vk::VkBackend::create(std::move(vk));
+    if (!backend) {
+      std::fprintf(stderr, "error: %s\n", backend.error().message.c_str());
+      if (!backend.error().hint.empty()) std::fprintf(stderr, "hint: %s\n", backend.error().hint.c_str());
+      std::fprintf(stderr, "(--gpu null runs without rendering)\n");
+      exit_now(kExitUsage);
+    }
+    g_vk_backend = backend.value().get();
+    lr::kernel::kernel().gpu().set_backend(std::move(backend.value()));
+  }
+  start_signal_watcher();
 
   const auto image_bytes = std::as_bytes(std::span(bytes));
   auto img = load_image(mem.value(), image_bytes);
@@ -381,7 +520,7 @@ int main(int argc, char** argv) {
 
   const uint32_t entry = img.value().entry, stack_size = img.value().stack_size;
   const int rc = opt.headless ? lr::kernel::run_main_thread(entry, stack_size) : run_with_window(entry, stack_size);
-  // The main guest thread has returned (or the window failed): end the process now, taking any other guest threads
-  // down with it, without running static destructors under their feet.
-  exit_now(rc);
+  // The main guest thread has returned: end the process now (GPU stopped, Vulkan torn down), taking any other guest
+  // threads down with it, without running static destructors under their feet.
+  shutdown_and_exit(rc);
 }

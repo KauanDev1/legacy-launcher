@@ -21,6 +21,7 @@ class DoctorStage : public Stage {
   Result<void> execute(StageContext& ctx) override {
     LR_TRY_ASSIGN(report, run_doctor(probe_, ctx.paths.root, ctx.resources));
     for (auto& w : report.warnings) ctx.sink.on_log("warning: " + w);
+    if (!report.vulkan_device.empty()) ctx.sink.on_log("Vulkan device: " + report.vulkan_device);
     return {};
   }
 

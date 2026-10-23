@@ -93,15 +93,15 @@ The launcher's interface is only in Portuguese for now. Drop the ISO onto the wi
 
 ### Build from source
 
-You need Clang 18 or newer, CMake 3.25 or newer, Ninja, SDL2 and pkg-config.
+You need Clang 18 or newer, CMake 3.25 or newer, Ninja, SDL2, pkg-config and glslang (`glslangValidator`, which compiles the renderer's own GLSL shaders at build time). To run the game you need a Vulkan 1.2 driver; `legacyrecomp doctor` reports the device it finds.
 
 ```sh
 # Arch, Manjaro
 sudo pacman -S --needed clang cmake ninja sdl2 pkgconf glslang git
 # Debian, Ubuntu
-sudo apt install clang cmake ninja-build libsdl2-dev pkg-config git
+sudo apt install clang cmake ninja-build libsdl2-dev pkg-config glslang-tools git
 # Fedora
-sudo dnf install clang cmake ninja-build SDL2-devel pkgconf git
+sudo dnf install clang cmake ninja-build SDL2-devel pkgconf glslang git
 ```
 
 ```sh

@@ -8,7 +8,7 @@ fica em `work/state.toml`. Tudo roda na máquina do usuário e nada do jogo sai 
 
 | # | Etapa | O que faz | Saídas (relativas à pasta de dados) |
 |---|---|---|---|
-| 1 | `doctor` | Confere ferramentas (clang++ ≥ 18, cmake ≥ 3.25, ninja, `pkg-config sdl2`; no AppImage, os arquivos do toolchain embutido), CPU com AVX, 8 GiB livres e RAM | nenhuma |
+| 1 | `doctor` | Confere ferramentas (clang++ ≥ 18, cmake ≥ 3.25, ninja, `pkg-config sdl2`; no AppImage, os arquivos do toolchain embutido), CPU com AVX, 8 GiB livres e RAM; informa o dispositivo Vulkan (`tools/legacyrecomp-vkprobe`, num processo à parte), e a falta dele é só um aviso que nomeia a peça ausente | nenhuma |
 | 2 | `extract` | Lê a ISO (XDVDFS), acha o pacote STFS do jogo e o do TU1 e extrai `default.xex`, `default.xexp` e os dados do jogo | `work/input/package.xex`, `work/input/tu.xexp`, `game/.extracted` |
 | 3 | `verify` | Compara o SHA-256 dos arquivos extraídos com `config/minecraft-tu1/game.toml` | nenhuma |
 | 4 | `patch` | Aplica o `.xexp` ao XEX (XenonUtils `XexPatcher`), gerando um XEX2 sem criptografia e sem compressão | `work/image/default_tu1.xex` |

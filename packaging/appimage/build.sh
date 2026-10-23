@@ -299,7 +299,7 @@ cp "$repo/LICENSE" "$doc/LICENSE"
 log "checking the binaries"
 gpl_disasm_marker="attempt to set y bit when using + or - modifier"  # thirdparty/.../disasm/ppc-dis.c
 for f in "$appdir/usr/bin/legacyrecomp" "$appdir/usr/bin/legacyrecomp-gui" "$res/tools/XenonAnalyse" \
-  "$res/tools/XenonRecomp" "$ninja"; do
+  "$res/tools/XenonRecomp" "$res/tools/legacyrecomp-vkprobe" "$ninja"; do
   [ -x "$f" ] || die "missing $f"
   newest=$(readelf -V --wide "$f" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -n 1)
   if [ -n "$newest" ] && [ "$(printf '%s\n%s\n' "$newest" "$glibc_target" | sort -V | tail -n 1)" != "$glibc_target" ]
@@ -314,7 +314,7 @@ for f in "$appdir/usr/bin/legacyrecomp" "$appdir/usr/bin/legacyrecomp-gui" "$res
   # .symtab in these binaries, so besides the decode_insn_ppc symbol (checked when a symbol table exists) we look
   # for one of ppc-dis.c's message strings, which must be present in the tools (else the marker is stale).
   case $f in
-    */usr/bin/legacyrecomp | */usr/bin/legacyrecomp-gui)
+    */usr/bin/legacyrecomp | */usr/bin/legacyrecomp-gui | */tools/legacyrecomp-vkprobe)
       syms=$(LC_ALL=C readelf -sW "$f")  # no pipe into grep -q: with pipefail, readelf's SIGPIPE would mask a hit
       ! grep -qw decode_insn_ppc <<< "$syms" ||
         die "${f#"$appdir"/} contains decode_insn_ppc: the GPL-2.0-or-later binutils disassembler got linked in"

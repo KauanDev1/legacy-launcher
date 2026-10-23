@@ -126,3 +126,22 @@ TEST_CASE("missing ICD gives a clear error", "[unit][vulkan]") {
   }
   std::filesystem::remove(empty);
 }
+
+// Carried Task 13 item: plan B passes up to 16 four-component interpolators between the stages, so the device needs
+// the Vulkan guaranteed minimum of 64 vertex output and fragment input components. A pure function over the limits:
+// no Vulkan device needed.
+TEST_CASE("device without 64 vertex output components is refused", "[unit]") {
+  VkPhysicalDeviceLimits limits{};
+  limits.maxVertexOutputComponents = 64;
+  limits.maxFragmentInputComponents = 64;
+  CHECK(lr::gpu::vk::check_device_limits(limits).empty());
+  limits.maxVertexOutputComponents = 128;
+  limits.maxFragmentInputComponents = 128;
+  CHECK(lr::gpu::vk::check_device_limits(limits).empty());
+
+  limits.maxVertexOutputComponents = 63;
+  CHECK(lr::gpu::vk::check_device_limits(limits) == "maxVertexOutputComponents >= 64 (device has 63)");
+  limits.maxVertexOutputComponents = 64;
+  limits.maxFragmentInputComponents = 32;
+  CHECK(lr::gpu::vk::check_device_limits(limits) == "maxFragmentInputComponents >= 64 (device has 32)");
+}

@@ -265,6 +265,8 @@ int run_doctor_cmd(const fs::path& root) {
   auto report = lr::pipeline::run_doctor(probe, root, resources ? resources.value() : fs::path{});
   if (!report) return report_error(report.error());
   for (const auto& w : report.value().warnings) std::printf("warning: %s\n", w.c_str());
+  if (!report.value().vulkan_device.empty())
+    std::printf("doctor: Vulkan device: %s\n", report.value().vulkan_device.c_str());
   std::printf("doctor: all checks passed (data root: %s)\n", root.c_str());
   return 0;
 }

@@ -5,3 +5,5 @@ tools/dev/Dockerfile text eol=lf
 *.py text eol=lf
 # LegacyRecomp patches to XenonRecomp: exact bytes (LF, as `git format-patch` wrote them), never converted.
 thirdparty/patches/** -text
+# stb single headers (pinned upstream bytes, ADR 0002): never converted.
+thirdparty/stb/** -text

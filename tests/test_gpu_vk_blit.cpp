@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "gpu_shaders.h"
+#include "lr_gpu_shaders.h"
 #include "support/spirv_tools.h"
 #include "support/vk_shader_harness.h"
 #include "vk_mem_alloc.h"
@@ -192,11 +192,22 @@ TEST_CASE("blit shader copies a texture to an offscreen image", "[unit][vulkan]"
   sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
   sub.colorAttachmentCount = 1;
   sub.pColorAttachments = &ref;
+  // The copy after the render pass reads what the subpass wrote: an explicit external dependency (colour attachment
+  // writes, then the final layout transition, before transfer reads) keeps synchronization validation clean.
+  VkSubpassDependency after{};
+  after.srcSubpass = 0;
+  after.dstSubpass = VK_SUBPASS_EXTERNAL;
+  after.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  after.dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+  after.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  after.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
   VkRenderPassCreateInfo rpci = make<VkRenderPassCreateInfo>(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
   rpci.attachmentCount = 1;
   rpci.pAttachments = &att;
   rpci.subpassCount = 1;
   rpci.pSubpasses = &sub;
+  rpci.dependencyCount = 1;
+  rpci.pDependencies = &after;
   VkRenderPass render_pass = VK_NULL_HANDLE;
   BLIT_VK(vkCreateRenderPass(d, &rpci, nullptr, &render_pass));
   cleanup.add([d, render_pass] { vkDestroyRenderPass(d, render_pass, nullptr); });

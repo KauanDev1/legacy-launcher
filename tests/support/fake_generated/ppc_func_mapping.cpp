@@ -45,5 +45,6 @@ PPCFuncMapping PPCFuncMappings[] = {
 	{ 0x820004D0, __imp__VdEnableRingBufferRPtrWriteBack },
 	{ 0x820004D4, __imp__VdSwap },
 	{ 0x820004D8, __imp__KeDelayExecutionThread },
+	{ 0x820004E0, sub_820004E0 },
 	{ 0, nullptr }
 };

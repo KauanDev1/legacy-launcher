@@ -70,9 +70,13 @@ target_compile_options(legacyrecomp-game PRIVATE
 # statics run and the import thunks in import_stubs.cpp find them by name,
 # even when nothing else references its object file. libdisasm.a (GPL-2.0-or-later binutils disassembler) is
 # deliberately not linked: the game never references it (ADR 0002, tripwire test no_gpl_disassembler_in_binaries).
+# liblr_vulkan.a (the Vulkan backend with volk, VMA and the built-in shaders; ruling R-stage) is a plain archive:
+# main.cpp references VkBackend, and its lr_common needs are in liblr_runtime_core.a. volk loads the system
+# libvulkan.so.1 at run time (dlopen, hence CMAKE_DL_LIBS); no Vulkan library is linked.
 target_link_libraries(legacyrecomp-game PRIVATE
   "-Wl,--whole-archive" "${_rt}/lib/liblr_runtime_core.a" "-Wl,--no-whole-archive"
+  "${_rt}/lib/liblr_vulkan.a"
   "${_rt}/lib/libXenonUtils.a"
-  SDL2::SDL2 Threads::Threads)
+  SDL2::SDL2 Threads::Threads ${CMAKE_DL_LIBS})
 set_target_properties(legacyrecomp-game PROPERTIES LINK_DEPENDS
-  "${_rt}/lib/liblr_runtime_core.a;${_rt}/lib/libXenonUtils.a")
+  "${_rt}/lib/liblr_runtime_core.a;${_rt}/lib/liblr_vulkan.a;${_rt}/lib/libXenonUtils.a")

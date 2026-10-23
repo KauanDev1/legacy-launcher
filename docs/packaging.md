@@ -65,7 +65,9 @@ O que o `build.sh` faz:
    Também roda o tripwire de GPL (ADR 0002): `legacyrecomp` e `legacyrecomp-gui` não podem ter o símbolo
    `decode_insn_ppc` nem uma mensagem do `ppc-dis.c` do binutils (o zig não deixa `.symtab`, então a busca
    pela mensagem é a que vale; ela precisa aparecer no `XenonAnalyse` e no `XenonRecomp`, senão o marcador
-   ficou velho), e a `libdisasm.a` não pode estar em `runtime/lib/`.
+   ficou velho), e a `libdisasm.a` não pode estar em `runtime/lib/`. O `tools/legacyrecomp-vkprobe` (a sonda
+   Vulkan do `doctor`) passa pelas mesmas conferências: o `libvulkan.so.1` é carregado pelo volk em tempo de
+   execução (`dlopen`), nunca ligado.
 5. Escreve `THIRD-PARTY-LICENSES` (`packaging/appimage/licenses.sh`) em `usr/share/doc/legacyrecomp/` e na
    raiz do AppDir, mais `AppRun`, `.desktop` e ícone, e chama o `appimagetool` com o runtime fixado.
 6. Gera o arquivo-fonte: `git archive` do `HEAD` mais `git submodule foreach --recursive git archive`,
@@ -93,9 +95,10 @@ O que o `build.sh` faz:
 O binário oficial do Ninja não serve: ele depende da `libstdc++.so.6` do sistema. Compilado com o zig, ele só
 depende da glibc.
 
-### Compilador de shaders: nenhum
+### Compilador de shaders: nenhum para os shaders do jogo
 
-O AppImage não leva compilador de shaders e o `doctor` não exige um. O DXC saiu do projeto com o plano B (ADR 0005, M8):
+O AppImage não leva compilador de shaders e o `doctor` não exige um: não há compilador para os shaders do jogo, só o
+`glslangValidator`, que compila o nosso GLSL na compilação do launcher (fora do AppImage). O DXC saiu do projeto com o plano B (ADR 0005, M8):
 o runtime traduz o microcódigo do jogo para SPIR-V com código próprio, e os shaders internos do renderizador são
 compilados pelo `glslangValidator` do sistema na compilação do launcher (o `build.sh` confere a ferramenta antes de qualquer
 download, e sem ela recusa com `sudo pacman -S --needed glslang`; grava o caminho e o `glslangValidator --version`
@@ -133,7 +136,7 @@ cache deixa de bater); depois de uma instalação completa ela fica em cache e i
 ## Por que tudo é compilado com o zig
 
 O jogo é compilado pelo zig na máquina do usuário, com a libc++ do zig. As bibliotecas do runtime que ele
-liga (`liblr_runtime_core.a`, `libXenonUtils.a`) precisam usar a mesma biblioteca C++, então também são
+liga (`liblr_runtime_core.a`, `liblr_vulkan.a`, `libXenonUtils.a`) precisam usar a mesma biblioteca C++, então também são
 compiladas com o zig. O mais simples foi compilar o projeto inteiro assim, o que traz uma vantagem: os
 launchers ligam a libc++ estaticamente e miram a glibc 2.31, em vez de depender da `libstdc++` e da glibc da
 máquina que gerou o AppImage.

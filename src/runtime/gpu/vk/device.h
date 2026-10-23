@@ -15,6 +15,11 @@ using VmaAllocator = VmaAllocator_T*;
 
 namespace lr::gpu::vk {
 
+// The device limits the emulated GPU needs, a pure function over the reported limits: empty when they are met,
+// otherwise the first one that is not ("maxVertexOutputComponents >= 64 (device has 32)"). Plan B passes up to 16
+// interpolators of 4 components between the stages, the Vulkan guaranteed minimum of 64 (carried Task 13 item).
+std::string check_device_limits(const VkPhysicalDeviceLimits& limits);
+
 struct DeviceOptions {
   bool validation = false;     // enable VK_LAYER_KHRONOS_validation when installed (warns and continues if not)
   bool headless = true;        // no surface; VK_KHR_swapchain is still required of the device (same floor everywhere)
@@ -23,8 +28,10 @@ struct DeviceOptions {
 
 class Device {
  public:
-  // Fails with ErrorCode::ToolMissing when there is no Vulkan driver or the device lacks a required feature.
+  // Fails with ErrorCode::ToolMissing when there is no Vulkan driver or the device lacks a required feature or
+  // limit (check_device_limits).
   static Result<Device> create(const DeviceOptions& options);
+  // Destruction waits for the device to be idle (vkDeviceWaitIdle) before destroying anything.
 
   Device(Device&& other) noexcept;
   Device& operator=(Device&& other) noexcept;

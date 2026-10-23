@@ -47,15 +47,20 @@ Para clonar, use `tools/dev/init-submodules.sh` em vez de `git submodule update 
 os submódulos e, só dentro do `thirdparty/XenonRecomp`, os aninhados que usamos. O `container.sh` sincroniza o que
 está inicializado na árvore de trabalho.
 
-Não há compilador de shaders no projeto: o XenosRecomp, o DXC e a `lr_zstd` saíram no plano B (ADR 0005, M8), e o
-runtime traduz o microcódigo para SPIR-V ele mesmo (Tarefas 15.2 em diante). Os shaders do renderizador (blit,
+Não há compilador para os shaders do jogo: o XenosRecomp, o DXC e a `lr_zstd` saíram no plano B (ADR 0005, M8), e o
+runtime traduz o microcódigo para SPIR-V ele mesmo (Tarefas 15.2 em diante). O único compilador de shaders é o
+`glslangValidator`, e só para o nosso GLSL, na compilação do launcher. Os shaders do renderizador (blit,
 limpeza, untile, resolve) são GLSL em `src/runtime/gpu/vk/shaders/`, compilado pelo `glslangValidator` do sistema
 (`-V --target-env vulkan1.2`) na compilação do launcher (`cmake/LrGpuShaders.cmake`, função
-`lr_compile_gpu_shaders`) e embutido na `liblr_vulkan.a` como vetores `uint32_t` (`gpu_shaders.h`/`.cpp`, gerados
+`lr_compile_gpu_shaders`) e embutido na `liblr_vulkan.a` como vetores `uint32_t` (`lr_gpu_shaders.h`/`.cpp`, gerados
 na árvore de build e nunca versionados; `kBuiltinShaders` lista todos). O `cmake` falha com a dica de instalação
 (`sudo pacman -S --needed glslang`) se a ferramenta faltar. `untile.comp` e `resolve_copy.comp` são placeholders
 mínimos (cópia linear com troca de endian, cópia de palavras); as Tarefas 18 e 19 trazem a lógica de EDRAM e de
 tiling. O histórico do git guarda o fork do XenosRecomp (commits `0523eda`..`3b15c74`).
+
+Vulkan nos testes: os testes `[vulkan]` rodam no lavapipe do contêiner e fazem `SKIP` sem driver. O jogo liga a camada
+de validação com `LR_VULKAN_VALIDATION=1`; os testes do jogo falso com Vulkan usam isso e falham com qualquer
+mensagem `[vulkan]` na saída. Os outros testes do jogo falso rodam com `--gpu null`, sem Vulkan.
 
 O jogo guarda os shaders traduzidos em `--shader-cache-dir <pasta>` (o `legacyrecomp run` passa
 `<raiz>/work/shaders/runtime`; sem a flag, ficam só na memória). Os `.spv` do cache **não** são módulos SPIR-V puros:
