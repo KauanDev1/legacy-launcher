@@ -631,7 +631,7 @@ registradores; PS: a constante 256 + i. Toda leitura por ponteiro físico leva o
 | 720 | `uint` | índice máximo de vértice (`VGT_MAX_VTX_INDX`) |
 | 724..735 | | reservado (zero) |
 
-**Tabela de vertex fetch** (lida pelo VS a partir da Tarefa 15.8): 96 entradas de 16 bytes, uma por vertex fetch
+**Tabela de vertex fetch** (lida pelo `vfetch`, em qualquer estágio): 96 entradas de 16 bytes, uma por vertex fetch
 constant (`const_index * 3 + select`): offset 0 `uint64` endereço de dispositivo do buffer (lido como `uvec2`),
 offset 8 `uint32` tamanho em bytes, offset 12 `uint32` modo de troca de bytes (endian) do Xenos. Não há entradas de
 vértice do Vulkan (`VkPipelineVertexInputState` vazio).
@@ -706,7 +706,7 @@ instrução seguinte, como a nota de hardware do `ucode.h` do Xenia); o epílogo
 bloco de saída. Estado local:
 - o predicado `p0` começa falso e persiste entre cláusulas; `cond_exec_pred*`, `cond_jmp`/`cond_call` predicados, a
   saída predicada do `loop_end` e as instruções predicadas comparam `p0` com a condição. Uma instrução da ALU
-  predicada é pulada com um desvio; um fetch predicado será avaliado sempre e mesclado com `OpSelect` (Tarefa 15.8);
+  predicada é pulada com um desvio; um fetch predicado é avaliado sempre e mesclado com `OpSelect`;
 - `cond_exec` e `cond_exec_pred_clean` testam o booleano `b` (bit `b % 32` da palavra `b / 32`);
 - pilhas de profundidade 4 (vetores deslocados, nunca indexados): contagem do laço, `aL` e endereço de retorno. Um
   empilhamento além de 4 descarta a entrada mais externa. `loop_start` com contagem 0 salta para o alvo; senão
@@ -768,6 +768,27 @@ devolve ±0 com o sinal, +inf para +inf e NaN para um negativo. `MOVAs` e `MOVA_
 diferente); as demais comparações são ordenadas. Resultados vetorial e escalar no mesmo registrador se combinam pela
 máscara de escrita (o vetorial é gravado primeiro).
 
+**Vertex fetch** (`translator_fetch.cpp`): o `vfetch` lê os vértices dentro do shader, pela tabela de vertex fetch;
+formato, passo e offset vêm da instrução (entram no hash do microcódigo), endereço, tamanho e endian da entrada da
+tabela. Índice: o componente do registrador de origem, `floor(x + 0,5)` com `is_index_rounded`, senão `floor(x)`
+(sem índice quando o passo é 0); antes da conversão para inteiro ele é limitado a ±(2^30 + 2^23) / passo (NaN vai
+para o limite de baixo), então `índice × passo + offset` nunca transborda 32 bits. O dword inicial é
+`índice × passo + offset`, com o offset **com sinal** e em dwords; o elemento cobre os dwords seguintes do formato.
+Se algum deles fica antes do início do slot ou passa de `size_bytes`, nada é lido e os quatro componentes valem 0
+(limite inferior e superior; o convidado nunca faz o shader ler fora do buffer enviado). Cada dword passa pela troca
+do modo endian do slot (0 nenhuma, 1 `8in16`, 2 `8in32`, 3 `16in32`, bits 0..1 do dword 1 da fetch constant) e é
+decodificado com os campos a partir do bit 0 na ordem x, y, z, w: `8_8_8_8` 8:8:8:8, `2_10_10_10` 10:10:10:2,
+`10_11_11` 11:11:10, `11_11_10` 10:11:11, `16_16` e `16_16_16_16` 16:16 por dword, `32*` inteiros, `*_FLOAT`
+floats de 32 bits ou pares de meia precisão (x na metade baixa). Inteiros com sinal ou sem sinal conforme
+`is_signed`; normalizados (`num_format` 0): sem sinal `v / (2^n - 1)`, com sinal e `signed_rf_mode` 0
+`v / (2^(n-1) - 1)` limitado a -1, com `signed_rf_mode` 1 `(v + 0,5) / (2^(n-1) - 0,5)`; `num_format` 1 mantém o
+inteiro (como float). Formatos float ignoram `is_signed` e `num_format`. `exp_adjust` multiplica os componentes do
+formato por 2^exp_adjust. Componentes que o formato não tem valem (0, 0, 0, 1). O swizzle de destino escolhe x..w, 0,
+1 ou "manter" por componente (o seletor 6 vale 0). Um mini fetch reaproveita `índice × passo` do último fetch completo
+executado (uma variável local; o decodificador já lhe deu o registrador, o slot e o passo desse fetch) com o próprio
+offset e formato. Um `vfetch` predicado é avaliado sempre e mesclado com `OpSelect` (o registrador e a base do mini
+fetch). Formato desconhecido: erro `vertex format <n> is not supported`.
+
 **Limites conhecidos do M3** (falham alto, salvo onde indicado): exportação de memória; o tamanho de ponto exportado
 é descartado (informado em `ShaderInfo`); fetches com LOD implícito dentro de um caso do `switch` de pc alcançado por
 um `cond_jmp` que depende de predicado podem perder as derivadas; o z do `param_gen` vale 0 para linhas, onde o Xenia
@@ -778,9 +799,10 @@ lanes (qualquer lane / todos os lanes), e aqui, como no Xenia, cada invocação 
 `kill` num vertex shader só produz o resultado, sem descartar nada (silencioso); o módulo não habilita
 `SignedZeroInfNanPreserve` (float controls), então no restante da aritmética o driver pode não preservar zeros com
 sinal, infinitos e NaN; só os casos de borda da unidade escalar acima, decididos por selects, não dependem disso
-(silencioso). Até a Tarefa 15.7 o tradutor aceita
-todo o controle de fluxo e toda a ALU (vetorial e escalar); o fetch é um erro `is not supported` até as Tarefas 15.8
-e 15.9.
+(silencioso); os formatos `*_FLOAT` de 16 bits são lidos como meia precisão IEEE, não com a faixa estendida do
+Xenos (expoente 31 é inf/NaN aqui) (silencioso); componentes ausentes valem (0, 0, 0, 1) como no Direct3D, onde o
+Xenia preenche com 0 (silencioso). A partir da Tarefa 15.8 o tradutor aceita todo o controle de fluxo, toda a ALU e
+o vertex fetch; o texture fetch é um erro `is not supported` até a Tarefa 15.9.
 
 ## Diagnóstico
 

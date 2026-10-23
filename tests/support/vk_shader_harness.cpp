@@ -445,6 +445,26 @@ Result<HarnessResult> ShaderHarness::draw_impl(std::span<const uint32_t> vs, std
       LR_TRY_ASSIGN(address, address_buffer(bytes));
       std::memcpy(push.data() + offset, &address, sizeof(address));
     }
+
+    // The vertex-fetch table: zero entries except in.fetch_slots.
+    std::vector<uint8_t> table(sc::kVertexFetchSlots * sc::kVertexFetchEntryBytes, 0);
+    for (const HarnessFetchSlot& fs : in.fetch_slots) {
+      if (fs.slot >= sc::kVertexFetchSlots) return Error{ErrorCode::Internal, "harness: fetch slot out of range", ""};
+      if (fs.lead > fs.bytes.size() || fs.lead % 4 != 0)
+        return Error{ErrorCode::Internal, "harness: fetch slot lead past its bytes or unaligned", ""};
+      uint64_t address = 0;
+      if (!fs.bytes.empty()) {
+        LR_TRY_ASSIGN(base, address_buffer(fs.bytes));
+        address = base + fs.lead;
+      }
+      const uint32_t size = fs.size_bytes.value_or(static_cast<uint32_t>(fs.bytes.size() - fs.lead));
+      uint8_t* entry = table.data() + fs.slot * sc::kVertexFetchEntryBytes;
+      std::memcpy(entry + sc::kVertexFetchEntryAddress, &address, 8);
+      std::memcpy(entry + sc::kVertexFetchEntrySize, &size, 4);
+      std::memcpy(entry + sc::kVertexFetchEntryEndian, &fs.endian, 4);
+    }
+    LR_TRY_ASSIGN(table_address, address_buffer(table));
+    std::memcpy(push.data() + sc::kPushVertexFetchTable, &table_address, sizeof(table_address));
   }
   std::copy(in.push_constants.begin(), in.push_constants.end(), push.begin());
   for (const HarnessBuffer& hb : in.buffers) {

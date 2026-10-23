@@ -627,8 +627,8 @@ TEST_CASE("kill ops discard the pixel", "[unit][vulkan]") {
                                  assemble({exec_end({vop(xe::kVectorKillEq, 1, c(1), c(2)), mov(0, r(1), true)})}));
     const std::string dis = lr::testing::spirv_dis(ps.spirv);
     INFO(dis);
-    // A single OpKill, in the epilogue: nothing after the kill instruction loses its derivatives. (A fetch after the
-    // kill is checked once fetches translate, Tasks 15.8/15.9.)
+    // A single OpKill, in the epilogue: nothing after the kill instruction loses its derivatives. (A vertex fetch after
+    // the kill: test_gpu_shader_vfetch.cpp; a texture fetch: Task 15.9.)
     size_t kills = 0;
     for (size_t at = dis.find("OpKill"); at != std::string::npos; at = dis.find("OpKill", at + 1)) ++kills;
     CHECK(kills == 1);

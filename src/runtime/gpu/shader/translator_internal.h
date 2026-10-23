@@ -14,8 +14,9 @@
 // Values that must dominate every later block (buffer pointers, CF state) are made in step 2/3, so the CF can put
 // the clauses in any blocks.
 //
-// Where later tasks plug in: emit_fetch (15.8/15.9, translator_fetch.cpp; a predicated fetch evaluates
-// unconditionally and merges with OpSelect on pred_matches()). It reports what it cannot translate with unsupported().
+// Fetches: emit_fetch (translator_fetch.cpp): vertex fetch (15.8) is done; texture fetch plugs in there (15.9). A
+// predicated fetch evaluates unconditionally and merges with OpSelect on pred_matches(). What it cannot translate is
+// reported with unsupported().
 #pragma once
 
 #include <array>
@@ -164,8 +165,11 @@ class Translator {
   Id xenos_mul(Id a, Id b, uint32_t identical);
   Id xenos_mul_f32(Id a, Id b, bool identical);  // the same for two floats
 
-  // --- fetch (Tasks 15.8/15.9) ---
+  // --- fetch (translator_fetch.cpp; vertex fetch Task 15.8, texture fetch Task 15.9) ---
   Result<void> emit_fetch(uint32_t slot, const FetchInstr& f);
+  Result<void> emit_vertex_fetch(uint32_t slot, const FetchInstr& f);
+  void declare_fetch_contract();       // the vertex-fetch table and vertex data pointer types (vfetch shaders only)
+  void load_fetch_table_pointer();     // main's entry block: the table pointer and the mini-fetch base
 
   // --- stage interface and exports (translator_export.cpp) ---
   void declare_stage_interface();
@@ -193,6 +197,11 @@ class Translator {
   Id shared_ptr_type_ = 0;  // PhysicalStorageBuffer pointer to the shared block struct
   Id consts_ = 0;           // this stage's float constants (pointer value, entry block)
   Id shared_ = 0;           // the shared block (pointer value, entry block)
+  // vertex fetch (0 unless the program has a vfetch)
+  Id fetch_table_ptr_type_ = 0;  // PhysicalStorageBuffer pointer to { entry[96] }
+  Id vertex_data_ptr_type_ = 0;  // PhysicalStorageBuffer pointer to { uint[] }
+  Id fetch_table_ = 0;           // the table (pointer value, entry block)
+  Id vfetch_base_ = 0;           // Function i32: index * stride of the last full vfetch (mini fetches reuse it)
   std::vector<std::pair<uint32_t, Id>> shared_members_;  // (contract offset, member type) in member order
 
   // exports: Function vec4 variables, by export register (0 = the register is never exported)

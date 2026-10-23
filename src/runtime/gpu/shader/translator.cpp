@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The translator's driver: module setup, the runtime contract (contract.h) and the register array (aL-relative temps
-// included). Control flow is translator_cf.cpp, the ALU translator_alu.cpp. Xenos semantics per Xenia's shader
-// translators (reference only, nothing copied).
+// included). Control flow is translator_cf.cpp, the ALU translator_alu.cpp, fetches translator_fetch.cpp. Xenos
+// semantics per Xenia's shader translators (reference only, nothing copied).
 #include "runtime/gpu/shader/translator.h"
 
 #include <spirv/unified1/GLSL.std.450.h>
@@ -12,7 +12,6 @@
 #include <utility>
 #include <variant>
 
-#include "runtime/gpu/shader/disasm.h"
 #include "runtime/gpu/shader/translator_internal.h"
 
 namespace lr::gpu::shader {
@@ -182,6 +181,7 @@ void Translator::declare_contract() {
   for (uint32_t m = 0; m < shared_members_.size(); ++m)
     b_.member_decorate(s_struct, m, spv::DecorationOffset, {shared_members_[m].first});
   shared_ptr_type_ = b_.type_pointer(spv::StorageClassPhysicalStorageBuffer, s_struct);
+  declare_fetch_contract();
 }
 
 void Translator::load_contract_pointers() {
@@ -191,6 +191,7 @@ void Translator::load_contract_pointers() {
   };
   consts_ = b_.op(spv::OpBitcast, consts_ptr_type_, {address(is_vs() ? 0 : 1)});
   shared_ = b_.op(spv::OpBitcast, shared_ptr_type_, {address(2)});
+  load_fetch_table_pointer();
 }
 
 Id Translator::load_float_constant(Id index) {
@@ -265,12 +266,6 @@ Id Translator::temp_index(uint32_t reg, bool relative) {
 void Translator::kill_if(Id condition) {
   const Id k = b_.op(spv::OpLoad, t_.bool_, {killed_});
   b_.op_void(spv::OpStore, {killed_, b_.op(spv::OpLogicalOr, t_.bool_, {k, condition})});
-}
-
-// --- fetch (Tasks 15.8/15.9) --------------------------------------------------------------------------------------
-
-Result<void> Translator::emit_fetch(uint32_t slot, const FetchInstr& f) {
-  return unsupported(slot, "fetch", fetch_op_name(f.op));
 }
 
 // --- the module ---------------------------------------------------------------------------------------------------

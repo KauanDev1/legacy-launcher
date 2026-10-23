@@ -12,7 +12,8 @@
 // The pipeline layout is the translated shaders' resource interface (runtime/gpu/shader/contract.h), whatever the
 // shaders use of it:
 //   push constants  128 bytes, vertex and fragment stages. First the contract's device addresses are written
-//                   (offset 0: in.vs_constants, 8: in.ps_constants, 16: the shared block), then in.push_constants is
+//                   (offset 0: in.vs_constants, 8: in.ps_constants, 16: the shared block, 24: the vertex-fetch
+//                   table), then in.push_constants is
 //                   copied to offset 0, then the device address of each in.buffers[i] is written as a little-endian
 //                   uint64 at its push_offset (later writes win)
 //   set 0 binding 0 sampled images, 2D (Texture2D heap)      in.textures with dim 2D, in order: heap index 0, 1, ...
@@ -33,12 +34,19 @@
 //   15.4  topology, vs_constants/ps_constants (256 float4 each), bools (8 words), loops (32), the shared-block
 //         fields (ndc_scale, ndc_offset, vte_flags, index_offset, min_index, max_index, alpha_ref), spec_alpha (spec
 //         constant 0);
-//   15.8  fetch_slots ({slot, bytes, endian} per vertex-fetch table entry).
+//   15.8  fetch_slots ({slot, bytes, endian} per vertex-fetch table entry, plus lead and size_bytes).
+//
+// The vertex-fetch table (contract.h, push-constant offset 24) is always written: kVertexFetchSlots entries, all
+// zero (address 0, size 0) except the slots in in.fetch_slots. Each of those gets its own device-address buffer
+// holding `bytes`; the entry's address is that buffer's address + `lead` (so bytes[0..lead) lie before the slot start
+// and a fetch must never see them), its size is size_bytes (default: bytes.size() - lead, which may claim less than
+// the buffer holds), its endian the Xenos swap mode (0 none, 1 8in16, 2 8in32, 3 16in32).
 #pragma once
 
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -82,6 +90,15 @@ struct HarnessSampler {
   float lod_bias = 0.0f;
 };
 
+// One vertex-fetch table entry (see the header comment).
+struct HarnessFetchSlot {
+  uint32_t slot = 0;  // 0..kVertexFetchSlots-1
+  std::vector<uint8_t> bytes;
+  uint32_t endian = 0;
+  uint32_t lead = 0;                     // bytes before the slot start (<= bytes.size(), a multiple of 4)
+  std::optional<uint32_t> size_bytes;    // default bytes.size() - lead
+};
+
 struct HarnessInputs {
   uint32_t width = 4;
   uint32_t vertex_count = 3;
@@ -107,6 +124,7 @@ struct HarnessInputs {
   uint32_t max_index = 0xFFFFFFFFu;
   float alpha_ref = 0.0f;
   uint32_t spec_alpha = 0;  // spec constant 0
+  std::vector<HarnessFetchSlot> fetch_slots;  // the vertex-fetch table (Task 15.8)
 };
 
 struct HarnessResult {
