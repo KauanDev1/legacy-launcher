@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: MIT
+// PLACEHOLDER for the EDRAM resolve (Task 18): copies a range of 32-bit words from the EDRAM image buffer to a
+// destination buffer. The tile walk, the format conversion and the sample averaging come with Task 18.
+#version 450
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Source { uint words[]; } u_src;
+layout(set = 0, binding = 1, std430) writeonly buffer Destination { uint words[]; } u_dst;
+layout(push_constant) uniform Params {
+  uint src_offset;  // in words
+  uint dst_offset;  // in words
+  uint word_count;
+} u_params;
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= u_params.word_count) return;
+  u_dst.words[u_params.dst_offset + i] = u_src.words[u_params.src_offset + i];
+}

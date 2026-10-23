@@ -97,7 +97,7 @@ You need Clang 18 or newer, CMake 3.25 or newer, Ninja, SDL2 and pkg-config.
 
 ```sh
 # Arch, Manjaro
-sudo pacman -S --needed clang cmake ninja sdl2 pkgconf git
+sudo pacman -S --needed clang cmake ninja sdl2 pkgconf glslang git
 # Debian, Ubuntu
 sudo apt install clang cmake ninja-build libsdl2-dev pkg-config git
 # Fedora

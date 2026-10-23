@@ -38,6 +38,10 @@ while [ "$#" -gt 0 ]; do
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
+# glslangValidator compiles the renderer's own GLSL shaders while LegacyRecomp is built (cmake/LrGpuShaders.cmake);
+# checked first so that a missing tool stops the script before anything is downloaded.
+command -v glslangValidator > /dev/null ||
+  die "glslangValidator is required on the build machine (sudo pacman -S --needed glslang)"
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 
@@ -259,11 +263,13 @@ rm -rf "$tc/sdl2/bin" "$tc/sdl2/lib/pkgconfig" "$tc/sdl2/share/aclocal"
 # --strip-debug: zig's cached libc++ carries debug info (about 20 MB per launcher).
 
 lr_build=$cache/build/legacyrecomp
-log "building LegacyRecomp"
+log "building LegacyRecomp (glslangValidator: $(glslangValidator --version | head -n 1))"
+{ printf 'glslangValidator: %s\n' "$(command -v glslangValidator)"; glslangValidator --version; } \
+  > "$cache/build/legacyrecomp.log"
 (cd "$repo" && "$cmake" --preset release -B "$lr_build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_MAKE_PROGRAM="$ninja" \
   "${zig_cmake_args[@]}" -DCMAKE_CXX_FLAGS="-include cstdlib -idirafter /usr/include" \
   -DCMAKE_PREFIX_PATH="$tc/sdl2" -DSDL2_DIR="$tc/sdl2/lib/cmake/SDL2" -DCMAKE_EXE_LINKER_FLAGS=-Wl,--strip-debug \
-  -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$lr_build/bin") > "$cache/build/legacyrecomp.log" 2>&1 ||
+  -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$lr_build/bin") >> "$cache/build/legacyrecomp.log" 2>&1 ||
   die "LegacyRecomp configure failed, see $cache/build/legacyrecomp.log"
 "$cmake" --build "$lr_build" -j "$jobs" --target legacyrecomp legacyrecomp-gui lr_resources \
   >> "$cache/build/legacyrecomp.log" 2>&1 || die "LegacyRecomp build failed, see $cache/build/legacyrecomp.log"

@@ -13,6 +13,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(cmake/LrWarnings.cmake)
+include(cmake/LrGpuShaders.cmake)
 include(CTest)
 
 # XenonRecomp's bundled fmt would otherwise add its headers/library to `cmake --install`.

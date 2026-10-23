@@ -97,8 +97,12 @@ depende da glibc.
 
 O AppImage não leva compilador de shaders e o `doctor` não exige um. O DXC saiu do projeto com o plano B (ADR 0005, M8):
 o runtime traduz o microcódigo do jogo para SPIR-V com código próprio, e os shaders internos do renderizador são
-compilados pelo `glslangValidator` do sistema na compilação do launcher (o `build.sh` conferirá a ferramenta e
-registrará a versão). O release oficial do DXC exigia glibc 2.34 a 2.38 e `libstdc++.so.6`, incompatível com o piso
+compilados pelo `glslangValidator` do sistema na compilação do launcher (o `build.sh` confere a ferramenta antes de qualquer
+download, e sem ela recusa com `sudo pacman -S --needed glslang`; grava o caminho e o `glslangValidator --version`
+no início de `cache/build/legacyrecomp.log`). A versão é registrada, não fixada (o pacote do Arch não pode ser
+fixado na imagem sem um espelho de arquivo): a usada no desenvolvimento foi a 16.6.0 (pacote `glslang`
+1:1.4.363.0-1). Outra versão só pode mudar o SPIR-V dos nossos GLSL, que os testes validam
+(`every built-in shader passes spirv-val`). O release oficial do DXC exigia glibc 2.34 a 2.38 e `libstdc++.so.6`, incompatível com o piso
 2.31 do AppImage; essa medição (2026-10-19) está no histórico do git, em `docs/packaging.md`.
 
 ## Layout do toolchain embutido

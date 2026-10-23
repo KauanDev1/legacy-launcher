@@ -5,7 +5,7 @@ LegacyRecomp statically recompiles Minecraft: Xbox 360 Edition to a native Linux
 ## Build and test
 
 ```
-sudo pacman -S --needed clang cmake ninja sdl2 pkgconf   # toolchain (no shader compiler: plan B translates shaders at run time)
+sudo pacman -S --needed clang cmake ninja sdl2 pkgconf glslang   # toolchain (glslangValidator builds only our own GLSL; the game's shaders are translated at run time)
 cmake --preset dev                                        # configure (Debug, ASan+UBSan)
 cmake --build --preset dev
 ctest --preset dev -L unit                                # fast tests, no game data needed

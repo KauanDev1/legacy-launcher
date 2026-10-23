@@ -41,4 +41,11 @@ if(TARGET SDL2::SDL2)
   target_compile_definitions(lr_vulkan PRIVATE LR_HAVE_SDL2)
   target_link_libraries(lr_vulkan PRIVATE SDL2::SDL2)
 endif()
+# The renderer's own GLSL (blit, clear, untile, resolve): compiled by glslangValidator at build time into lr_vulkan.
+lr_compile_gpu_shaders(lr_vulkan
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/blit.vert
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/blit.frag
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/clear.frag
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/untile.comp
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/resolve_copy.comp)
 lr_configure_target(lr_vulkan)

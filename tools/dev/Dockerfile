@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Linux development image for LegacyRecomp (see docs/development.md).
 FROM archlinux:latest
-RUN pacman -Sy --noconfirm --needed clang cmake ninja sdl2 pkgconf git python binutils rsync mesa vulkan-swrast vulkan-icd-loader vulkan-validation-layers vulkan-tools spirv-tools \
+RUN pacman -Sy --noconfirm --needed clang cmake ninja sdl2 pkgconf git python binutils rsync mesa vulkan-swrast vulkan-icd-loader vulkan-validation-layers vulkan-tools spirv-tools glslang \
     && pacman -Scc --noconfirm
 WORKDIR /work

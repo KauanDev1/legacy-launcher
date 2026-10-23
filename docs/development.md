@@ -31,7 +31,7 @@ tools/dev/container.sh run [-- argumentos do jogo]
 ## Onde ficam as coisas
 
 - Imagem `legacyrecomp-dev` (Arch Linux com clang, cmake, ninja, SDL2, pkgconf, git, python, binutils, rsync e Vulkan: `mesa`, `vulkan-swrast` (lavapipe, o driver
-  por software usado nos testes `[vulkan]`), `vulkan-icd-loader`, `vulkan-validation-layers` e `vulkan-tools`; mais `spirv-tools`, que traz o `spirv-val` e o
+  por software usado nos testes `[vulkan]`), `vulkan-icd-loader`, `vulkan-validation-layers` e `vulkan-tools`; mais `glslang` (o `glslangValidator`, que compila os shaders GLSL do próprio renderizador na compilação; ferramenta de build, nunca distribuída) e `spirv-tools`, que traz o `spirv-val` e o
   `spirv-dis` usados só nos testes do tradutor de shaders, por `tests/support/spirv_tools.h`, e nunca distribuídos). É reconstruída pelo Docker apenas quando o `Dockerfile` muda.
 - O repositório é montado somente leitura em `/src`. Os arquivos **rastreados pelo git** (incluindo
   submódulos) são sincronizados com `rsync --delete` para o volume `lr-build`, montado em `/work`;
@@ -49,8 +49,13 @@ está inicializado na árvore de trabalho.
 
 Não há compilador de shaders no projeto: o XenosRecomp, o DXC e a `lr_zstd` saíram no plano B (ADR 0005, M8), e o
 runtime traduz o microcódigo para SPIR-V ele mesmo (Tarefas 15.2 em diante). Os shaders do renderizador (blit,
-limpeza, untile, resolve) serão GLSL compilado pelo `glslangValidator` do sistema na compilação do launcher
-(Tarefa 15.x). O histórico do git guarda o fork do XenosRecomp (commits `0523eda`..`3b15c74`).
+limpeza, untile, resolve) são GLSL em `src/runtime/gpu/vk/shaders/`, compilado pelo `glslangValidator` do sistema
+(`-V --target-env vulkan1.2`) na compilação do launcher (`cmake/LrGpuShaders.cmake`, função
+`lr_compile_gpu_shaders`) e embutido na `liblr_vulkan.a` como vetores `uint32_t` (`gpu_shaders.h`/`.cpp`, gerados
+na árvore de build e nunca versionados; `kBuiltinShaders` lista todos). O `cmake` falha com a dica de instalação
+(`sudo pacman -S --needed glslang`) se a ferramenta faltar. `untile.comp` e `resolve_copy.comp` são placeholders
+mínimos (cópia linear com troca de endian, cópia de palavras); as Tarefas 18 e 19 trazem a lógica de EDRAM e de
+tiling. O histórico do git guarda o fork do XenosRecomp (commits `0523eda`..`3b15c74`).
 
 O jogo guarda os shaders traduzidos em `--shader-cache-dir <pasta>` (o `legacyrecomp run` passa
 `<raiz>/work/shaders/runtime`; sem a flag, ficam só na memória). Os `.spv` do cache **não** são módulos SPIR-V puros:
