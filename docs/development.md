@@ -62,6 +62,9 @@ começam com um cabeçalho `LRSV` de 48 bytes (versão do tradutor, chave, check
 Suba `kTranslatorVersion` (`src/runtime/gpu/shader/translator.h`) e atualize a impressão digital do teste
 `translator output fingerprint matches kTranslatorVersion` (`tests/test_gpu_shader_cache.cpp`; o valor novo aparece
 na falha do teste).
+Para validar o cache inteiro, rode dentro do contêiner (`tools/dev/container.sh shell`)
+`tools/shader_cache_stats.sh [pasta]` (padrão `/data/work/shaders/runtime`): ele passa o SPIR-V de cada arquivo pelo
+`spirv-val --target-env vulkan1.2` e imprime só contagens (arquivos, válidos, inválidos, por estágio e por versão).
 
 ## ISO do jogo
 
