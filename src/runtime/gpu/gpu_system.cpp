@@ -123,10 +123,10 @@ class GpuSystem::BackendProxy final : public Backend {
     Busy b(owner_);
     inner_->resolve(regs);
   }
-  void swap(uint32_t frontbuffer_phys, uint32_t width, uint32_t height) override {
+  void swap(const RegisterFile& regs, uint32_t frontbuffer_phys, uint32_t width, uint32_t height) override {
     {
       Busy b(owner_);
-      inner_->swap(frontbuffer_phys, width, height);
+      inner_->swap(regs, frontbuffer_phys, width, height);
     }
     const uint64_t n = owner_.swaps_.fetch_add(1, std::memory_order_acq_rel) + 1;
     if (owner_.trace_) {

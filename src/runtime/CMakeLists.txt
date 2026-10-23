@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-set(LR_RUNTIME_CORE_SOURCES guest_memory.cpp fault.cpp func_table.cpp loader.cpp xex_imports.cpp kernel/registry.cpp kernel/kernel.cpp kernel/glue.cpp guest_thread.cpp memory/page_heap.cpp memory/physical_heap.cpp kernel/exports/memory.cpp kernel/objects.cpp kernel/exports/objects.cpp kernel/variables.cpp kernel/dispatcher.cpp kernel/exports/sync.cpp kernel/threads.cpp kernel/exports/threads.cpp kernel/timers.cpp kernel/exports/time.cpp kernel/exports/critsec.cpp kernel/trace.cpp kernel/deadlock.cpp kernel/exports/debug.cpp kernel/vfs.cpp kernel/exports/vfs.cpp kernel/exports/files.cpp kernel/exports/lzx.cpp kernel/guest_printf.cpp kernel/exports/rtl.cpp kernel/exports/xex.cpp kernel/exports/config.cpp kernel/exports/crypto.cpp kernel/exports/xam.cpp kernel/exports/xam_ui.cpp kernel/exports/audio.cpp kernel/exports/video.cpp kernel/exports/net.cpp kernel/exports/msg.cpp kernel/exports/nui.cpp gpu/registers.cpp gpu/null_backend.cpp gpu/pm4.cpp gpu/mmio.cpp gpu/gpu_system.cpp gpu/shader_cache.cpp gpu/shader/ir.cpp gpu/shader/disasm.cpp gpu/shader/spirv_builder.cpp gpu/shader/translator.cpp gpu/shader/translator_export.cpp gpu/shader/translator_cf.cpp gpu/shader/translator_alu.cpp gpu/shader/translator_fetch.cpp gpu/shader/shader_key.cpp gpu/shader/disk_cache.cpp gpu/screenshot.cpp)
+set(LR_RUNTIME_CORE_SOURCES guest_memory.cpp fault.cpp func_table.cpp loader.cpp xex_imports.cpp kernel/registry.cpp kernel/kernel.cpp kernel/glue.cpp guest_thread.cpp memory/page_heap.cpp memory/physical_heap.cpp kernel/exports/memory.cpp kernel/objects.cpp kernel/exports/objects.cpp kernel/variables.cpp kernel/dispatcher.cpp kernel/exports/sync.cpp kernel/threads.cpp kernel/exports/threads.cpp kernel/timers.cpp kernel/exports/time.cpp kernel/exports/critsec.cpp kernel/trace.cpp kernel/deadlock.cpp kernel/exports/debug.cpp kernel/vfs.cpp kernel/exports/vfs.cpp kernel/exports/files.cpp kernel/exports/lzx.cpp kernel/guest_printf.cpp kernel/exports/rtl.cpp kernel/exports/xex.cpp kernel/exports/config.cpp kernel/exports/crypto.cpp kernel/exports/xam.cpp kernel/exports/xam_ui.cpp kernel/exports/audio.cpp kernel/exports/video.cpp kernel/exports/net.cpp kernel/exports/msg.cpp kernel/exports/nui.cpp gpu/registers.cpp gpu/null_backend.cpp gpu/pm4.cpp gpu/mmio.cpp gpu/gpu_system.cpp gpu/shader_cache.cpp gpu/shader/ir.cpp gpu/shader/disasm.cpp gpu/shader/spirv_builder.cpp gpu/shader/translator.cpp gpu/shader/translator_export.cpp gpu/shader/translator_cf.cpp gpu/shader/translator_alu.cpp gpu/shader/translator_fetch.cpp gpu/shader/shader_key.cpp gpu/shader/disk_cache.cpp gpu/screenshot.cpp gpu/texture_format.cpp)
 add_library(lr_runtime_core STATIC ${LR_RUNTIME_CORE_SOURCES})
 target_include_directories(lr_runtime_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(lr_runtime_core PUBLIC lr_common lr_formats lr_spirv_headers PRIVATE XenonUtils)
@@ -38,10 +38,11 @@ target_include_directories(lr_runtime_core SYSTEM PRIVATE ${LR_STB_INCLUDE})
 target_include_directories(lr_runtime_core_staged SYSTEM PRIVATE ${LR_STB_INCLUDE})
 
 # --- Vulkan backend (lr::gpu::vk): our wrapper over volk + VMA (lr_vulkan_thirdparty, root CMakeLists.txt) ---
-# Device, Presenter, Edram (render targets, clears, resolves) and VkBackend. Consumers also link lr_runtime_core (VkBackend implements gpu::Backend and the
+# Device, Presenter, Edram (render targets, clears, resolves), the texture and sampler caches and VkBackend. Consumers also link lr_runtime_core (VkBackend implements gpu::Backend and the
 # presenter writes PNGs through gpu/screenshot.cpp); lr_vulkan does not link it itself, so a consumer can take it
 # --whole-archive (the game, lr_tests, lr_fake_game).
-set(LR_VULKAN_SOURCES gpu/vk/device.cpp gpu/vk/presenter.cpp gpu/vk/vk_backend.cpp gpu/vk/edram.cpp)
+set(LR_VULKAN_SOURCES gpu/vk/device.cpp gpu/vk/presenter.cpp gpu/vk/vk_backend.cpp gpu/vk/edram.cpp gpu/vk/textures.cpp
+  gpu/vk/samplers.cpp)
 add_library(lr_vulkan STATIC ${LR_VULKAN_SOURCES})
 target_include_directories(lr_vulkan PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(lr_vulkan PUBLIC lr_common lr_vulkan_thirdparty)
@@ -49,12 +50,11 @@ if(TARGET SDL2::SDL2)
   target_compile_definitions(lr_vulkan PRIVATE LR_HAVE_SDL2)
   target_link_libraries(lr_vulkan PRIVATE SDL2::SDL2)
 endif()
-# The renderer's own GLSL (blit, clear, untile, resolve): compiled by glslangValidator at build time into lr_vulkan.
+# The renderer's own GLSL (blit, clear, resolve; textures are untiled on the CPU, Task 19): compiled by glslangValidator at build time into lr_vulkan.
 lr_compile_gpu_shaders(lr_vulkan
   ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/blit.vert
   ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/blit.frag
   ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/clear.frag
-  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/untile.comp
   ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/resolve_color.comp
   ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/resolve_color_ms.comp
   ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/resolve_depth.comp

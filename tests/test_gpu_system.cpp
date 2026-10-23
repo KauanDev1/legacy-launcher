@@ -116,7 +116,7 @@ struct RecordingBackend final : lr::gpu::Backend {
   uint8_t* base = nullptr;
   void draw(const lr::gpu::RegisterFile&, const lr::gpu::DrawInfo&, const lr::gpu::ActiveShaders&) override {}
   void resolve(const lr::gpu::RegisterFile&) override {}
-  void swap(uint32_t, uint32_t, uint32_t) override {}
+  void swap(const lr::gpu::RegisterFile&, uint32_t, uint32_t, uint32_t) override {}
   void wait_idle() override {}
   void load_shader(lr::gpu::ShaderStage, uint32_t guest_addr, uint32_t dwords) override {
     std::lock_guard<std::mutex> lock(m);

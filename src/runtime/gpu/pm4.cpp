@@ -513,7 +513,7 @@ Result<void> CommandProcessor::execute_type3(uint32_t opcode, uint32_t payload, 
     case pm4::LR_SWAP:
       LR_TRY(need(4));
       if (p(0) != pm4::kSwapMagic) return malformed("LR_SWAP packet without the 'LRSW' signature: " + hex(p(0)));
-      backend_.swap(p(1), p(2), p(3));
+      backend_.swap(regs_, p(1), p(2), p(3));
       ++swap_counter_;
       return {};
 

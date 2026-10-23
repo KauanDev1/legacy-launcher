@@ -249,8 +249,22 @@ Result<Device> Device::create(const DeviceOptions& options) {
   }
   if (!dev.physical_) return missing(first_problem);
 
-  // Enable exactly the floor, not everything the device offers.
+  // Enable exactly the floor, not everything the device offers, plus the optional sampler features the device has.
+  {
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(dev.physical_, &props);
+    dev.limits_ = props.limits;
+    VkPhysicalDeviceVulkan12Features have12{};
+    have12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    VkPhysicalDeviceFeatures2 have2{};
+    have2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    have2.pNext = &have12;
+    vkGetPhysicalDeviceFeatures2(dev.physical_, &have2);
+    dev.sampler_anisotropy_ = have2.features.samplerAnisotropy == VK_TRUE;
+    dev.mirror_clamp_to_edge_ = have12.samplerMirrorClampToEdge == VK_TRUE;
+  }
   VkPhysicalDeviceVulkan12Features en12{};
+  en12.samplerMirrorClampToEdge = dev.mirror_clamp_to_edge_ ? VK_TRUE : VK_FALSE;
   en12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
   en12.runtimeDescriptorArray = VK_TRUE;
   en12.descriptorBindingPartiallyBound = VK_TRUE;
@@ -261,6 +275,7 @@ Result<Device> Device::create(const DeviceOptions& options) {
   en2.pNext = &en12;
   en2.features.textureCompressionBC = VK_TRUE;
   en2.features.shaderSampledImageArrayDynamicIndexing = VK_TRUE;  // translated tfetch: heaps indexed by the shared block
+  en2.features.samplerAnisotropy = dev.sampler_anisotropy_ ? VK_TRUE : VK_FALSE;
 
   const float priority = 1.0f;
   VkDeviceQueueCreateInfo qci{};
@@ -313,6 +328,9 @@ Device& Device::operator=(Device&& o) noexcept {
     family_ = o.family_;
     allocator_ = std::exchange(o.allocator_, nullptr);
     name_ = std::move(o.name_);
+    limits_ = o.limits_;
+    sampler_anisotropy_ = o.sampler_anisotropy_;
+    mirror_clamp_to_edge_ = o.mirror_clamp_to_edge_;
   }
   return *this;
 }

@@ -660,14 +660,15 @@ O piso do dispositivo (`Device::create`) é o das restrições globais mais `max
 por `check_device_limits`, uma função pura sobre `VkPhysicalDeviceLimits`. Antes de destruir qualquer coisa, o
 `Device` espera o dispositivo ficar ocioso (`vkDeviceWaitIdle`).
 
-**Swap.** O `resolve` vai para a emulação da EDRAM (seção seguinte); `draw` e `load_shader` ainda não fazem nada
-(texturas e desenho chegam nas Tarefas 19 a 21), e `binds_shaders()` continua falso até a Tarefa 20. Em cada
-`swap(phys, w, h)` (o pacote `LR_SWAP` que o `VdSwap` escreve), ele lê o front buffer direto da memória do convidado
-como uma superfície **linear** de `w × h` pixels de 32 bits A8R8G8B8 big-endian (o X8R8G8B8 do D3D; alfa vira 255),
-converte para RGBA8 na CPU, envia para uma imagem `R8G8B8A8_UNORM` e a entrega ao `Presenter`. O front buffer real é
-em tiles (tiling 2D do Xenos, formato no fetch constant que o `VdSwap` grava): o destile e o formato vêm com o
-caminho de texturas (Tarefa 19), que substitui essa cópia. Tamanho 0 ou acima de 8192, ou um endereço físico fora da
-memória do convidado, pula o quadro com um aviso no stderr (uma vez).
+**Swap.** O `resolve` vai para a emulação da EDRAM (seção "EDRAM"); `draw` e `load_shader` ainda não fazem nada
+(o desenho chega nas Tarefas 20 e 21), e `binds_shaders()` continua falso até a Tarefa 20. Em cada
+`swap(regs, phys, w, h)` (o pacote `LR_SWAP` que o `VdSwap` escreve), o front buffer de `w × h` é decodificado pelo
+carregador de texturas (seção "Texturas", `front_buffer_rgba8`): o fetch constant 0, que o `VdSwap` escreveu logo
+antes, dá o formato, o tiling, o endian, o pitch e o swizzle; o endereço é o físico do pacote. O resultado vira RGBA8
+com alfa 255 (o X8R8G8B8 do D3D), vai para uma imagem `R8G8B8A8_UNORM` e é entregue ao `Presenter`. Só formatos cujo
+dado no host é RGBA8, A2B10G10R10 ou RGBA16F servem de front buffer. Tamanho 0 ou acima de 8192, formato não
+suportado ou front buffer fora da memória do convidado pulam o quadro com um aviso no stderr (uma vez por motivo).
+Cada swap também começa um quadro novo do cache de texturas (`begin_frame`).
 
 **Presenter** (`presenter.h`): `present(frame, w, h)` copia o quadro para uma imagem própria (o último quadro) e, com
 janela, faz um blit dele para a imagem adquirida da swapchain (escala mantendo a proporção, com barras pretas; modo
@@ -788,6 +789,126 @@ aparecer. A Tarefa 19 a reaproveita.
 de baixo, `RB_COLOR_CLEAR_LO` como os de cima, como o Xenia junta) ainda não foi vista num jogo. A destruição LRU
 de render targets supõe que cada operação já terminou na GPU; quando a Tarefa 20 juntar o trabalho num command
 buffer por quadro, a destruição tem de esperar o fim do uso da imagem.
+
+## Texturas (M3, Tarefa 19)
+
+`runtime/gpu/texture_format.h` (núcleo da GPU, sem tipos do Vulkan): o fetch constant de textura (`TextureFetch`), a
+tabela de formatos, o endereçamento em tiles, as trocas de endian, o layout da textura na memória do convidado e o
+carregador na CPU. `runtime/gpu/vk/textures.h` (`TextureCache`) e `samplers.h` (`SamplerCache`) põem o resultado nos
+heaps do contrato dos shaders. Semântica conferida no `xenos.h`, `texture_util.{h,cc}`, `texture_address.h`, no shader
+`texture_load_ctx1` e no cache de texturas Vulkan do Xenia (só referência, nada copiado).
+
+**Fetch constant** (6 dwords em `SHADER_CONSTANT_FETCH_00_0 + 6 * i`): dword 0 tipo (2 = textura), sinal x/y/z/w
+(2 bits cada: 0 sem sinal, 1 com sinal, 2 "sem sinal deslocado", 3 gamma), clamp x/y/z (3 bits cada), pitch
+(bits 22-30, texels / 32) e tiled (bit 31); dword 1 formato (6 bits), endian (bits 6-7), stacked (bit 10) e endereço
+base (bits 12-31); dword 2 os tamanhos menos 1 (1D 24 bits; 2D/cubo 13:13 e a profundidade da pilha em 6 bits; 3D
+11:11:10); dword 3 `num_format`, swizzle (12 bits, 3 por saída: 0-3 = X-W, 4 = 0, 5 = 1), `exp_adjust`, filtros mag,
+min e mip (2 bits: ponto, linear, "base map"), anisotropia (3 bits); dword 4 mip mínimo e máximo (4 bits cada, bits
+2 e 6) e o LOD bias (bits 12-21, com sinal, /32); dword 5 cor de borda (2 bits), dimensão (bits 9-10: 1D, 2D/pilha,
+3D, cubo), mips empacotados (bit 11) e endereço dos mips (bits 12-31).
+
+**Formatos.** O carregador converte o necessário na CPU; o resto vai como está:
+
+| Formato do Xenos | Imagem do host | Conversão |
+| --- | --- | --- |
+| `k_8`, `k_8_A` | `R8_UNORM` | cópia |
+| `k_8_8` | `R8G8_UNORM` | cópia |
+| `k_8_8_8_8` (e `_A`, `_AS_16_16_16_16`) | `R8G8B8A8_UNORM` | cópia |
+| `k_2_10_10_10` (e `_AS_16_16_16_16`) | `A2B10G10R10_UNORM_PACK32` | cópia |
+| `k_1_5_5_5`, `k_5_6_5`, `k_4_4_4_4` | `R8G8B8A8_UNORM` | campos a partir do bit 0 em X, Y, Z, W, expandidos para 8 bits (565 com A = 255) |
+| `k_10_11_11`, `k_11_11_10` (e `_AS_16_16_16_16`) | `R16G16B16A16_UNORM` | campos expandidos para 16 bits, A = 1 |
+| `k_16`, `k_16_16`, `k_16_16_16_16` | `R16*_UNORM` | cópia |
+| `k_16*_FLOAT`, `k_16*_EXPAND` | `R16*_SFLOAT` | cópia |
+| `k_32_FLOAT`, `k_32_32_FLOAT`, `k_32_32_32_32_FLOAT` | `R32*_SFLOAT` | cópia |
+| `k_DXT1`, `k_DXT2_3`, `k_DXT4_5` (e `_AS_16_16_16_16`) | `BC1_RGBA`, `BC2`, `BC3` | cópia dos blocos |
+| `k_DXN` | `BC5_UNORM` (vermelho = primeiro bloco) | cópia dos blocos |
+| `k_DXT5A` | `BC4_UNORM` | cópia dos blocos |
+| `k_CTX1` | `R8G8_UNORM` | decodificado: dois extremos R8G8 no primeiro dword (R no byte alto de cada metade), códigos de 2 bits no segundo (texel (x, y) no bit 2·(4y + x); 0 e 1 são os extremos, 2 = (2e0 + e1)/3, 3 = (e0 + 2e1)/3, truncado) |
+
+Os demais (`k_1`, `k_1_REVERSE`, `k_8_B`, `k_6_5_5`, YUV, os de EDRAM, profundidade `k_24_8*`, inteiros de 32 bits,
+MPEG/entrelaçados, `k_32_32_32_FLOAT`, `k_DXT3A*`) são um erro que nomeia o formato
+(`texture format k_24_8 (22) is not supported`). Componentes que o formato não tem leem o último que ele tem (`k_8` é
+RRRR, CTX1 e DXN são RGGG, 565 e 10_11_11 são RGBB). Sinais: um componente **com sinal** é erro no M3 (`signed
+texture formats are not supported in M3 (...)`) até o jogo precisar; "sem sinal deslocado" (2v - 1) e o
+`exp_adjust` não cabem numa view e são ignorados, com uma linha `[gpu] textures:` no stderr na primeira vez; gamma em
+X, Y ou Z vira o formato `SRGB` (R8, R8G8, RGBA8 e BC1-3; nos outros é ignorado, também registrado uma vez). O swizzle
+do fetch constant vira o `VkComponentMapping` da view e faz parte da chave da view: uma imagem, uma view por swizzle.
+
+**Endereço e endian.** Tiling 2D: tiles de 32×32 blocos em ordem de linhas; dentro de um, o deslocamento linear
+(índice do tile · 64 + micro (y[3:1] · 8 + x[2:0])) · bytes por bloco tem os bits espalhados com o banco (y[4], bit
+11), o pipe (x[4:3] ^ y[3]·2, bits 6-7) e y[0] (bit 4) (`tiled_offset_2d`, conferido bloco a bloco com a referência
+independente `tests/support/xenos_tiling.h` e com vetores à mão). 3D: tiles de 32×16×4, micro de 8×8×4, banco
+y[3] ^ z[2] (`tiled_offset_3d`). O endian vale por palavra de 32 bits lida da memória (0 nenhum, 1 8in16, 2 8in32,
+3 16in32); blocos de 1 e 2 bytes tiram seus bytes da palavra já trocada.
+
+**Layout dos níveis** (semântica do `texture_util` do Xenia): o nível base fica no endereço base com o pitch do fetch
+constant; os mips, a partir do endereço dos mips, um após o outro, cada um com pitch e altura de
+`max(próxima_potência_de_2(lado) >> nível, 1)`. Pitch alinhado a 32 blocos, altura a 32 linhas de blocos (1 no 1D),
+linhas lineares de mip a 256 bytes, fatias de array a 4 KiB, profundidade 3D a 4. Faixa de níveis (`mip_range`): sem
+endereço de mips, só o base; com mips, mínimo e máximo do fetch constant limitados a log2 do maior lado; sem endereço
+base o mínimo sobe para 1; mínimo acima de 0 descarta o base. **Mips empacotados** (implementados): com o bit ligado,
+os níveis cujo lado menor tem 16 texels ou menos ficam juntos num só tile de 32×32 texels (o "rabo"), guardado no
+lugar do primeiro deles: o de 16 em (16, 0), o de 8 em (8, 0), o de 4 em (4, 0), o de 2 e o de 1 no outro eixo (as
+coordenadas trocam quando a textura é mais larga que alta; no 3D, os pequenos também andam em z). Quando a textura
+inteira cabe no rabo, o base é lido do rabo do endereço base e os mips do rabo do endereço dos mips.
+
+**Dimensões.** 1D é uma imagem 2D de altura 1 no heap `Texture2D` (set 0); 2D também; cubo é uma imagem 2D de 6
+camadas com view de cubo (set 2); 3D é 3D (set 1). Uma textura empilhada (2D com `stacked`) vira uma imagem **3D**
+com as camadas como profundidade (set 1), porque o tradutor a amostra como 3D (Tarefa 15.9): filtra entre camadas e,
+com mips, cada nível guarda só as primeiras `camadas >> nível` camadas. A primeira textura empilhada que o jogo usa é
+registrada no stderr, e o registro diz quando ela tem mips.
+
+**Segurança.** Base, tamanhos, pitch e formato vêm do convidado. O primeiro byte do nível base e o dos mips precisam
+estar na memória do convidado e numa alocação física (`MemoryAccess::allocation_end`), senão é erro nomeando a
+textura; a faixa lida é limitada à memória, ao espaço físico de 512 MiB e ao fim da alocação, e precisa mapear
+linearmente. Toda leitura de bloco confere o limite: o que passa da faixa lê zero (preenchimento de linhas além da
+alocação, como no 1280×720 que um jogo aloca sem completar a última linha de tiles). Mais de 512 MiB de dados no host
+(`kMaxTextureHostBytes`; 8192×8192 RGBA8 com mips são 341 MiB) é erro nomeando a textura, nunca uma alocação gigante.
+Um tamanho acima do que o dispositivo aceita (`vkGetPhysicalDeviceImageFormatProperties`) também é erro.
+
+**Destile na CPU**, não num compute shader (o spec dizia compute shader; ADR 0005, M11): o cache precisa ler e fazer
+hash dos bytes do convidado na CPU de qualquer jeito, toda leitura do convidado fica num lugar só com limite
+conferido, e o resultado é testável sem dispositivo. A cópia para a imagem é um `vkCmdCopyBufferToImage` de um
+buffer de staging.
+
+**Cache de texturas.** Chave: a descrição da textura sem o swizzle (endereços, formato, dimensões, tiling, endian,
+pitch, mips, gamma). `get(fetch)` devolve a view (`Result<VkImageView>`); `bind(slot, fetch)` guarda os índices do
+slot, e `heap_index(slot)` devolve `{texture_2d, texture_3d, texture_cube}`: o heap da dimensão aponta para a view, os
+outros dois para o índice 0, que em todo heap é uma textura nula 1×1 zerada que lê (0, 0, 0, 0). Fetch constant vazio
+ou sem endereço, ou um `bind` que falhou, deixa os três em 0. A Tarefa 20 escreve esses índices nas tabelas do bloco
+compartilhado. Cada heap tem 4096 descritores (`kTextureHeapSize`), partially bound e update-after-bind; um descritor
+liberado volta a apontar para a textura nula. Acima de 1 GiB de dados no host, as texturas não usadas no quadro atual
+saem primeiro (LRU). Envios e leituras de volta são gravados, enviados e esperados na hora (a Tarefa 20 os junta ao
+fluxo do quadro).
+
+**Invalidação: hash por textura, não proteção de página.** Cada textura guarda um XXH3-64 dos bytes que cobre (só a
+faixa do nível base e a dos mips) e o compara na primeira vez que é usada em cada quadro (`begin_frame`, chamado a cada
+swap); se mudou, a textura é reenviada. Proteção de página teria de conviver com o código recompilado escrevendo na
+memória do convidado e com o handler de falhas (saída 4). Limite: uma escrita da CPU entre dois draws do mesmo quadro
+só aparece no quadro seguinte. Escritas da própria GPU não esperam: o resolve da EDRAM informa a faixa que escreveu
+(`Edram::set_write_observer`) e `invalidate_range` marca as texturas que a cobrem para reenvio no próximo uso.
+
+**Samplers** (`samplers.h`, set 3). `sampler_create_info(fetch, limites)` é uma função pura: endereçamento por eixo
+(repeat, mirrored repeat, clamp to edge, mirror once = `MIRROR_CLAMP_TO_EDGE`, clamp to border; os modos "halfway"
+viram os de aresta, mirror-once-to-border perde a borda; sem `samplerMirrorClampToEdge` no dispositivo, mirror once
+vira mirrored repeat), eixos que a dimensão não usa em clamp to edge (y do 1D, z do 2D, todos no cubo), filtros
+mag/min/mip (ponto ou linear; "base map" limita ao nível mínimo), anisotropia 2^(n-1):1 limitada ao dispositivo
+(desligada sem `samplerAnisotropy`), `minLod`/`maxLod` da faixa de mips, o LOD bias do fetch constant como
+`mipLodBias` (limitado ao dispositivo), cor de borda (preto ABGR = preto transparente, branco ABGR = branco opaco, os
+dois pretos YCbCr = preto opaco; normalizada para preto transparente quando nenhum eixo usa borda), coordenadas
+sempre normalizadas. O `SamplerCache` cria um `VkSampler` por estado distinto e o grava no heap de 1024 entradas
+(`kSamplerHeapSize`); o índice 0 é um sampler padrão (nearest, clamp). `samplerAnisotropy` e
+`samplerMirrorClampToEdge` são opcionais: o `Device` os liga quando existem (não entram no piso).
+
+Testes (`tests/test_gpu_textures.cpp`): `tiled offset matches known values`, `tiled extents cover every block`,
+`endian swap modes`, `CTX1 decode`, `packed mips sit in the tail of the last unpacked level`, `mip range follows the
+fetch constant`, `edge-size and unsupported-format textures` (1×1, 1000×3, 8192×8192 RGBA8 dentro da memória, além do
+fim da alocação, grande demais, fora da memória), `tiled front buffer decodes with the fetch constant's format`,
+`format table`, `fetch constant swizzle maps to the view` e `sampler fields come from the fetch constant` sem
+dispositivo; com o lavapipe e a camada de validação (`[unit][vulkan]`): `equal sampler states share one heap entry`,
+`DXT1 tiled texture uploads correctly`, `1D texture uploads as a height-1 2D image`, `fetch constant swizzle selects
+one image and two views` e `modified guest memory invalidates the texture`. O teste do jogo falso `tiled front buffer
+frame is captured` pinta o front buffer em tiles com um padrão por pixel e confere a captura inteira.
 
 ## Contrato dos shaders traduzidos (plano B)
 
@@ -1038,11 +1159,11 @@ fetch constant (o código do D3D usa "da fetch constant" nesses campos).
 - cache de samplers: tudo da fetch constant que é estado de sampler: filtros, endereçamento (clamp/wrap/mirror),
   cor de borda, anisotropia, mip mínimo/máximo e o LOD bias da fetch constant (palavra 4, bits 12..21, /32), que vira
   `mipLodBias` do `VkSampler` (o Vulkan o soma ao LOD implícito e ao explícito);
-- cache de texturas: formato, sinal por componente (views `SNORM`/`UNORM`), gamma (formato `SRGB`, uma aproximação
-  da curva por partes do Xenos), o swizzle da fetch constant (`VkComponentMapping` da view), o tiling e o endian. O
-  `exp_adjust` da fetch constant e o modo de sinal "unsigned biased" (`2v - 1`) não cabem numa view: o Xenia os
-  aplica no shader, mas o contrato não leva dados por fetch constant além das tabelas de índice, então ficam como
-  limite do M3 (a Tarefa 19 deve registrá-los quando aparecerem);
+- cache de texturas: formato, sinal por componente (no M3, componente com sinal é erro; ver "Texturas"), gamma
+  (formato `SRGB`, uma aproximação da curva por partes do Xenos), o swizzle da fetch constant (`VkComponentMapping` da
+  view), o tiling e o endian. O `exp_adjust` da fetch constant e o modo de sinal "unsigned biased" (`2v - 1`) não
+  cabem numa view: o Xenia os aplica no shader, mas o contrato não leva dados por fetch constant além das tabelas de
+  índice, então ficam como limite do M3 (a Tarefa 19 os registra no stderr na primeira vez que aparecem);
 - textura ausente: o runtime põe na tabela uma textura nula que lê (0, 0, 0, 0) (o Xenia liga imagens nulas zeradas).
 
 **Limites conhecidos do M3** (falham alto, salvo onde indicado): exportação de memória; o tamanho de ponto exportado
@@ -1060,7 +1181,7 @@ Xenos (expoente 31 é inf/NaN aqui) (silencioso); componentes ausentes valem (0,
 Xenia preenche com 0 (silencioso); no texture fetch: `getCompTexLOD`, `getWeights`, `getBCF` e `getGradients` num VS
 falham; texturas empilhadas (dimensão 2 com dados 2D em camadas, `stacked`) são amostradas como 3D, o que filtra
 entre camadas e, com mips, reduz o número de camadas a cada nível, quando o certo seria um array 2D (silencioso no
-tradutor, que não vê a fetch constant: a Tarefa 19 deve registrar a primeira textura empilhada que o jogo usar,
+tradutor, que não vê a fetch constant: o cache de texturas da Tarefa 19 registra a primeira textura empilhada que o jogo usa,
 principalmente uma com mips, em vez de ficar calada); os filtros por instrução, `fetch_valid_only`,
 `exp_adjust` e o modo "unsigned biased" da fetch constant são ignorados (silencioso). A partir da Tarefa 15.9 o
 tradutor aceita todo o controle de fluxo, toda a ALU, o vertex fetch e o texture fetch.

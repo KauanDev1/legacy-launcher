@@ -20,6 +20,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -153,6 +154,9 @@ class Edram {
   Result<void> resolve(const RegisterFile& regs, const MemoryAccess& mem);
 
   std::size_t render_target_count() const;
+  // Called after a resolve wrote guest memory, with the physical range written (the texture cache invalidates the
+  // textures it covers: a texture rendered by a resolve is sampled in the same frame).
+  void set_write_observer(std::function<void(uint32_t phys, uint32_t size)> observer);
 
  private:
   struct Impl;

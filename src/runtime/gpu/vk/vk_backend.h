@@ -2,14 +2,16 @@
 // The Vulkan renderer behind gpu::Backend (plan B). Task 17 skeleton: a Device, a Presenter (SDL window swapchain,
 // or offscreen when headless) and swap(), which presents the guest's front buffer. resolve() goes to the EDRAM
 // emulation (edram.h, Task 18: host render targets, clears, tiled resolves into guest memory). Draws and shader
-// loads do nothing yet (textures and the draw path arrive in Tasks 19-21), so binds_shaders() stays false until
-// Task 20 binds the translated shaders.
+// loads do nothing yet (the draw path arrives in Tasks 20-21), so binds_shaders() stays false until Task 20 binds the
+// translated shaders.
 //
-// swap(phys, w, h) reads the front buffer straight from guest memory as a LINEAR w x h surface of 32-bit
-// big-endian A8R8G8B8 pixels (D3D's X8R8G8B8 front buffer, alpha forced to 255), converts it to RGBA8 on the CPU,
-// uploads it and presents it. The real front buffer is tiled (Xenos 2D tiling, format in the fetch constant VdSwap
-// writes): untiling and the format come with the texture path (Task 19), which replaces this copy. A front buffer
-// that is not mapped, or a size of 0 or above 8192, skips the frame with one warning on stderr.
+// swap(regs, phys, w, h) decodes the w x h front buffer with the texture loader (Task 19,
+// runtime/gpu/texture_format.h front_buffer_rgba8): fetch constant 0, which VdSwap wrote just before, gives its
+// format, tiling, endian swap, pitch and swizzle; alpha is forced to 255. The RGBA8 result is uploaded and presented.
+// A front buffer that cannot be decoded (unsupported format, not in guest memory) or a size of 0 or above 8192 skips
+// the frame with one warning per distinct reason on stderr. The texture and sampler caches (textures.h,
+// samplers.h) are created here; every swap starts a texture-cache frame and every resolve invalidates the textures
+// it overwrote.
 //
 // This header has no Vulkan types: the game's main.cpp includes it through the staged headers.
 #pragma once
@@ -46,7 +48,8 @@ class VkBackend final : public Backend {
   void load_shader(ShaderStage stage, uint32_t guest_addr, uint32_t dwords) override;
   void draw(const RegisterFile& regs, const DrawInfo& info, const ActiveShaders& shaders) override;
   void resolve(const RegisterFile& regs) override;
-  void swap(uint32_t frontbuffer_phys, uint32_t width, uint32_t height) override;
+  void swap(const RegisterFile& regs, uint32_t frontbuffer_phys, uint32_t width, uint32_t height) override;
+  uint64_t textures_created() const override;
   void wait_idle() override;
   // Task 20 binds the translated shaders; until then an untranslatable shader is only reported.
   bool binds_shaders() const override { return false; }

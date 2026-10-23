@@ -50,12 +50,12 @@ está inicializado na árvore de trabalho.
 Não há compilador para os shaders do jogo: o XenosRecomp, o DXC e a `lr_zstd` saíram no plano B (ADR 0005, M8), e o
 runtime traduz o microcódigo para SPIR-V ele mesmo (Tarefas 15.2 em diante). O único compilador de shaders é o
 `glslangValidator`, e só para o nosso GLSL, na compilação do launcher. Os shaders do renderizador (blit,
-limpeza, untile, resolve) são GLSL em `src/runtime/gpu/vk/shaders/`, compilado pelo `glslangValidator` do sistema
+limpeza, resolve) são GLSL em `src/runtime/gpu/vk/shaders/`, compilado pelo `glslangValidator` do sistema
 (`-V --target-env vulkan1.2`) na compilação do launcher (`cmake/LrGpuShaders.cmake`, função
 `lr_compile_gpu_shaders`) e embutido na `liblr_vulkan.a` como vetores `uint32_t` (`lr_gpu_shaders.h`/`.cpp`, gerados
 na árvore de build e nunca versionados; `kBuiltinShaders` lista todos). O `cmake` falha com a dica de instalação
-(`sudo pacman -S --needed glslang`) se a ferramenta faltar. `untile.comp` ainda é um placeholder
-mínimo (cópia linear com troca de endian; a Tarefa 19 traz o destile). Os `resolve_*.comp` da EDRAM (Tarefa 18)
+(`sudo pacman -S --needed glslang`) se a ferramenta faltar. O destile das texturas é feito na
+CPU (Tarefa 19, `runtime/gpu/texture_format.cpp`), então não há shader de destile. Os `resolve_*.comp` da EDRAM (Tarefa 18)
 compartilham `resolve_common.glsl` por `#include` (`GL_GOOGLE_include_directive`); todo `*.glsl` da pasta é
 dependência deles no build. O histórico do git guarda o fork do XenosRecomp (commits `0523eda`..`3b15c74`).
 

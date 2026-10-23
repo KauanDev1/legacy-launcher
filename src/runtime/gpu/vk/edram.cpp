@@ -360,6 +360,7 @@ struct Edram::Impl {
   uint64_t uses = 0;
   bool abandoned = false;  // a wait gave up (stop): its submission may still run, nothing more is submitted
   std::set<std::string> warned;
+  std::function<void(uint32_t phys, uint32_t size)> on_write;
 
   Impl(const Device& d, const std::atomic<bool>* s) : device(d), stop(s) {}
   Impl(const Impl&) = delete;
@@ -923,6 +924,7 @@ struct Edram::Impl {
     if (VkResult vr = vmaInvalidateAllocation(device.allocator(), staging_alloc, 0, len); vr != VK_SUCCESS)
       return vk_error("vmaInvalidateAllocation", vr);
     std::memcpy(guest_bytes, staging_map, len);
+    if (on_write) on_write(uint32_t(phys_lo), uint32_t(len));
     return {};
   }
 
@@ -956,5 +958,9 @@ Result<void> Edram::clear(const RegisterFile& regs, const MemoryAccess* mem) {
 Result<void> Edram::resolve(const RegisterFile& regs, const MemoryAccess& mem) { return impl_->resolve(regs, mem); }
 
 std::size_t Edram::render_target_count() const { return impl_->targets.size(); }
+
+void Edram::set_write_observer(std::function<void(uint32_t phys, uint32_t size)> observer) {
+  impl_->on_write = std::move(observer);
+}
 
 }  // namespace lr::gpu::vk

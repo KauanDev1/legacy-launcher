@@ -2,6 +2,8 @@
 // Hand-written stand-ins for recompiled guest functions.
 #include "ppc_recomp_shared.h"
 
+#include "runtime/gpu/texture_format.h"
+
 #include <cstdint>
 #include <utility>
 
@@ -362,10 +364,19 @@ constexpr uint32_t kFrames = 3;
 // Offsets inside the data block D (physical memory): write-back, interrupt counters, fence, VdSwap arguments.
 constexpr uint32_t kWriteBack = 0x00, kVblanks = 0x10, kCpInterrupts = 0x14, kSwapFence = 0x20, kFetch = 0x40,
                    kFrontPtr = 0x60, kWidth = 0x64, kHeight = 0x68;
-// The front buffer: its own physical block, kWidth x kHeight linear 32-bit pixels, every one kFrontColor (big-endian
-// A8R8G8B8: R 0x20, G 0x40, B 0xC0). A solid colour, so the Vulkan backend's linear copy (Task 17; the tiled
-// layout comes with Task 19) shows exactly this colour.
-constexpr uint32_t kFbWidth = 1280, kFbHeight = 720, kFrontColor = 0xFF2040C0;
+// The front buffer: its own physical block holding kFbWidth x kFbHeight 32-bit pixels in the Xenos 2D tiled layout
+// (rows allocated up to a multiple of 32, as D3D does), described by the fetch constant VdSwap gets: k_8_8_8_8,
+// endian 8in32, tiled, pitch 1280, swizzle ARGB (r = Z, g = Y, b = X, a = W: D3D's A8R8G8B8). Pixel (x, y) is the
+// big-endian word 0xFF000000 | (x & 0xFF) << 16 | (y & 0xFF) << 8 | 0xC0, so a screenshot shows R = x & 0xFF,
+// G = y & 0xFF, B = 0xC0 only when the front buffer is untiled correctly (Task 19).
+constexpr uint32_t kFbWidth = 1280, kFbHeight = 720, kFbAllocHeight = 736;
+constexpr uint32_t front_pixel(uint32_t x, uint32_t y) { return 0xFF000000u | ((x & 0xFFu) << 16) | ((y & 0xFFu) << 8) | 0xC0u; }
+// Fetch constant dwords 0, 2, 3 and 5 (dword 1 = format | endian << 6 | base address, written with the address).
+constexpr uint32_t kFetch0 = 2u | ((kFbWidth / 32u) << 22) | (1u << 31);  // texture, pitch 1280, tiled
+constexpr uint32_t kFetch1Format = 6u | (2u << 6);                          // k_8_8_8_8, 8in32
+constexpr uint32_t kFetch2 = (kFbWidth - 1) | ((kFbHeight - 1) << 13);
+constexpr uint32_t kFetch3 = (2u | (1u << 3) | (0u << 6) | (3u << 9)) << 1;  // swizzle ZYXW
+constexpr uint32_t kFetch5 = 1u << 9;                                        // 2D
 // Synthetic Xenos microcode (host-order dwords, written to the ring big-endian by PPC_STORE_U32): exec_end of one
 // ALU slot, `max` exporting c0 to the position (VS) or r0 to colour 0 (PS). The same words the test builder
 // (tests/support/xenos_shader_builder.h) assembles; test_gpu_shader_cache.cpp checks they still match.
@@ -384,8 +395,8 @@ PPC_FUNC(sub_82000480) {
   ctx.r3.u64 = 0;
 }
 
-// Entry point: VdInitializeEngines (must be 1); a 32 KiB ring, a data block and the front buffer (filled with
-// kFrontColor) from MmAllocatePhysicalMemoryEx and
+// Entry point: VdInitializeEngines (must be 1); a 32 KiB ring, a data block and the front buffer (filled with the
+// tiled front_pixel pattern) from MmAllocatePhysicalMemoryEx and
 // their physical addresses (MmGetPhysicalAddress); VdSetGraphicsInterruptCallback(sub_82000480, D + kVblanks),
 // VdInitializeRingBuffer(ring, 12), VdEnableRingBufferRPtrWriteBack(D, 6). Then kFrames frames, each with (frame 0
 // only) an INTERRUPT packet, two shader loads and a draw, then the 64 dwords VdSwap fills (10 arguments, the last
@@ -432,8 +443,10 @@ static void run(PPCContext& ctx, uint8_t* base, uint32_t frames) {
 
   const auto [ring, ring_phys] = alloc_phys(kRingDwords * 4, 0x82000408);
   const auto [d, d_phys] = alloc_phys(0x10000, 0x82000410);
-  const auto [fb, fb_phys] = alloc_phys(kFbWidth * kFbHeight * 4, 0x82000430);
-  for (uint32_t i = 0; i < kFbWidth * kFbHeight; ++i) PPC_STORE_U32(fb + i * 4, kFrontColor);
+  const auto [fb, fb_phys] = alloc_phys(kFbWidth * kFbAllocHeight * 4, 0x82000430);
+  for (uint32_t y = 0; y < kFbHeight; ++y)
+    for (uint32_t x = 0; x < kFbWidth; ++x)
+      PPC_STORE_U32(fb + lr::gpu::tiled_offset_2d(x, y, kFbWidth, 4), front_pixel(x, y));
 
   ctx.r3.u64 = 0x82000480;
   ctx.r4.u64 = d + kVblanks;
@@ -448,7 +461,12 @@ static void run(PPCContext& ctx, uint8_t* base, uint32_t frames) {
   ctx.lr = 0x82000424;
   __imp__VdEnableRingBufferRPtrWriteBack(ctx, base);
 
-  PPC_STORE_U32(d + kFetch + 4, fb);  // fetch constant base address = the front buffer (no warning)
+  PPC_STORE_U32(d + kFetch + 0, kFetch0);
+  PPC_STORE_U32(d + kFetch + 4, fb | kFetch1Format);  // base address = the front buffer (no warning)
+  PPC_STORE_U32(d + kFetch + 8, kFetch2);
+  PPC_STORE_U32(d + kFetch + 12, kFetch3);
+  PPC_STORE_U32(d + kFetch + 16, 0);
+  PPC_STORE_U32(d + kFetch + 20, kFetch5);
   PPC_STORE_U32(d + kFrontPtr, fb);
   PPC_STORE_U32(d + kWidth, kFbWidth);
   PPC_STORE_U32(d + kHeight, kFbHeight);

@@ -614,10 +614,12 @@ TEST_CASE("no Vulkan device gives a clear error", "[unit][gpu]") {
   }
 }
 
-// The fake GPU guest (sub_82000400) fills its 1280x720 front buffer with 0xFF2040C0 (big-endian A8R8G8B8) and swaps
-// three times; --screenshot-after 1 writes the first presented frame and exits 0. Headless (offscreen presenter),
-// lavapipe, validation layer on.
-TEST_CASE("clear-color frame is captured", "[unit][gpu][vulkan]") {
+// The fake GPU guest (sub_82000400) fills its 1280x720 front buffer, in the Xenos tiled layout, with pixel (x, y) =
+// big-endian A8R8G8B8 0xFF, x & 0xFF, y & 0xFF, 0xC0, describes it in fetch constant 0 (k_8_8_8_8, 8in32, tiled,
+// swizzle ARGB) and swaps three times; --screenshot-after 1 writes the first presented frame and exits 0. Every pixel
+// matches only when the front buffer is untiled with the fetch constant's format (Task 19). Headless (offscreen
+// presenter), lavapipe, validation layer on.
+TEST_CASE("tiled front buffer frame is captured", "[unit][gpu][vulkan]") {
   if (!has_icd()) SKIP("no Vulkan ICD installed");
   TempDir td;
   const fs::path png = td.path / "shots" / "frame1.png";
@@ -638,7 +640,8 @@ TEST_CASE("clear-color frame is captured", "[unit][gpu][vulkan]") {
   size_t wrong = 0;
   for (size_t i = 0; i < size_t(w) * size_t(h); ++i) {
     const stbi_uc* p = pixels + i * 4;
-    wrong += (p[0] == 0x20 && p[1] == 0x40 && p[2] == 0xC0 && p[3] == 0xFF) ? 0 : 1;
+    const size_t x = i % size_t(w), y = i / size_t(w);
+    wrong += (p[0] == (x & 0xFF) && p[1] == (y & 0xFF) && p[2] == 0xC0 && p[3] == 0xFF) ? 0 : 1;
   }
   CHECK(wrong == 0);
   if (wrong != 0) UNSCOPED_INFO("first pixel " << int(pixels[0]) << "," << int(pixels[1]) << "," << int(pixels[2]) << ","

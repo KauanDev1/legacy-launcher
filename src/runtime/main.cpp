@@ -204,7 +204,7 @@ class StallBackend final : public lr::gpu::Backend {
   void load_shader(lr::gpu::ShaderStage, uint32_t, uint32_t) override {}
   void draw(const lr::gpu::RegisterFile&, const lr::gpu::DrawInfo&, const lr::gpu::ActiveShaders&) override {}
   void resolve(const lr::gpu::RegisterFile&) override {}
-  void swap(uint32_t, uint32_t, uint32_t) override {
+  void swap(const lr::gpu::RegisterFile&, uint32_t, uint32_t, uint32_t) override {
     std::fprintf(stderr, "[gpu] test-stall: swap blocked\n");
     std::fflush(stderr);
     for (;;) std::this_thread::sleep_for(std::chrono::hours(1));

@@ -39,7 +39,9 @@ class Backend {
   virtual void draw(const RegisterFile& regs, const DrawInfo& info, const ActiveShaders& shaders) = 0;
   // A draw issued while RB_MODECONTROL.edram_mode is "copy": the RB_COPY_* registers describe an EDRAM resolve.
   virtual void resolve(const RegisterFile& regs) = 0;
-  virtual void swap(uint32_t frontbuffer_phys, uint32_t width, uint32_t height) = 0;
+  // LR_SWAP (VdSwap): present the front buffer. `regs` holds the swap's texture fetch constant 0 (format, tiling,
+  // endian and pitch of the front buffer; VdSwap wrote it just before, base address = frontbuffer_phys).
+  virtual void swap(const RegisterFile& regs, uint32_t frontbuffer_phys, uint32_t width, uint32_t height) = 0;
   virtual void wait_idle() = 0;
   // Host textures created so far, for the --trace-gpu per-second counters. Backends without textures report 0.
   virtual uint64_t textures_created() const { return 0; }

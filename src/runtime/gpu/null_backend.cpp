@@ -16,7 +16,7 @@ void NullBackend::draw(const RegisterFile& /*regs*/, const DrawInfo& info, const
 
 void NullBackend::resolve(const RegisterFile& /*regs*/) { ++resolve_calls; }
 
-void NullBackend::swap(uint32_t frontbuffer_phys, uint32_t width, uint32_t height) {
+void NullBackend::swap(const RegisterFile& /*regs*/, uint32_t frontbuffer_phys, uint32_t width, uint32_t height) {
   ++swap_calls;
   last_swap = Swap{frontbuffer_phys, width, height};
 }

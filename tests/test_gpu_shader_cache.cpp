@@ -184,7 +184,7 @@ struct CountingBackend final : lr::gpu::Backend {
     ++draws;
   }
   void resolve(const lr::gpu::RegisterFile&) override {}
-  void swap(uint32_t, uint32_t, uint32_t) override {}
+  void swap(const lr::gpu::RegisterFile&, uint32_t, uint32_t, uint32_t) override {}
   void wait_idle() override {}
   bool binds_shaders() const override { return binds_; }
 

@@ -12,6 +12,9 @@
 #include "runtime/gpu/vk/device.h"
 #include "runtime/gpu/vk/edram.h"
 #include "runtime/gpu/vk/presenter.h"
+#include "runtime/gpu/vk/samplers.h"
+#include "runtime/gpu/vk/textures.h"
+#include "runtime/gpu/texture_format.h"
 #include "vk_mem_alloc.h"
 
 namespace lr::gpu::vk {
@@ -37,6 +40,8 @@ struct VkBackend::Impl {
   Device device;
   std::optional<Presenter> presenter;
   std::unique_ptr<Edram> edram;  // render targets, clears and resolves (Task 18); destroyed before the device
+  std::unique_ptr<TextureCache> textures;  // Task 19; Task 20's draws bind through it
+  std::unique_ptr<SamplerCache> samplers;
   VkBackendOptions options;
 
   VkCommandPool pool = VK_NULL_HANDLE;
@@ -56,7 +61,8 @@ struct VkBackend::Impl {
   bool frame_written = false;
 
   uint64_t swaps = 0;
-  bool warned_size = false, warned_unmapped = false;
+  bool warned_size = false;
+  std::set<std::string> front_buffer_errors;
   std::set<std::string> resolve_errors;
   // request_stop (another thread): fence waits give up, swap() does nothing more.
   std::atomic<bool> stopping{false};
@@ -74,6 +80,8 @@ struct VkBackend::Impl {
     if (fence) vkDestroyFence(d, fence, nullptr);
     if (pool) vkDestroyCommandPool(d, pool, nullptr);
     edram.reset();
+    samplers.reset();
+    textures.reset();
     presenter.reset();  // then ~Device (vkDeviceWaitIdle first)
   }
 
@@ -138,20 +146,6 @@ struct VkBackend::Impl {
     return {};
   }
 
-  // Linear big-endian A8R8G8B8 at guest[0, w * h * 4) -> RGBA8 in the staging buffer (see the header).
-  void convert(const uint8_t* src, uint32_t w, uint32_t h) {
-    auto* dst = static_cast<uint8_t*>(staging_map);
-    const size_t pixels = size_t{w} * h;
-    for (size_t i = 0; i < pixels; ++i) {
-      const uint8_t* p = src + i * 4;  // A, R, G, B in memory order
-      dst[i * 4 + 0] = p[1];
-      dst[i * 4 + 1] = p[2];
-      dst[i * 4 + 2] = p[3];
-      dst[i * 4 + 3] = 0xFF;
-    }
-    vmaFlushAllocation(device.allocator(), staging_alloc, 0, VkDeviceSize{w} * h * 4);
-  }
-
   Result<void> upload(uint32_t w, uint32_t h) {
     const VkDevice d = device.device();
     vkResetCommandBuffer(cmd, 0);
@@ -193,39 +187,38 @@ struct VkBackend::Impl {
     return {};
   }
 
-  void swap(uint32_t phys, uint32_t w, uint32_t h) {
+  void swap(const RegisterFile& regs, uint32_t phys, uint32_t w, uint32_t h) {
     if (abandoned || stopping.load(std::memory_order_acquire)) return;
     const uint64_t n = ++swaps;
-    present_front_buffer(phys, w, h);
+    present_front_buffer(regs, phys, w, h);
+    if (textures) textures->begin_frame();
     if (options.screenshot_after != 0 && n == options.screenshot_after && !stopping.load(std::memory_order_acquire)) {
       Result<void> written = presenter->capture_png(options.screenshot_path);
       if (options.on_screenshot) options.on_screenshot(n, written);
     }
   }
 
-  void present_front_buffer(uint32_t phys, uint32_t w, uint32_t h) {
+  // The front buffer through the texture loader (untiled, endian-swapped, fetch constant 0's format and swizzle;
+  // runtime/gpu/texture_format.h front_buffer_rgba8), uploaded as RGBA8 and presented.
+  void present_front_buffer(const RegisterFile& regs, uint32_t phys, uint32_t w, uint32_t h) {
     if (w == 0 || h == 0 || w > kMaxFrontBufferSide || h > kMaxFrontBufferSide) {
       if (!warned_size) std::fprintf(stderr, "warning: [gpu] swap: front buffer size %ux%u skipped\n", w, h);
       warned_size = true;
       return;
     }
-    const uint64_t bytes = uint64_t{w} * h * 4;
-    // Checked against the guest address space only, not against the physical heap's committed pages: a front
-    // buffer on uncommitted memory would fault (exit 4, reported). Task 19 replaces this copy with the texture
-    // path, which reads the surface through the physical heap's committed ranges.
-    const std::optional<uint32_t> guest = options.mem.to_guest ? options.mem.to_guest(phys & 0x1FFFFFFFu) : std::nullopt;
-    if (!guest || *guest + bytes > options.mem.size) {
-      if (!warned_unmapped)
-        std::fprintf(stderr, "warning: [gpu] swap: front buffer 0x%08X (%ux%u) is not in guest memory; skipped\n",
-                     phys, w, h);
-      warned_unmapped = true;
+    auto rgba = front_buffer_rgba8(TextureFetch::from_registers(regs, 0), phys & pm4::kPhysicalMask, w, h, options.mem);
+    if (!rgba) {
+      if (front_buffer_errors.insert(rgba.error().message).second)
+        std::fprintf(stderr, "warning: [gpu] swap: front buffer 0x%08X skipped: %s\n", phys,
+                     rgba.error().message.c_str());
       return;
     }
     if (auto r = ensure_resources(w, h); !r) {
       std::fprintf(stderr, "error: [gpu] swap: %s\n", r.error().message.c_str());
       return;
     }
-    convert(options.mem.base + *guest, w, h);
+    std::memcpy(staging_map, rgba.value().data(), rgba.value().size());
+    vmaFlushAllocation(device.allocator(), staging_alloc, 0, VkDeviceSize{w} * h * 4);
     if (auto r = upload(w, h); !r) {
       if (!abandoned) std::fprintf(stderr, "error: [gpu] swap: %s\n", r.error().message.c_str());
       return;
@@ -244,6 +237,13 @@ Result<std::unique_ptr<VkBackend>> VkBackend::create(VkBackendOptions options) {
   LR_TRY(impl->init());
   LR_TRY_ASSIGN(edram, Edram::create(impl->device, &impl->stopping));
   impl->edram = std::move(edram);
+  LR_TRY_ASSIGN(textures, TextureCache::create(impl->device, options.mem, &impl->stopping));
+  impl->textures = std::move(textures);
+  LR_TRY_ASSIGN(samplers, SamplerCache::create(impl->device));
+  impl->samplers = std::move(samplers);
+  impl->edram->set_write_observer([cache = impl->textures.get()](uint32_t phys, uint32_t size) {
+    cache->invalidate_range(phys, size);
+  });
   LR_TRY_ASSIGN(presenter, Presenter::create(impl->device, options.sdl_window));
   impl->presenter.emplace(std::move(presenter));
   impl->presenter->set_stop_flag(&impl->stopping);
@@ -269,9 +269,11 @@ void VkBackend::resolve(const RegisterFile& regs) {
     std::fprintf(stderr, "error: [gpu] resolve: %s\n", r.error().message.c_str());
 }
 
-void VkBackend::swap(uint32_t frontbuffer_phys, uint32_t width, uint32_t height) {
-  if (impl_) impl_->swap(frontbuffer_phys, width, height);
+void VkBackend::swap(const RegisterFile& regs, uint32_t frontbuffer_phys, uint32_t width, uint32_t height) {
+  if (impl_) impl_->swap(regs, frontbuffer_phys, width, height);
 }
+
+uint64_t VkBackend::textures_created() const { return impl_ && impl_->textures ? impl_->textures->textures_created() : 0; }
 
 void VkBackend::wait_idle() {
   if (impl_) vkQueueWaitIdle(impl_->device.graphics_queue());

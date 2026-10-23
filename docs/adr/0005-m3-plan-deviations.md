@@ -256,3 +256,26 @@ Formato: o quê, por quê, custo se estiver errada.
   lido como erro de apresentação. Quem depender do código do sinal na saída (nada no projeto depende) passa a ver 0.
   O modo com janela (swapchain) não roda no contêiner, que não tem servidor gráfico. Ele só foi compilado, e a
   conferência fica para o ponto de controle com WSLg.
+
+### M11. Texturas (Tarefa 19): destile na CPU, hash por textura, `Result` no `get` e front buffer pelo fetch constant
+- O quê:
+  - O destile, a troca de endian e a conversão das texturas rodam na CPU (`runtime/gpu/texture_format.cpp`), não num
+    compute shader como dizia o spec (5.4). O placeholder `untile.comp` saiu.
+  - Invalidação por hash XXH3-64 dos bytes que cada textura cobre, comparado no primeiro uso de cada quadro, mais
+    `invalidate_range` para o que o resolve da EDRAM escreve; não por proteção de página.
+  - `TextureCache::get` devolve `Result<VkImageView>` (o plano escreve `VkImageView`): formato não suportado, sinal,
+    textura fora da memória ou grande demais são erros que nomeiam a textura, e as APIs públicas devolvem `Result`.
+  - `host_format(XenosFormat)` fica em `runtime/gpu/vk/textures.h`, não em `texture_format.h`: o núcleo da GPU não tem
+    tipos do Vulkan. O núcleo descreve o layout do host com `HostLayout`.
+  - `Backend::swap` recebe o arquivo de registradores (`swap(regs, phys, w, h)`): o front buffer usa o formato, o
+    tiling, o endian, o pitch e o swizzle do fetch constant 0 que o `VdSwap` escreve. O jogo falso agora descreve um
+    front buffer em tiles com um padrão por pixel; o teste `clear-color frame is captured` virou
+    `tiled front buffer frame is captured`.
+  - Mips empacotados implementados (não ficaram como limite). Formatos com sinal são erro até o jogo precisar.
+    `samplerAnisotropy` e `samplerMirrorClampToEdge` são ligados quando o dispositivo os tem, sem entrar no piso.
+- Por quê: o hash exige ler os bytes na CPU de qualquer jeito, e assim toda leitura guiada pelo convidado é conferida
+  num lugar só e testável sem dispositivo; proteção de página teria de conviver com o código recompilado escrevendo na
+  memória e com o handler de falhas (saída 4).
+- Custo se errado: texturas grandes custam tempo de CPU no envio e no hash de cada quadro em que são usadas (8192×8192
+  RGBA8 são 256 MiB); uma escrita da CPU entre dois draws do mesmo quadro só aparece no quadro seguinte. Se isso pesar,
+  o destile pode ir para um compute shader e o hash para menos vezes por quadro sem mudar a interface do cache.

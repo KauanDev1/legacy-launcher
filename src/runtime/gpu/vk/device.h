@@ -53,6 +53,13 @@ class Device {
   VmaAllocator allocator() const { return allocator_; }
   VkSurfaceKHR surface() const { return surface_; }  // VK_NULL_HANDLE when headless
   const std::string& device_name() const { return name_; }
+  // The physical device's limits (texture and sampler caches: image sizes, anisotropy, LOD bias, heap sizes).
+  const VkPhysicalDeviceLimits& limits() const { return limits_; }
+  // Optional features, enabled when the device has them (not part of the floor): samplerAnisotropy (without it the
+  // sampler cache never enables anisotropy) and samplerMirrorClampToEdge (without it the Xenos mirror-once clamp
+  // modes fall back to mirrored repeat).
+  bool sampler_anisotropy() const { return sampler_anisotropy_; }
+  bool mirror_clamp_to_edge() const { return mirror_clamp_to_edge_; }
 
  private:
   Device() = default;
@@ -67,6 +74,9 @@ class Device {
   std::uint32_t family_ = 0;
   VmaAllocator allocator_ = nullptr;
   std::string name_;
+  VkPhysicalDeviceLimits limits_{};
+  bool sampler_anisotropy_ = false;
+  bool mirror_clamp_to_edge_ = false;
 };
 
 }  // namespace lr::gpu::vk
