@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // The Vulkan renderer behind gpu::Backend (plan B). Task 17 skeleton: a Device, a Presenter (SDL window swapchain,
-// or offscreen when headless) and swap(), which presents the guest's front buffer. Draws, resolves and shader loads
-// do nothing yet (EDRAM, textures and the draw path arrive in Tasks 18-21), so binds_shaders() stays false until
+// or offscreen when headless) and swap(), which presents the guest's front buffer. resolve() goes to the EDRAM
+// emulation (edram.h, Task 18: host render targets, clears, tiled resolves into guest memory). Draws and shader
+// loads do nothing yet (textures and the draw path arrive in Tasks 19-21), so binds_shaders() stays false until
 // Task 20 binds the translated shaders.
 //
 // swap(phys, w, h) reads the front buffer straight from guest memory as a LINEAR w x h surface of 32-bit

@@ -660,8 +660,8 @@ O piso do dispositivo (`Device::create`) é o das restrições globais mais `max
 por `check_device_limits`, uma função pura sobre `VkPhysicalDeviceLimits`. Antes de destruir qualquer coisa, o
 `Device` espera o dispositivo ficar ocioso (`vkDeviceWaitIdle`).
 
-**Swap.** Por enquanto o `VkBackend` só apresenta: `draw`, `resolve` e `load_shader` não fazem nada (EDRAM,
-texturas e desenho chegam nas Tarefas 18 a 21), e `binds_shaders()` continua falso até a Tarefa 20. Em cada
+**Swap.** O `resolve` vai para a emulação da EDRAM (seção seguinte); `draw` e `load_shader` ainda não fazem nada
+(texturas e desenho chegam nas Tarefas 19 a 21), e `binds_shaders()` continua falso até a Tarefa 20. Em cada
 `swap(phys, w, h)` (o pacote `LR_SWAP` que o `VdSwap` escreve), ele lê o front buffer direto da memória do convidado
 como uma superfície **linear** de `w × h` pixels de 32 bits A8R8G8B8 big-endian (o X8R8G8B8 do D3D; alfa vira 255),
 converte para RGBA8 na CPU, envia para uma imagem `R8G8B8A8_UNORM` e a entrega ao `Presenter`. O front buffer real é
@@ -704,6 +704,75 @@ Os handlers de sinal do próprio SDL ficam desligados (`SDL_HINT_NO_SIGNAL_HANDL
 imprime `ok<TAB><nome>` ou `missing<TAB><mensagem><TAB><dica>`. O `doctor` a roda num processo à parte (um driver que
 trava não derruba o launcher) e informa o dispositivo; sem um, avisa nomeando a peça que falta, mas não falha: a
 instalação funciona sem GPU, só o jogo se recusa a iniciar.
+
+## EDRAM (M3, Tarefa 18)
+
+`runtime/gpu/vk/edram.h` (`Edram`). A EDRAM do Xenos tem 10 MiB: 2048 tiles de 80×16 amostras de 32 bits (5120
+bytes por tile). O convidado põe nela as superfícies de cor e de profundidade: base em tiles (`RB_COLOR*_INFO`,
+`RB_DEPTH_INFO`, bits 0-10; o endereçamento dá a volta em 2048), pitch em pixels e MSAA (`RB_SURFACE_INFO`). Um pixel
+2x são 1×2 amostras, um 4x são 2×2, e uma superfície de 64 bits ocupa o dobro de tiles. Semântica conferida no
+`xenos.h`, `registers.h`, `draw_util.cc` e `render_target_cache` do Xenia (só referência, nada copiado).
+
+**Render targets do host.** Cada superfície vira uma imagem Vulkan com a chave (base, pitch, formato, MSAA)
+(`RenderTargetKey`, `render_target_key`). A largura é o pitch. A altura é a que a EDRAM inteira comporta nesse pitch,
+até 8192 linhas. A imagem nasce zerada e fica sempre em `VK_IMAGE_LAYOUT_GENERAL`; cada uma tem um render pass de um
+anexo (load/store) e um framebuffer, que a Tarefa 20 usa para desenhar. Ficam no máximo 8: a usada há mais tempo é
+destruída. Duas chaves diferentes nunca compartilham conteúdo, mesmo cobrindo os mesmos tiles: não há transferência
+de posse entre superfícies nem o caminho preciso por interlock (o spec deixa os dois para quando um efeito precisar).
+
+| Formato do convidado | Imagem do host |
+| --- | --- |
+| `k_8_8_8_8` (e `_GAMMA`, guardado como está) | `R8G8B8A8_UNORM` |
+| `k_2_10_10_10` (e `_AS_10_10_10_10`) | `A2B10G10R10_UNORM_PACK32` |
+| `k_16_16_FLOAT` / `k_16_16_16_16_FLOAT` | `R16G16_SFLOAT` / `R16G16B16A16_SFLOAT` |
+| `k_32_FLOAT` / `k_32_32_FLOAT` | `R32_SFLOAT` / `R32G32_SFLOAT` |
+| `D24S8` | `D24_UNORM_S8_UINT`, ou `D32_SFLOAT_S8_UINT` sem suporte |
+| `D24FS8` (profundidade 20e4, [0, 2)) | `D32_SFLOAT_S8_UINT`, com [0, 2) guardado como [0, 1) |
+
+Os outros formatos de cor (`k_16_16`, `k_16_16_16_16`, `k_2_10_10_10_FLOAT`) dão erro `InvalidFormat` no `bind`. MSAA
+2x usa uma imagem 2x do host quando há. Senão usa 4x (o lavapipe só tem 1, 4 e 8): a amostra `s` do convidado cobre
+as amostras `2s` e `2s+1` do host (metades de cima e de baixo do pixel no padrão 4x), e a leitura usa `2s`
+(`RenderTarget::host_sample`, `host_sample_mask`).
+
+**Retângulo.** O Direct3D 9 desenha o resolve como três vértices `k_32_32_FLOAT` no vertex fetch constant 0.
+`resolve_rect` usa a caixa deles, com o meio pixel desfeito quando `PA_SU_VTX_CNTL.pix_center` é 0, a regra
+top-left em 1/256 de pixel e o `PA_SC_WINDOW_OFFSET` quando `PA_SU_SC_MODE_CNTL.vtx_window_offset_enable`. Sem esse
+fetch constant (ou fora da memória), usa a janela de scissor. Nos dois casos o resultado é recortado pelo scissor da
+janela (deslocado pelo offset, salvo `window_offset_disable`), alargado para múltiplos de 8 e limitado ao pitch.
+
+**Limpeza.** `clear(regs)` e o fim de todo resolve leem `RB_COPY_CONTROL`. Com `color_clear_enable` (e
+`copy_src_select` de cor), limpam o alvo de cor com `RB_COLOR_CLEAR` (os 32 bits de baixo; `RB_COLOR_CLEAR_LO`
+traz os de cima num alvo de 64 bits). Com `depth_clear_enable`, limpam a profundidade com `RB_DEPTH_CLEAR` (palavra
+da EDRAM: profundidade nos bits 8-31, estêncil nos 0-7). A limpeza vale só para o retângulo, com
+`vkCmdClearAttachments`.
+
+**Resolve.** `resolve(regs, mem)` (o `VkBackend::resolve` de um draw com `edram_mode` 6) copia quando
+`copy_command` é 0 (raw) ou 1 (convert) e depois limpa. Os comandos 2 e 3 não copiam nada. A origem é o alvo de
+cor `copy_src_select` 0-3 ou a profundidade (4). O destino é `RB_COPY_DEST_BASE`, um endereço físico, com o pitch
+de `RB_COPY_DEST_PITCH` arredondado para 32. `RB_COPY_DEST_INFO` dá o formato (`k_8_8_8_8`, `k_2_10_10_10`,
+`k_16_16_FLOAT`, `k_16_16_16_16_FLOAT`, `k_32_FLOAT`, `k_32_32_FLOAT` e as variantes `_A`/`_AS_16_16_16_16`), o
+endian (`Endian128` 0-4), a troca vermelho/azul e o expoente. Uma profundidade sai como a palavra da EDRAM
+(`d24 << 8 | estêncil`, unorm ou 20e4), seja qual for o formato pedido. As amostras seguem `copy_sample_select`:
+uma amostra, ou a média de 01, 23 ou 0123. O valor é ajustado ao modo de MSAA, e a profundidade nunca faz média
+(usa a primeira amostra do grupo).
+
+Destino 3D/array, endian 5 ou mais e formato sem empacotamento pulam a cópia com um aviso, mas a limpeza acontece.
+O endereço do pixel (x, y) é o tiling 2D do Xenos (a fórmula está em `resolve_common.glsl`), com a mesma origem do
+alvo e do destino, como no D3D9. A cópia é um compute shader (`resolve_{color,depth}[_ms].comp`). Ele escreve num
+buffer que espelha a faixa da memória do convidado tocada (os macrotiles 32×32 inteiros, do primeiro ao último).
+Esse buffer chega preenchido com os bytes atuais do convidado e volta inteiro depois. Cada operação é gravada,
+enviada e esperada na hora; a Tarefa 20 junta isso ao fluxo de desenho.
+
+**Segurança.** Base, pitch e tamanho vêm do convidado. A faixa é limitada ao tamanho da memória do convidado, ao
+espaço físico de 512 MiB e a 64 MiB por resolve, e precisa mapear linearmente. Uma base fora da memória descarta a
+cópia. O shader confere cada escrita contra o tamanho do buffer. Escritas fora da faixa são descartadas com um aviso
+(uma vez por mensagem), nunca escritas fora. O teste `resolve never writes outside guest memory` cobre isso.
+
+Testes (`tests/test_gpu_edram.cpp`, `[unit][vulkan]`, com a camada de validação): `clear then resolve writes the
+tiled guest surface`, `2x MSAA resolve averages samples` e `depth resolve format` comparam a memória inteira do
+convidado com a referência de tiling em CPU de `tests/support/xenos_tiling.h`. Essa referência só existe nos testes
+e é escrita de outro jeito que o shader (campo a campo, não por somas), para um erro em qualquer um dos dois
+aparecer. A Tarefa 19 a reaproveita.
 
 ## Contrato dos shaders traduzidos (plano B)
 

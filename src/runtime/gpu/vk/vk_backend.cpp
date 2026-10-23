@@ -5,10 +5,12 @@
 #include <cstdio>
 #include <cstring>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 
 #include "runtime/gpu/vk/device.h"
+#include "runtime/gpu/vk/edram.h"
 #include "runtime/gpu/vk/presenter.h"
 #include "vk_mem_alloc.h"
 
@@ -34,6 +36,7 @@ struct VkBackend::Impl {
   // Declaration order is destruction order reversed: the presenter goes before the device it uses.
   Device device;
   std::optional<Presenter> presenter;
+  std::unique_ptr<Edram> edram;  // render targets, clears and resolves (Task 18); destroyed before the device
   VkBackendOptions options;
 
   VkCommandPool pool = VK_NULL_HANDLE;
@@ -54,6 +57,7 @@ struct VkBackend::Impl {
 
   uint64_t swaps = 0;
   bool warned_size = false, warned_unmapped = false;
+  std::set<std::string> resolve_errors;
   // request_stop (another thread): fence waits give up, swap() does nothing more.
   std::atomic<bool> stopping{false};
   bool abandoned = false;  // an upload wait gave up: its fence may still be pending, nothing more is submitted
@@ -69,6 +73,7 @@ struct VkBackend::Impl {
     if (staging) vmaDestroyBuffer(device.allocator(), staging, staging_alloc);
     if (fence) vkDestroyFence(d, fence, nullptr);
     if (pool) vkDestroyCommandPool(d, pool, nullptr);
+    edram.reset();
     presenter.reset();  // then ~Device (vkDeviceWaitIdle first)
   }
 
@@ -237,6 +242,8 @@ Result<std::unique_ptr<VkBackend>> VkBackend::create(VkBackendOptions options) {
   LR_TRY_ASSIGN(device, Device::create(dopts));
   auto impl = std::make_unique<Impl>(std::move(device));
   LR_TRY(impl->init());
+  LR_TRY_ASSIGN(edram, Edram::create(impl->device, &impl->stopping));
+  impl->edram = std::move(edram);
   LR_TRY_ASSIGN(presenter, Presenter::create(impl->device, options.sdl_window));
   impl->presenter.emplace(std::move(presenter));
   impl->presenter->set_stop_flag(&impl->stopping);
@@ -253,7 +260,14 @@ VkBackend::~VkBackend() = default;
 
 void VkBackend::load_shader(ShaderStage, uint32_t, uint32_t) {}
 void VkBackend::draw(const RegisterFile&, const DrawInfo&, const ActiveShaders&) {}
-void VkBackend::resolve(const RegisterFile&) {}
+void VkBackend::resolve(const RegisterFile& regs) {
+  if (!impl_ || impl_->abandoned || impl_->stopping.load(std::memory_order_acquire)) return;
+  // A failure is reported once per distinct message; guest-side problems (unsupported formats, destinations
+  // outside guest memory) are warnings inside Edram and do not fail.
+  auto r = impl_->edram->resolve(regs, impl_->options.mem);
+  if (!r && r.error().code != ErrorCode::Cancelled && impl_->resolve_errors.insert(r.error().message).second)
+    std::fprintf(stderr, "error: [gpu] resolve: %s\n", r.error().message.c_str());
+}
 
 void VkBackend::swap(uint32_t frontbuffer_phys, uint32_t width, uint32_t height) {
   if (impl_) impl_->swap(frontbuffer_phys, width, height);

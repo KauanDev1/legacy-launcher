@@ -38,10 +38,10 @@ target_include_directories(lr_runtime_core SYSTEM PRIVATE ${LR_STB_INCLUDE})
 target_include_directories(lr_runtime_core_staged SYSTEM PRIVATE ${LR_STB_INCLUDE})
 
 # --- Vulkan backend (lr::gpu::vk): our wrapper over volk + VMA (lr_vulkan_thirdparty, root CMakeLists.txt) ---
-# Device, Presenter and VkBackend. Consumers also link lr_runtime_core (VkBackend implements gpu::Backend and the
+# Device, Presenter, Edram (render targets, clears, resolves) and VkBackend. Consumers also link lr_runtime_core (VkBackend implements gpu::Backend and the
 # presenter writes PNGs through gpu/screenshot.cpp); lr_vulkan does not link it itself, so a consumer can take it
 # --whole-archive (the game, lr_tests, lr_fake_game).
-set(LR_VULKAN_SOURCES gpu/vk/device.cpp gpu/vk/presenter.cpp gpu/vk/vk_backend.cpp)
+set(LR_VULKAN_SOURCES gpu/vk/device.cpp gpu/vk/presenter.cpp gpu/vk/vk_backend.cpp gpu/vk/edram.cpp)
 add_library(lr_vulkan STATIC ${LR_VULKAN_SOURCES})
 target_include_directories(lr_vulkan PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(lr_vulkan PUBLIC lr_common lr_vulkan_thirdparty)
@@ -55,7 +55,10 @@ lr_compile_gpu_shaders(lr_vulkan
   ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/blit.frag
   ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/clear.frag
   ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/untile.comp
-  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/resolve_copy.comp)
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/resolve_color.comp
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/resolve_color_ms.comp
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/resolve_depth.comp
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/shaders/resolve_depth_ms.comp)
 lr_configure_target(lr_vulkan)
 
 # --- Staging variant linked by the game template (share/legacyrecomp/runtime/lib/liblr_vulkan.a, ruling R-stage) ---

@@ -35,6 +35,12 @@ inline constexpr uint32_t kShaderConstantLoopCount = 32;
 //    are the R6xx context byte offsets (0x28818, 0x28C08, 0x28400..0x2840C) mapped as (offset - 0x28000) / 4 +
 //    0x2000; SQ_CONTEXT_MISC and SQ_INTERPOLATOR_CNTL sit right after SQ_PROGRAM_CNTL on Xenos (they differ from
 //    R6xx), as in Xenia register_table.inc.
+//  - The Task 18 (EDRAM) additions RB_DEPTH_CLEAR, RB_COLOR_CLEAR, RB_COLOR_CLEAR_LO and RB_COPY_SURFACE_SLICE
+//    continue the R6xx/Xenos copy block that starts at RB_COPY_CONTROL 0x2318 (0x231C is RB_HIZ_CLEAR), indices
+//    cross-checked against Xenia register_table.inc. RB_COLOR_CLEAR holds the low 32 bits of the clear value
+//    (the whole value of a 32bpp target), RB_COLOR_CLEAR_LO the high 32 bits of a 64bpp one (the register names
+//    are the hardware's; Xenia render_target_cache combines them the same way). RB_DEPTH_CLEAR is the EDRAM depth
+//    word: depth in bits 8-31, stencil in bits 0-7.
 // The lookup table in registers.cpp sorts them at compile time, so the order here is free.
 #define LR_GPU_REGISTERS(X)                                                                                  \
   /* Command processor */                                                                                    \
@@ -50,6 +56,8 @@ inline constexpr uint32_t kShaderConstantLoopCount = 32;
   X(RB_COLOR2_INFO, 0x2004) X(RB_COLOR3_INFO, 0x2005)                                                        \
   X(RB_COPY_CONTROL, 0x2318) X(RB_COPY_DEST_BASE, 0x2319) X(RB_COPY_DEST_PITCH, 0x231A)                      \
   X(RB_COPY_DEST_INFO, 0x231B)                                                                               \
+  X(RB_DEPTH_CLEAR, 0x231D) X(RB_COLOR_CLEAR, 0x231E) X(RB_COLOR_CLEAR_LO, 0x231F)                           \
+  X(RB_COPY_SURFACE_SLICE, 0x2323)                                                                           \
   X(RB_DEPTHCONTROL, 0x2200) X(RB_BLENDCONTROL0, 0x2201) X(RB_COLORCONTROL, 0x2202)                          \
   X(RB_BLENDCONTROL1, 0x2209) X(RB_BLENDCONTROL2, 0x220A) X(RB_BLENDCONTROL3, 0x220B)                        \
   X(RB_MODECONTROL, 0x2208)                                                                                  \

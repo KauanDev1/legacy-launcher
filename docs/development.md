@@ -54,9 +54,10 @@ limpeza, untile, resolve) são GLSL em `src/runtime/gpu/vk/shaders/`, compilado 
 (`-V --target-env vulkan1.2`) na compilação do launcher (`cmake/LrGpuShaders.cmake`, função
 `lr_compile_gpu_shaders`) e embutido na `liblr_vulkan.a` como vetores `uint32_t` (`lr_gpu_shaders.h`/`.cpp`, gerados
 na árvore de build e nunca versionados; `kBuiltinShaders` lista todos). O `cmake` falha com a dica de instalação
-(`sudo pacman -S --needed glslang`) se a ferramenta faltar. `untile.comp` e `resolve_copy.comp` são placeholders
-mínimos (cópia linear com troca de endian, cópia de palavras); as Tarefas 18 e 19 trazem a lógica de EDRAM e de
-tiling. O histórico do git guarda o fork do XenosRecomp (commits `0523eda`..`3b15c74`).
+(`sudo pacman -S --needed glslang`) se a ferramenta faltar. `untile.comp` ainda é um placeholder
+mínimo (cópia linear com troca de endian; a Tarefa 19 traz o destile). Os `resolve_*.comp` da EDRAM (Tarefa 18)
+compartilham `resolve_common.glsl` por `#include` (`GL_GOOGLE_include_directive`); todo `*.glsl` da pasta é
+dependência deles no build. O histórico do git guarda o fork do XenosRecomp (commits `0523eda`..`3b15c74`).
 
 Vulkan nos testes: os testes `[vulkan]` rodam no lavapipe do contêiner e fazem `SKIP` sem driver. O jogo liga a camada
 de validação com `LR_VULKAN_VALIDATION=1`; os testes do jogo falso com Vulkan usam isso e falham com qualquer

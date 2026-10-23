@@ -23,10 +23,14 @@ function(lr_compile_gpu_shaders target)
   set(names "")
   foreach(src IN LISTS ARGN)
     get_filename_component(name "${src}" NAME)
+    # Shared GLSL a shader pulls in with #include (GL_GOOGLE_include_directive, resolved next to the source):
+    # every *.glsl of its directory is a dependency, so editing one rebuilds the shaders that include it.
+    get_filename_component(src_dir "${src}" DIRECTORY)
+    file(GLOB includes CONFIGURE_DEPENDS "${src_dir}/*.glsl")
     set(spv "${out_dir}/${name}.spv")
     add_custom_command(OUTPUT "${spv}"
       COMMAND "${LR_GLSLANG_VALIDATOR}" -V --target-env vulkan1.2 -o "${spv}" "${src}"
-      DEPENDS "${src}" "${LR_GLSLANG_VALIDATOR}"
+      DEPENDS "${src}" ${includes} "${LR_GLSLANG_VALIDATOR}"
       COMMENT "glslangValidator ${name}"
       VERBATIM)
     list(APPEND spvs "${spv}")
