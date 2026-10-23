@@ -663,8 +663,9 @@ piso): `samplerAnisotropy` e `samplerMirrorClampToEdge` (texturas), `geometrySha
 `fillModeNonSolid` (modos de polígono de `PA_SU_SC_MODE_CNTL`), `independentBlend` (blend por alvo) e a extensão
 `VK_EXT_provoking_vertex` com `provokingVertexLast` (interpolantes flat do último vértice).
 
-**Swap.** O `resolve` vai para a emulação da EDRAM (seção "EDRAM"); `draw` e `load_shader` ainda não fazem nada
-(o desenho chega nas Tarefas 20 e 21), e `binds_shaders()` continua falso até a Tarefa 20. Em cada
+**Swap.** O `resolve` vai para a emulação da EDRAM (seção "EDRAM") e o `draw` para o fluxo de desenho (seção
+"Desenho"); `binds_shaders()` é verdadeiro, então um shader que o tradutor não aceita é fatal (saída 5). O swap envia
+e espera o fluxo de comandos do quadro antes de apresentar. Em cada
 `swap(regs, phys, w, h)` (o pacote `LR_SWAP` que o `VdSwap` escreve), o front buffer de `w × h` é decodificado pelo
 carregador de texturas (seção "Texturas", `front_buffer_rgba8`): o fetch constant 0, que o `VdSwap` escreveu logo
 antes, dá o formato, o tiling, o endian, o pitch e o swizzle; o endereço é o físico do pacote. O resultado vira RGBA8
@@ -922,12 +923,14 @@ sempre normalizadas. O `SamplerCache` cria um `VkSampler` por estado distinto e 
   descritor é regravado enquanto um command buffer que o usa está pendente;
 - resolvido: filtro linear num formato sem `VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT` vira nearest
   (`filter_linear`, `nearest_only`);
-- `bind` de toda fetch constant usada a cada draw (os registradores mudam entre draws; `heap_index` só guarda o último
-  `bind`);
-- erro de `bind` (formato não suportado, com sinal, fora da memória, grande demais) vira `guest_fatal` (saída 5);
-- filtros por instrução do `tfetch` (`mag/min/mip/aniso_filter` diferentes de "da fetch constant") hoje são ignorados
-  pelo tradutor; se o jogo os usar, o sampler precisa da sobreposição;
-- opcionalmente, refazer o hash quando a fetch constant de uma textura é reescrita no meio do quadro (escrita da CPU
+- resolvido: o draw faz `bind` de toda fetch constant que os dois shaders usam, a cada draw, e escreve os índices nas
+  tabelas do bloco compartilhado;
+- resolvido: erro de `bind` (formato não suportado, com sinal, fora da memória, grande demais) vira `guest_fatal`
+  (saída 5) nomeando a fetch constant;
+- limite do M3: filtros por instrução do `tfetch` (`mag/min/mip/aniso_filter` diferentes de "da fetch constant")
+  continuam ignorados pelo tradutor (o `ShaderInfo` não os leva); se o jogo os usar, o sampler precisa da
+  sobreposição;
+- não feito (opcional), refazer o hash quando a fetch constant de uma textura é reescrita no meio do quadro (escrita da CPU
   entre draws do mesmo quadro).
 
 Testes (`tests/test_gpu_textures.cpp`): `tiled offset matches known values`, `tiled 3D offset matches hand-worked
@@ -967,6 +970,108 @@ destruição, `drain()` espera o dispositivo ficar ocioso e roda o trabalho adia
 **Decisão (M3).** O envio espera a fence na hora, em vez de manter quadros em voo: o resolve precisa do resultado na
 CPU de qualquer jeito, e o jogo costuma resolver uma ou mais vezes por quadro. Quadros em voo (vários command buffers,
 anel de envio por quadro e reciclagem de descritores pela fence de cada um) ficam para quando o desempenho pedir.
+
+## Desenho (M3, Tarefa 20)
+
+`runtime/gpu/vk/draw.h` (`DrawPath`) e `pipelines.h` (`PipelineCache`). Um draw do convidado (`DRAW_INDX`/`DRAW_INDX_2`
+com `RB_MODECONTROL.edram_mode` 4 ou 5) vira um draw Vulkan com os shaders traduzidos, seguindo o contrato abaixo.
+Semântica conferida no `draw_util.cc`, `primitive_processor.cc`, `vulkan_pipeline_cache.cc`,
+`vulkan_command_processor.cc` e `xenos.h` do Xenia (só referência, nada copiado).
+
+**Ordem de um draw.** Primeiro as texturas e os samplers (o cache de texturas pode enviar o fluxo), depois os render
+targets da EDRAM, o pipeline, as cópias para o anel de envio e por fim a gravação. Nada do anel é reservado antes de
+um possível envio, e nenhum ponteiro de `RenderTarget` atravessa um `bind` que possa despejá-lo (no máximo cinco
+chaves por draw; a EDRAM guarda oito e despeja a usada há mais tempo).
+
+**Alvos.** O slot de cor i entra quando o PS escreve `oC<i>` e `RB_COLOR_MASK` mantém algum componente dele; a
+profundidade/estêncil entra quando `RB_DEPTHCONTROL` liga o teste de z ou de estêncil. No modo 5 (só profundidade) o PS
+não é usado e o pipeline não tem estágio de fragmento. Sem nenhum alvo, com `RB_SURFACE_INFO` de pitch 0, sem VS, com
+tipo de primitiva 0 ou viewport ou scissor vazios, o draw é pulado (com um aviso único quando é estranho). O render
+pass tem o anexo de cor i no slot i (`VK_ATTACHMENT_UNUSED` nos outros, então a location i do PS cai no slot i), tudo
+em `GENERAL` com load/store, como os passes da EDRAM. O framebuffer é cacheado pelas views e esquecido (destruição
+adiada) quando a EDRAM despeja um alvo.
+
+**Anel de envio.** Um buffer visível pelo host com endereço de dispositivo, de 8 MiB que dobram até 512 MiB quando um
+draw pede mais; quando enche, o fluxo é enviado e o anel recomeça (zerado a cada envio concluído, com a GPU parada).
+Por draw: as 256 constantes float do VS e as 256 do PS (registradores 0..255 e 256..511, como estão), o bloco
+compartilhado (índices dos heaps de textura e sampler de cada fetch constant usada, 0 nas outras; booleanos; laços;
+`ndc_scale`/`ndc_offset`; `RB_ALPHA_REF`; as flags do VTE, bits 8..10 de `PA_CL_VTE_CNTL`; `VGT_INDX_OFFSET`;
+`VGT_MIN/MAX_VTX_INDX` com 24 bits), a tabela de vertex fetch e os índices. Push constants: os quatro endereços.
+
+**Vertex fetch.** Para cada slot em `vfetch_slots` do VS, a fetch constant (registradores
+`SHADER_CONSTANT_FETCH_00_0 + 2·slot`): tipo 3 (vértice), base física nos bits 2..31 da palavra 0, tamanho em dwords
+nos bits 2..25 da palavra 1 e endian nos bits 0..1. A faixa é copiada crua (o shader troca o endian) para um endereço
+do anel alinhado a 16, e a entrada da tabela recebe {endereço, tamanho em **bytes**, endian}. O tamanho é cortado no
+fim da alocação física (`MemoryAccess::allocation_end`) e da memória do convidado, e a faixa precisa mapear
+linearmente. Base fora da memória do convidado ou fora de qualquer alocação física é fatal e nomeia o slot e o
+endereço (`vertex fetch constant 3: base physical address 0x00380000 (96 bytes) is not in a physical allocation`).
+Slots não usados e fetch constants de outro tipo (aviso único) têm tamanho 0 e um endereço válido.
+
+**Índices.** `min(index_count, VGT_DMA_SIZE.num_words)` índices de 2 ou 4 bytes em `VGT_DMA_BASE` (aviso único quando
+o draw pede mais que o buffer, como o Xenia), conferidos como acima, mas inteiros: um buffer fora da memória ou da
+alocação é fatal. Cada palavra de 32 bits é lida em little-endian e trocada pelo `swap_mode` (`8in16`, `8in32`,
+`16in32`); índices de 32 bits ficam com os 24 bits do hardware. Todos vão para o anel como `uint32`, então um 0xFFFF
+legítimo de 16 bits nunca vira reinício. Com `PA_SU_SC_MODE_CNTL.multi_prim_ib_ena`, um índice igual a
+`VGT_MULTI_PRIM_IB_RESET_INDX` (24 bits; os 16 de baixo com índices de 16 bits) vira 0xFFFFFFFF e o pipeline liga
+`primitiveRestartEnable`; um reinício encontrado numa lista é fatal (o Vulkan 1.2 não reinicia listas), e uma lista com
+o bit ligado mas sem índice de reinício desenha normalmente. O deslocamento e o limite mín./máx. ficam no shader
+(`r0.x`), então o draw usa `vertexOffset = 0`; draws sem índice usam `vkCmdDraw`.
+
+**Primitivas.** Listas, faixas e leques de pontos, linhas e triângulos vão direto. Lista de quads: índices
+(a, b, c), (a, c, d) por quad (gerados num draw sem índice). Lista de retângulos: lista de triângulos com o geometry
+shader `rect_list.geom`, que emite cada retângulo como uma faixa de dois triângulos com o quarto canto (posição e os 16
+interpoladores) em v_a + v_b − v_r, sendo r o vértice oposto à aresta mais longa, mantendo o sentido do triângulo do
+convidado. Exige `geometryShader` (sem ele, um draw de retângulos é fatal). Qualquer outro tipo é fatal e nomeia o
+tipo (`primitive type 0x0C (line loop) is not supported`).
+
+**Viewport e NDC** (`viewport_info`, semântica do `GetHostViewportInfo` do Xenia): escala e deslocamento de
+`PA_CL_VPORT_*` (1 e 0 quando o bit de `PA_CL_VTE_CNTL` está desligado; valores não finitos viram esses), mais o
+`PA_SC_WINDOW_OFFSET` com `vtx_window_offset_enable` e meio pixel quando `PA_SU_VTX_CNTL.pix_center` é 0 (centro do
+Direct3D 9 nos inteiros). Com recorte, a viewport é ajustada a pixels inteiros dentro do alvo e `ndc_scale`/
+`ndc_offset` levam o resto; com `PA_CL_CLIP_CNTL.clip_disable`, cobre o alvo inteiro. Z: `dx_clip_space_def` usa
+[0, w] como está; sem ele, [−w, w] é levado a [0, w]; a faixa de profundidade é a do z da viewport, limitada a [0, 1]
+([0, 1] quando o PS escreve a profundidade) e dividida por 2 num alvo D24FS8. O Y não é invertido: o `YSCALE`
+negativo do convidado e o framebuffer do Vulkan, com y para baixo, concordam. Scissor (`scissor_rect`): o da janela,
+com o deslocamento salvo `window_offset_disable`, cortado pelo `PA_SC_SCREEN_SCISSOR` e pelo alvo.
+
+**Estado** (`PipelineKey`: chaves dos dois shaders, formatos e MSAA dos alvos, máscara de amostras, topologia,
+reinício, retângulos, cull, sentido, modo de polígono, depth bias ligado, vértice provocante, profundidade, estêncil,
+blend por alvo e a constante de especialização do alpha test). Cull só em triângulos (`cull_front`/`cull_back`);
+`face` 1 é horário. Modo de polígono duplo (`poly_mode` 1): o tipo mais especial entre as faces não descartadas
+(pontos, linhas, triângulos), com `fillModeNonSolid`. Depth bias dinâmico: a face da frente, ou a de trás quando a da
+frente é descartada ou não tem offset, e `poly_offset_para_enable` para linhas e pontos; constante × 2^24 (fatores
+D3D10 do Xenia) e inclinação ÷ 16 (subpixels). Profundidade: com `z_enable`, teste, escrita e função de
+`RB_DEPTHCONTROL`; sem, nem teste nem escrita. Estêncil: operações da frente e, em triângulos com `backface_enable`,
+as de trás; referência e máscaras dinâmicas de `RB_STENCILREFMASK(_BF)`. Blend de `RB_BLENDCONTROL0..3` (fatores e
+operações do Xenos no Vulkan; valores sem uso viram zero/soma; desligado quando é ONE/ZERO/ADD ou o formato não
+suporta blend), máscara de escrita de `RB_COLOR_MASK`, constantes de `RB_BLEND_RED..ALPHA`; sem `independentBlend`,
+todos os alvos usam o estado do primeiro. Alpha test: `RB_COLORCONTROL` (bit 3 e função) na constante de
+especialização, só quando o PS escreve `oC0` ("sempre" não liga o teste). Amostras: `host_sample_mask` de todas as
+amostras do convidado (a ordem do Xenos no Vulkan; o 2x num alvo 4x cobre as duas metades); `PA_SC_AA_MASK` é
+ignorado. Vértice provocante: `provoking_vtx_last` com `VK_EXT_provoking_vertex`. Os `VkShaderModule` são cacheados
+por `ShaderKey` (`PipelineCache::add_shader`) e os pipelines por `PipelineKey` (`PipelineCache::get`).
+
+**Erros.** Erros do convidado (buffers fora da memória, tipo de primitiva, reinício numa lista, textura ou alvo que não
+pode ser criado) chegam ao `VkBackend`, que chama o tratador fatal instalado pelo `GpuSystem`
+(`Backend::set_fatal_handler`: `GpuHooks::fatal`, saída 5) com `GPU draw: ...` ou `GPU resolve: ...` e não faz mais
+nada; `Cancelled` (parando) é ignorado.
+
+**Limites do M3:** `PA_SC_AA_MASK`, `alpha_to_mask`, o `color_exp_bias` de `RB_COLOR_INFO`, o recorte de z com
+`clip_disable` (sem `depthClamp`) e a profundidade escrita pelo PS num alvo D24FS8 (fica fora do mapeamento [0, 2) →
+[0, 1)) não são emulados; os filtros por instrução do `tfetch` são ignorados; o envio é esperado na hora (seção "Fluxo
+de comandos"); os vértices são copiados a cada draw, sem reaproveitar faixas entre draws.
+
+Testes (`tests/test_gpu_draw.cpp`): sem dispositivo, `primitive types map to Vulkan topologies or name what is
+unsupported`, `viewport and ndc follow PA_CL_VPORT, the window offset and the pixel centre`, `index buffers are
+bounds-checked and endian-swapped` e `vertex ranges are clamped to their allocation in bytes`; com o lavapipe e a
+camada de validação (`[unit][vulkan][draw]`; cada um lê os pixels por um resolve e pela referência de tiling):
+`triangle from IM_LOAD_IMMEDIATE microcode renders` (microcódigo sintético → PM4 → `GpuSystem` → `VkBackend`),
+`blend state from registers`, `quad list expansion`, `rect list expansion`, `vertex k_16_16_FLOAT with 8in32 swap
+through the fetch table`, `16-bit indices with 8in16 swap`, `32-bit indices with VGT_INDX_OFFSET reach r0.x`, `reset
+index becomes primitive restart on a strip`, `indices outside min and max are clamped`, `depth-only draw has no
+fragment stage`, `sampler state from the fetch constant reaches the shader`, `alpha test greater-equal discards`,
+`ndc transform matches the D3D pixel center`, `pipeline is reused for the same state`, `untranslatable shader is fatal
+with the Vulkan backend` e `vertex fetch constant at an unallocated physical address is fatal`.
 
 ## Contrato dos shaders traduzidos (plano B)
 
@@ -1056,9 +1161,9 @@ decoração de interpolação. O PS declara uma entrada na location r para cada 
 referencia (todas as 16 quando algum temporário é relativo), decorada `Flat` quando o bit r de `flat_mask` está ligado
 e `Centroid` quando o bit r de `centroid_mask` está. Uma entrada `Flat` recebe o valor do vértice provocante; o Vulkan
 usa o primeiro vértice por padrão, e o Xenos escolhe entre o primeiro e o último por
-`PA_SU_SC_MODE_CNTL.provoking_vtx_last`. O runtime (Tarefa 20) precisa respeitar esse bit com
-`VK_EXT_provoking_vertex` (modo `LAST_VERTEX`) ou, sem a extensão, registrar a limitação (entradas flat com o
-primeiro vértice quando o jogo pede o último). O VS escreve `gl_PointSize = 1.0`; o tamanho de ponto exportado
+`PA_SU_SC_MODE_CNTL.provoking_vtx_last`. O runtime (Tarefa 20) respeita esse bit com
+`VK_EXT_provoking_vertex` (modo `LAST_VERTEX`, quando o dispositivo tem `provokingVertexLast`); sem a extensão, as
+entradas flat ficam com o primeiro vértice e um aviso único vai para o stderr quando o jogo pede o último. O VS escreve `gl_PointSize = 1.0`; o tamanho de ponto exportado
 (63) é descartado e marcado em `ShaderInfo::drops_point_size` (expansão de point sprites fica fora do M3). Saídas do
 PS: `oC0..oC3` nas locations 0..3 (só as escritas) e `FragDepth` (com `DepthReplacing`) quando escreve a
 profundidade.

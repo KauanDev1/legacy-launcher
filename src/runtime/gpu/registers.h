@@ -41,6 +41,9 @@ inline constexpr uint32_t kShaderConstantLoopCount = 32;
 //    (the whole value of a 32bpp target), RB_COLOR_CLEAR_LO the high 32 bits of a 64bpp one (the register names
 //    are the hardware's; Xenia render_target_cache combines them the same way). RB_DEPTH_CLEAR is the EDRAM depth
 //    word: depth in bits 8-31, stencil in bits 0-7.
+//  - The Task 20 (draw path) additions RB_COLOR_MASK, RB_BLEND_RED..ALPHA, RB_STENCILREFMASK(_BF), RB_ALPHA_REF,
+//    PA_SC_SCREEN_SCISSOR_TL/BR, PA_CL_CLIP_CNTL and PA_SU_POLY_OFFSET_*: indices cross-checked against Xenia
+//    register_table.inc (hardware facts only).
 // The lookup table in registers.cpp sorts them at compile time, so the order here is free.
 #define LR_GPU_REGISTERS(X)                                                                                  \
   /* Command processor */                                                                                    \
@@ -61,12 +64,18 @@ inline constexpr uint32_t kShaderConstantLoopCount = 32;
   X(RB_DEPTHCONTROL, 0x2200) X(RB_BLENDCONTROL0, 0x2201) X(RB_COLORCONTROL, 0x2202)                          \
   X(RB_BLENDCONTROL1, 0x2209) X(RB_BLENDCONTROL2, 0x220A) X(RB_BLENDCONTROL3, 0x220B)                        \
   X(RB_MODECONTROL, 0x2208)                                                                                  \
+  X(RB_COLOR_MASK, 0x2104) X(RB_BLEND_RED, 0x2105) X(RB_BLEND_GREEN, 0x2106) X(RB_BLEND_BLUE, 0x2107)          \
+  X(RB_BLEND_ALPHA, 0x2108) X(RB_STENCILREFMASK_BF, 0x210C) X(RB_STENCILREFMASK, 0x210D)                     \
+  X(RB_ALPHA_REF, 0x210E)                                                                                    \
   /* Primitive assembly: window, scissor, viewport, rasteriser mode */                                       \
   X(PA_SC_WINDOW_OFFSET, 0x2080) X(PA_SC_WINDOW_SCISSOR_TL, 0x2081) X(PA_SC_WINDOW_SCISSOR_BR, 0x2082)       \
   X(PA_CL_VPORT_XSCALE, 0x210F) X(PA_CL_VPORT_XOFFSET, 0x2110) X(PA_CL_VPORT_YSCALE, 0x2111)                 \
   X(PA_CL_VPORT_YOFFSET, 0x2112) X(PA_CL_VPORT_ZSCALE, 0x2113) X(PA_CL_VPORT_ZOFFSET, 0x2114)                \
   X(PA_SU_SC_MODE_CNTL, 0x2205) X(PA_SC_VIZ_QUERY, 0x2293)                                                   \
   X(PA_CL_VTE_CNTL, 0x2206) X(PA_SU_VTX_CNTL, 0x2302)                                                        \
+  X(PA_SC_SCREEN_SCISSOR_TL, 0x200E) X(PA_SC_SCREEN_SCISSOR_BR, 0x200F) X(PA_CL_CLIP_CNTL, 0x2204)           \
+  X(PA_SU_POLY_OFFSET_FRONT_SCALE, 0x2380) X(PA_SU_POLY_OFFSET_FRONT_OFFSET, 0x2381)                         \
+  X(PA_SU_POLY_OFFSET_BACK_SCALE, 0x2382) X(PA_SU_POLY_OFFSET_BACK_OFFSET, 0x2383)                           \
   /* Sequencer and vertex grouper */                                                                         \
   X(SQ_PROGRAM_CNTL, 0x2180) X(VGT_EVENT_INITIATOR, 0x21F9) X(VGT_DMA_BASE, 0x21FA) X(VGT_DMA_SIZE, 0x21FB)    \
   X(VGT_DRAW_INITIATOR, 0x21FC)                                                                              \

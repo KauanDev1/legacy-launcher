@@ -57,6 +57,8 @@
 // its first draw, traces it, and hands the results to Backend::draw (ActiveShaders). A key that cannot be
 // translated is GpuHooks::fatal("shader microcode 0x... (<stage>, N dwords) cannot be translated: <reason>") only
 // when the backend binds_shaders(); otherwise it is reported once on stderr and the draw goes on with a null shader.
+// A backend reports a guest error it cannot draw past (Backend::set_fatal_handler, which set_backend installs) the
+// same way: GpuHooks::fatal once, then the GPU thread stops.
 #pragma once
 
 #include <atomic>
@@ -214,7 +216,9 @@ class GpuSystem {
   mutable std::mutex shader_mutex_;
   ShaderLoadStats shader_stats_;
   std::set<std::pair<uint64_t, ShaderStage>> shaders_seen_;
-  std::atomic<bool> shader_fatal_{false};  // a shader fatal was raised: the GPU thread stops (tests: the hook returns)
+  // A shader fatal, or one the backend raised (Backend::set_fatal_handler), was raised: the GPU thread stops and the
+  // backend gets no more draws, resolves or swaps (tests: the hook returns).
+  std::atomic<bool> shader_fatal_{false};
   std::atomic<bool> started_flag_{false};
 
   // Ring state, set by guest threads and read by the GPU thread.

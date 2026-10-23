@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
-// The Vulkan renderer behind gpu::Backend (plan B). Task 17 skeleton: a Device, a Presenter (SDL window swapchain,
-// or offscreen when headless) and swap(), which presents the guest's front buffer. resolve() goes to the EDRAM
-// emulation (edram.h, Task 18: host render targets, clears, tiled resolves into guest memory). Draws and shader
-// loads do nothing yet (the draw path arrives in Tasks 20-21), so binds_shaders() stays false until Task 20 binds the
-// translated shaders.
+// The Vulkan renderer behind gpu::Backend (plan B): a Device, a Presenter (SDL window swapchain, or offscreen when
+// headless), the frame's command stream (stream.h), the EDRAM emulation (edram.h: host render targets, clears, tiled
+// resolves into guest memory), the texture and sampler caches and the draw path (draw.h, Task 20), which draws with
+// the translated shaders: binds_shaders() is true, so an untranslatable shader is fatal. A guest error a draw or a
+// resolve cannot get past (an index or vertex buffer outside guest memory, an unsupported primitive type or format)
+// goes to the fatal handler GpuSystem installs (guest_fatal, exit 5), named, and the backend does no more work.
 //
 // swap(regs, phys, w, h) decodes the w x h front buffer with the texture loader (Task 19,
 // runtime/gpu/texture_format.h front_buffer_rgba8): fetch constant 0, which VdSwap wrote just before, gives its
@@ -28,6 +29,14 @@
 
 namespace lr::gpu::vk {
 
+// What the draw path did (tests, --trace-gpu style diagnostics).
+struct DrawStats {
+  uint64_t draws = 0;              // draws recorded
+  uint64_t skipped = 0;            // draws that could produce nothing (no vertex shader, no surface, empty viewport)
+  uint64_t pipelines = 0;          // pipelines created so far
+  bool last_fragment_stage = false;  // the last recorded draw's pipeline has a fragment stage
+};
+
 struct VkBackendOptions {
   MemoryAccess mem;            // guest memory and the physical -> guest translation (Kernel::gpu_memory_access)
   void* sdl_window = nullptr;  // SDL_Window* created with SDL_WINDOW_VULKAN; nullptr: headless (offscreen)
@@ -51,10 +60,12 @@ class VkBackend final : public Backend {
   void swap(const RegisterFile& regs, uint32_t frontbuffer_phys, uint32_t width, uint32_t height) override;
   uint64_t textures_created() const override;
   void wait_idle() override;
-  // Task 20 binds the translated shaders; until then an untranslatable shader is only reported.
-  bool binds_shaders() const override { return false; }
+  // The draw path binds the translated shaders: an untranslatable one is fatal (exit 5).
+  bool binds_shaders() const override { return true; }
+  void set_fatal_handler(std::function<void(const std::string& what)> fatal) override;
 
   const std::string& device_name() const { return name_; }
+  DrawStats draw_stats() const;
   // Any thread, any time: the per-frame fence waits (100 ms slices) give up and swap() stops submitting, so the GPU
   // thread leaves a frame in flight instead of hanging; the orderly exit calls it before GpuSystem::stop().
   void request_stop();

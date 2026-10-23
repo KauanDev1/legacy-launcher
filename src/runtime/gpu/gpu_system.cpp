@@ -120,11 +120,12 @@ class GpuSystem::BackendProxy final : public Backend {
   void resolve(const RegisterFile& regs) override {
     ++resolves;
     if (owner_.trace_) owner_.trace_->line("resolve\n");
+    if (owner_.shader_fatal_.load(std::memory_order_acquire)) return;
     Busy b(owner_);
     inner_->resolve(regs);
   }
   void swap(const RegisterFile& regs, uint32_t frontbuffer_phys, uint32_t width, uint32_t height) override {
-    {
+    if (!owner_.shader_fatal_.load(std::memory_order_acquire)) {
       Busy b(owner_);
       inner_->swap(regs, frontbuffer_phys, width, height);
     }
@@ -230,7 +231,14 @@ void GpuSystem::set_interrupt_callback(uint32_t fn, uint32_t user_data) {
 }
 
 void GpuSystem::set_backend(std::unique_ptr<Backend> backend) {
-  if (backend) proxy_->set_inner(std::move(backend));
+  if (!backend) return;
+  // A guest error the backend cannot draw past takes the untranslatable shader's path: one fatal, the GPU thread
+  // stops (the kernel's hook never returns: exit 5).
+  backend->set_fatal_handler([this](const std::string& what) {
+    if (shader_fatal_.exchange(true, std::memory_order_acq_rel)) return;
+    fail(what);
+  });
+  proxy_->set_inner(std::move(backend));
 }
 
 void GpuSystem::set_vblank_mode(VblankMode mode) {

@@ -293,3 +293,25 @@ Formato: o quê, por quê, custo se estiver errada.
 - Custo se errado: a CPU espera a GPU a cada resolve e a cada swap (sem sobreposição entre quadros). Se o desempenho
   pedir, o fluxo ganha vários command buffers com fences próprias, um anel por quadro e reciclagem de índices pela fence,
   sem mudar a interface de `defer`/`flush`.
+
+### M13. Desenho (Tarefa 20): retângulos num geometry shader, fatais pelo backend e o que fica de fora
+- O quê:
+  - Listas de retângulos não são expansão de índices (o quarto canto não é um vértice do convidado, e o vertex fetch
+    fica no shader): viram uma lista de triângulos com o geometry shader embutido `rect_list.geom`, que calcula o quarto
+    canto e os 16 interpoladores. `geometryShader` vira recurso opcional; sem ele, um draw de retângulos é fatal.
+    Listas de quads usam expansão de índices, como o plano diz.
+  - `PipelineCache::get(const PipelineKey&)` não recebe o SPIR-V: os módulos entram antes por
+    `PipelineCache::add_shader(ShaderKey, TranslatedShader)`, um por chave.
+  - O backend informa erros do convidado por `Backend::set_fatal_handler`, que o `GpuSystem::set_backend` instala com
+    o mesmo caminho do shader intraduzível (um fatal, a thread da GPU para). O plano não dizia como o backend chegaria
+    ao `guest_fatal`.
+  - O reinício de primitiva numa lista só é fatal quando um índice de reinício aparece de fato; com
+    `multi_prim_ib_ena` ligado e nenhum índice de reinício, a lista desenha normalmente (o Xenia ignora o reinício em
+    listas).
+  - Os índices sempre vão para o host como `uint32` (24 bits), também os de 16 bits.
+  - Limites registrados em vez de feitos: `PA_SC_AA_MASK` e `alpha_to_mask` ignorados, filtros por instrução do
+    `tfetch` ignorados, envio esperado na hora (M12), sem `depthClamp` com `clip_disable`.
+- Por quê: um geometry shader mantém o vertex shader traduzido intocado (sem nova versão do tradutor nem variantes de
+  VS) e calcula o quarto canto com os atributos já transformados, como o Xenia; os outros itens são lacunas do plano.
+- Custo se errado: um dispositivo sem `geometryShader` não desenha retângulos (o lavapipe e as GPUs de desktop têm);
+  se o jogo depender de `PA_SC_AA_MASK` ou dos filtros por instrução, a imagem difere até que sejam feitos.

@@ -155,6 +155,8 @@ void pin_vulkan_libraries() {
 
 }  // namespace
 
+void pin_vulkan_drivers() { pin_vulkan_libraries(); }
+
 std::vector<uint32_t> fullscreen_triangle_vs() {
   sh::SpirvBuilder b(spv::ExecutionModelVertex);
   const sh::Id f32 = b.type_float(32);

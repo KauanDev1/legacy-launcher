@@ -51,7 +51,8 @@ class CommandStream {
   // Submits what was recorded, waits for it, then runs the deferred work and the flush listeners. With nothing
   // recorded it only runs the deferred work. Cancelled when the GPU is stopping.
   Result<void> flush();
-  // Waits for the device to be idle and runs every deferred function (shutdown).
+  // Shutdown: drops what is recorded and not submitted (the command buffer is ended first, so destroying what it
+  // uses afterwards is clean), waits for the device to be idle and runs every deferred function.
   void drain();
 
   // `fn` runs once the device no longer uses anything recorded so far: after the next completed flush, or now when

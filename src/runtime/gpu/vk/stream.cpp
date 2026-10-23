@@ -47,12 +47,6 @@ Result<void> CommandStream::init() {
 
 CommandStream::~CommandStream() {
   const VkDevice d = device_.device();
-  if (recording_) {
-    // Never submitted: end it so the pool can be destroyed cleanly; its commands are dropped.
-    if (open_pass_) vkCmdEndRenderPass(cmd_);
-    vkEndCommandBuffer(cmd_);
-    recording_ = false;
-  }
   drain();
   if (fence_) vkDestroyFence(d, fence_, nullptr);
   if (pool_) vkDestroyCommandPool(d, pool_, nullptr);
@@ -121,6 +115,12 @@ Result<void> CommandStream::flush() {
 }
 
 void CommandStream::drain() {
+  if (recording_) {
+    // Never submitted (shutdown): ended now, before anything it uses is destroyed; its commands are dropped.
+    end_render_pass();
+    vkEndCommandBuffer(cmd_);
+    recording_ = false;
+  }
   if (device_.device()) vkDeviceWaitIdle(device_.device());
   run_deferred();
 }

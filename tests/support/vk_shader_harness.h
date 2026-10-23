@@ -145,6 +145,10 @@ std::vector<uint8_t> harness_bytes(std::span<const T> values) {
 // one triangle that covers the whole target, with no outputs but the position.
 std::vector<uint32_t> fullscreen_triangle_vs();
 
+// Pins the loaded Vulkan driver, layer and LLVM libraries (RTLD_NODELETE) like create() does, for a test that makes
+// its own device (a VkBackend): call it while the device exists, so LeakSanitizer can name the driver at exit.
+void pin_vulkan_drivers();
+
 class ShaderHarness {
  public:
   // Fails with ErrorCode::ToolMissing when there is no Vulkan driver (tests SKIP then).

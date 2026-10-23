@@ -4,6 +4,8 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <string>
 
 #include "runtime/gpu/registers.h"
 
@@ -49,6 +51,10 @@ class Backend {
   // cannot handle is fatal (GpuHooks::fatal, exit 5) only with such a backend; with one that renders nothing
   // (NullBackend) GpuSystem only reports it (stderr, --trace-gpu, the exit summary).
   virtual bool binds_shaders() const { return false; }
+  // GpuSystem installs its fatal path here before the GPU thread starts (GpuHooks::fatal: guest_fatal, exit 5). A
+  // backend calls it, once, for a guest error it cannot draw past (an index or vertex buffer outside guest memory,
+  // an unsupported primitive type, ...), naming it, and then does no more work. Default: ignored.
+  virtual void set_fatal_handler(std::function<void(const std::string& what)> fatal) { (void)fatal; }
 };
 
 }  // namespace lr::gpu

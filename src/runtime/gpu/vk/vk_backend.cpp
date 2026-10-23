@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "runtime/gpu/vk/device.h"
+#include "runtime/gpu/vk/draw.h"
 #include "runtime/gpu/vk/edram.h"
 #include "runtime/gpu/vk/presenter.h"
 #include "runtime/gpu/vk/samplers.h"
@@ -45,6 +46,7 @@ struct VkBackend::Impl {
   std::unique_ptr<Edram> edram;  // render targets, clears and resolves (Task 18); destroyed before the device
   std::unique_ptr<TextureCache> textures;  // Task 19; Task 20's draws bind through it
   std::unique_ptr<SamplerCache> samplers;
+  std::unique_ptr<DrawPath> draws;  // Task 20: uses all of the above
   VkBackendOptions options;
 
   VkCommandPool pool = VK_NULL_HANDLE;
@@ -66,12 +68,27 @@ struct VkBackend::Impl {
   uint64_t swaps = 0;
   bool warned_size = false;
   std::set<std::string> front_buffer_errors;
-  std::set<std::string> resolve_errors;
+  std::function<void(const std::string&)> fatal;  // GpuSystem's (Backend::set_fatal_handler)
+  bool failed = false;  // a fatal was reported: no more work
   // request_stop (another thread): fence waits give up, swap() does nothing more.
   std::atomic<bool> stopping{false};
   bool abandoned = false;  // an upload wait gave up: its fence may still be pending, nothing more is submitted
 
   explicit Impl(Device d) : device(std::move(d)) {}
+
+  // A draw or resolve error: Cancelled (stopping) is dropped; anything else is a guest fatal (exit 5) through
+  // GpuSystem, naming it, and the backend does no more work. Without a handler (a backend used on its own), stderr.
+  void report(const char* what, const Error& e) {
+    if (e.code == ErrorCode::Cancelled) return;
+    failed = true;
+    const std::string message = std::string("GPU ") + what + ": " + e.message;
+    if (fatal) {
+      fatal(message);
+    } else {
+      std::fprintf(stderr, "error: [gpu] %s\n", message.c_str());
+    }
+  }
+
   Impl(const Impl&) = delete;
   Impl& operator=(const Impl&) = delete;
 
@@ -83,6 +100,7 @@ struct VkBackend::Impl {
     if (staging) vmaDestroyBuffer(device.allocator(), staging, staging_alloc);
     if (fence) vkDestroyFence(d, fence, nullptr);
     if (pool) vkDestroyCommandPool(d, pool, nullptr);
+    draws.reset();
     edram.reset();
     samplers.reset();
     textures.reset();
@@ -255,6 +273,9 @@ Result<std::unique_ptr<VkBackend>> VkBackend::create(VkBackendOptions options) {
   impl->textures->set_before_gpu_work([stream = impl->stream.get()] { return stream->flush(); });
   LR_TRY_ASSIGN(samplers, SamplerCache::create(impl->device));
   impl->samplers = std::move(samplers);
+  LR_TRY_ASSIGN(draws, DrawPath::create(impl->device, options.mem, *impl->stream, *impl->edram, *impl->textures,
+                                        *impl->samplers));
+  impl->draws = std::move(draws);
   impl->edram->set_write_observer([cache = impl->textures.get()](uint32_t phys, uint32_t size) {
     cache->invalidate_range(phys, size);
   });
@@ -272,16 +293,26 @@ VkBackend::VkBackend(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 
 VkBackend::~VkBackend() = default;
 
+// The shaders reach the draws already translated (GpuSystem's ShaderCache): nothing to do at load time.
 void VkBackend::load_shader(ShaderStage, uint32_t, uint32_t) {}
-void VkBackend::draw(const RegisterFile&, const DrawInfo&, const ActiveShaders&) {}
-void VkBackend::resolve(const RegisterFile& regs) {
-  if (!impl_ || impl_->abandoned || impl_->stopping.load(std::memory_order_acquire)) return;
-  // A failure is reported once per distinct message; guest-side problems (unsupported formats, destinations
-  // outside guest memory) are warnings inside Edram and do not fail.
-  auto r = impl_->edram->resolve(regs, impl_->options.mem);
-  if (!r && r.error().code != ErrorCode::Cancelled && impl_->resolve_errors.insert(r.error().message).second)
-    std::fprintf(stderr, "error: [gpu] resolve: %s\n", r.error().message.c_str());
+
+void VkBackend::draw(const RegisterFile& regs, const DrawInfo& info, const ActiveShaders& shaders) {
+  if (!impl_ || impl_->failed || impl_->abandoned || impl_->stopping.load(std::memory_order_acquire)) return;
+  if (auto r = impl_->draws->draw(regs, info, shaders); !r) impl_->report("draw", r.error());
 }
+
+void VkBackend::resolve(const RegisterFile& regs) {
+  if (!impl_ || impl_->failed || impl_->abandoned || impl_->stopping.load(std::memory_order_acquire)) return;
+  // Guest-side problems of the copy itself (unsupported destination formats, destinations outside guest memory) are
+  // warnings inside Edram and do not fail; an error (a target that cannot be bound, a Vulkan failure) is fatal.
+  if (auto r = impl_->edram->resolve(regs, impl_->options.mem); !r) impl_->report("resolve", r.error());
+}
+
+void VkBackend::set_fatal_handler(std::function<void(const std::string& what)> fatal) {
+  if (impl_) impl_->fatal = std::move(fatal);
+}
+
+DrawStats VkBackend::draw_stats() const { return impl_ && impl_->draws ? impl_->draws->stats() : DrawStats{}; }
 
 void VkBackend::swap(const RegisterFile& regs, uint32_t frontbuffer_phys, uint32_t width, uint32_t height) {
   if (impl_) impl_->swap(regs, frontbuffer_phys, width, height);
