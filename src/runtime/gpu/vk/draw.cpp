@@ -309,11 +309,14 @@ ScissorRect scissor_rect(const RegisterFile& regs, uint32_t target_width, uint32
     y0 += sbits(off, 16, 15);
     y1 += sbits(off, 16, 15);
   }
+  // A screen scissor of TL = BR = (0, 0) is taken as never set (registers at their reset value), not as empty.
   const uint32_t stl = regs.read(PA_SC_SCREEN_SCISSOR_TL), sbr = regs.read(PA_SC_SCREEN_SCISSOR_BR);
-  x0 = std::max(x0, sbits(stl, 0, 15));
-  y0 = std::max(y0, sbits(stl, 16, 15));
-  x1 = std::min(x1, sbits(sbr, 0, 15));
-  y1 = std::min(y1, sbits(sbr, 16, 15));
+  if (stl != 0 || sbr != 0) {
+    x0 = std::max(x0, sbits(stl, 0, 15));
+    y0 = std::max(y0, sbits(stl, 16, 15));
+    x1 = std::min(x1, sbits(sbr, 0, 15));
+    y1 = std::min(y1, sbits(sbr, 16, 15));
+  }
   x0 = std::max(x0, 0);
   y0 = std::max(y0, 0);
   x1 = std::min(x1, int32_t(target_width));
@@ -685,7 +688,19 @@ struct DrawPath::Impl {
     const bool float24 = depth && depth->key.format == edram::kDepth_D24FS8;
     const ViewportInfo vp = viewport_info(regs, extent.width, extent.height, ps && ps->info.writes_depth, float24);
     const ScissorRect scissor = scissor_rect(regs, extent.width, extent.height);
-    if (vp.width <= 0.0f || vp.height <= 0.0f || scissor.width == 0 || scissor.height == 0) return skip();
+    if (vp.width <= 0.0f || vp.height <= 0.0f || scissor.width == 0 || scissor.height == 0) {
+      char b[320];
+      std::snprintf(b, sizeof b,
+                    "a draw with an empty viewport or scissor was skipped (viewport %gx%g at %g,%g; "
+                    "PA_SC_WINDOW_SCISSOR_TL/BR 0x%08X/0x%08X, PA_SC_SCREEN_SCISSOR_TL/BR 0x%08X/0x%08X, "
+                    "PA_SC_WINDOW_OFFSET 0x%08X, target %ux%u)",
+                    double(vp.width), double(vp.height), double(vp.x), double(vp.y),
+                    regs.read(PA_SC_WINDOW_SCISSOR_TL), regs.read(PA_SC_WINDOW_SCISSOR_BR),
+                    regs.read(PA_SC_SCREEN_SCISSOR_TL), regs.read(PA_SC_SCREEN_SCISSOR_BR),
+                    regs.read(PA_SC_WINDOW_OFFSET), extent.width, extent.height);
+      warn_once(b);
+      return skip();
+    }
 
     LR_TRY_ASSIGN(indices, read_indices(info, regs, mem, p));
     if (info.indexed && info.index_count > info.index_words)
@@ -902,15 +917,21 @@ struct DrawPath::Impl {
     bool enabled = false;
     float scale = 0.0f, offset = 0.0f;
   };
-  // The face whose polygon offset applies (one depth bias per draw; Xenia's preferred-face rule): front unless it is
-  // culled or has no offset, then back; lines and points use the front values with poly_offset_para_enable.
+  // The face whose polygon offset applies (one depth bias per draw; Xenia's preferred-face rule): the front values
+  // when the front offset is enabled, the front is not culled and its scale or offset is nonzero; else the back
+  // values under the same conditions; lines and points use the front values with poly_offset_para_enable.
   PolygonOffset polygon_offset(const RegisterFile& regs, const Primitive& p) const {
     const uint32_t mode = regs.read(PA_SU_SC_MODE_CNTL);
     PolygonOffset o;
     bool back = false;
     if (p.polygonal) {
-      const bool front_ok = bits(mode, 11, 1) && !bits(mode, 0, 1);
-      const bool back_ok = bits(mode, 12, 1) && !bits(mode, 1, 1);
+      auto nonzero = [&](uint32_t scale_reg, uint32_t offset_reg) {
+        return finite_float(regs, scale_reg, 0.0f) != 0.0f || finite_float(regs, offset_reg, 0.0f) != 0.0f;
+      };
+      const bool front_ok = bits(mode, 11, 1) && !bits(mode, 0, 1) &&
+                            nonzero(PA_SU_POLY_OFFSET_FRONT_SCALE, PA_SU_POLY_OFFSET_FRONT_OFFSET);
+      const bool back_ok = bits(mode, 12, 1) && !bits(mode, 1, 1) &&
+                           nonzero(PA_SU_POLY_OFFSET_BACK_SCALE, PA_SU_POLY_OFFSET_BACK_OFFSET);
       if (front_ok) {
         o.enabled = true;
       } else if (back_ok) {

@@ -960,3 +960,77 @@ TEST_CASE("vertex fetch constant at an unallocated physical address is fatal", "
   }
   CHECK(vk_errors.errors().empty());
 }
+
+TEST_CASE("reset index in a list is fatal", "[unit][vulkan][draw]") {
+  ValidationErrors vk_errors;
+  {
+    Fixture f;
+    if (!f.ok) SKIP("no Vulkan ICD installed");
+    f.vertices({vert(-1, 1), vert(1, 1), vert(-1, -1)});
+    f.regs.write(gpu::PA_SU_SC_MODE_CNTL, 1u << 21);  // multi_prim_ib_ena
+    f.regs.write(gpu::VGT_MULTI_PRIM_IB_RESET_INDX, 0xFFFF);
+    f.draw_indexed(vk::prim::kTriangleList, {0, 0, 0, 1, 0xFF, 0xFF, 0, 2}, 2, pm4::kEndian8in16, vs_position_color(),
+                   ps_interpolated());
+    REQUIRE(f.fatals.size() == 1);
+    INFO(f.fatals.front());
+    CHECK(f.fatals.front().find("GPU draw: primitive reset index 0xFFFF in a triangle list") != std::string::npos);
+    CHECK(f.backend->draw_stats().draws == 0);
+  }
+  CHECK(vk_errors.errors().empty());
+}
+
+TEST_CASE("rect list with the right angle at any vertex", "[unit][vulkan][draw]") {
+  ValidationErrors vk_errors;
+  {
+    Fixture f;
+    if (!f.ok) SKIP("no Vulkan ICD installed");
+    // The same rectangle (TL black, TR red, BL green; the right angle at TL), its corners rotated so the right angle
+    // is vertex 0, 1 or 2: the fourth corner is always BR, yellow.
+    const std::vector<Vertex> corners = {vert(-0.5f, 0.5f, {0, 0, 0, 1}), vert(0.5f, 0.5f, {1, 0, 0, 1}),
+                                         vert(-0.5f, -0.5f, {0, 1, 0, 1})};
+    const uint32_t right_angle = GENERATE(0u, 1u, 2u);
+    std::vector<Vertex> vs(3);
+    for (uint32_t i = 0; i < 3; ++i) vs[(i + right_angle) % 3] = corners[i];
+    f.vertices(vs);
+    f.draw(vk::prim::kRectangleList, 3, vs_position_color(), ps_interpolated());
+    INFO("right angle at vertex " << right_angle);
+    REQUIRE(f.fatals.empty());
+    const auto px = f.read();
+    const uint32_t br = at(px, 23, 23);
+    INFO(hex(br));
+    CHECK(channel(br, 0) > 200);
+    CHECK(channel(br, 1) > 200);
+    CHECK(channel(br, 2) == 0);
+    const uint32_t tl = at(px, 8, 8);
+    CHECK(channel(tl, 0) < 40);
+    CHECK(channel(tl, 1) < 40);
+    CHECK(at(px, 26, 26) == 0);
+    CHECK(at(px, 5, 5) == 0);
+  }
+  CHECK(vk_errors.errors().empty());
+}
+
+TEST_CASE("a backend fatal reaches GpuHooks::fatal through GpuSystem", "[unit][vulkan][draw]") {
+  ValidationErrors vk_errors;
+  {
+    lr::testing::KernelFixture f;
+    GpuRig rig(f);
+    if (!rig.ok) SKIP("no Vulkan ICD installed");
+    constexpr uint32_t kUnallocated = 0x1F000000;  // physical, never allocated by the fixture
+    lr::testing::Pm4Builder b;
+    put_registers(b, default_state());
+    put_registers(b, vertex_fetch(kUnallocated, 24));
+    im_load_immediate(b, ShaderStage::Vertex, vs_position_color());
+    im_load_immediate(b, ShaderStage::Pixel, ps_interpolated());
+    b.type0(gpu::RB_MODECONTROL, {4});
+    b.type3(pm4::DRAW_INDX_2, {4u | (2u << 6) | (3u << 16)});
+    rig.run(b);
+    const std::string fatal = rig.fatal();
+    INFO(fatal);
+    CHECK(fatal.find("GPU draw: vertex fetch constant 3: base physical address " + hex(kUnallocated)) !=
+          std::string::npos);
+    std::lock_guard<std::mutex> lock(rig.m);
+    CHECK(rig.fatals.size() == 1);
+  }
+  CHECK(vk_errors.errors().empty());
+}

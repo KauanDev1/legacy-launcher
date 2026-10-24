@@ -1,5 +1,5 @@
-#version 450
 // SPDX-License-Identifier: MIT
+#version 450
 // Xenos rectangle lists (VGT prim_type 8): every three vertices are three corners of a rectangle (in practice an
 // axis-aligned screen-space quad). The draw path draws them as a triangle list and this geometry shader emits each
 // one as a two-triangle strip whose fourth corner is v_a + v_b - v_r, r being the corner opposite the longest edge

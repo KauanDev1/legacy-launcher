@@ -79,7 +79,8 @@ ViewportInfo viewport_info(const RegisterFile& regs, uint32_t target_width, uint
                            bool ps_writes_depth, bool depth_float24);
 
 // The scissor (Xenia draw_util GetScissor): the window scissor, moved by the window offset unless
-// PA_SC_WINDOW_SCISSOR_TL.window_offset_disable, intersected with the screen scissor, then with the target.
+// PA_SC_WINDOW_SCISSOR_TL.window_offset_disable, intersected with the screen scissor (unless both of its registers are 0:
+// never set, not empty), then with the target.
 struct ScissorRect {
   int32_t x = 0, y = 0;
   uint32_t width = 0, height = 0;

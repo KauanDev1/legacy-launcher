@@ -211,11 +211,10 @@ struct VkBackend::Impl {
   }
 
   void swap(const RegisterFile& regs, uint32_t phys, uint32_t w, uint32_t h) {
-    if (abandoned || stopping.load(std::memory_order_acquire)) return;
-    // The frame's recorded work is submitted and complete before the next frame starts.
+    if (failed || abandoned || stopping.load(std::memory_order_acquire)) return;
+    // The frame's recorded work is submitted and complete before the next frame starts; a failure is fatal.
     if (auto r = stream->flush(); !r) {
-      if (r.error().code != ErrorCode::Cancelled)
-        std::fprintf(stderr, "error: [gpu] swap: %s\n", r.error().message.c_str());
+      report("swap", r.error());
       return;
     }
     const uint64_t n = ++swaps;
@@ -322,7 +321,9 @@ uint64_t VkBackend::textures_created() const { return impl_ && impl_->textures ?
 
 void VkBackend::wait_idle() {
   if (!impl_) return;
-  if (!impl_->abandoned && !impl_->stopping.load(std::memory_order_acquire)) (void)impl_->stream->flush();
+  if (!impl_->failed && !impl_->abandoned && !impl_->stopping.load(std::memory_order_acquire)) {
+    if (auto r = impl_->stream->flush(); !r) impl_->report("wait_idle", r.error());
+  }
   vkQueueWaitIdle(impl_->device.graphics_queue());
 }
 

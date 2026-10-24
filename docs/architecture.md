@@ -665,7 +665,8 @@ piso): `samplerAnisotropy` e `samplerMirrorClampToEdge` (texturas), `geometrySha
 
 **Swap.** O `resolve` vai para a emulação da EDRAM (seção "EDRAM") e o `draw` para o fluxo de desenho (seção
 "Desenho"); `binds_shaders()` é verdadeiro, então um shader que o tradutor não aceita é fatal (saída 5). O swap envia
-e espera o fluxo de comandos do quadro antes de apresentar. Em cada
+e espera o fluxo de comandos do quadro antes de apresentar; uma falha nesse envio (ou no do `wait_idle`) é fatal
+(saída 5), como as do draw, e depois dela o backend não faz mais nada. Em cada
 `swap(regs, phys, w, h)` (o pacote `LR_SWAP` que o `VdSwap` escreve), o front buffer de `w × h` é decodificado pelo
 carregador de texturas (seção "Texturas", `front_buffer_rgba8`): o fetch constant 0, que o `VdSwap` escreveu logo
 antes, dá o formato, o tiling, o endian, o pitch e o swizzle; o endereço é o físico do pacote. O resultado vira RGBA8
@@ -986,7 +987,9 @@ chaves por draw; a EDRAM guarda oito e despeja a usada há mais tempo).
 **Alvos.** O slot de cor i entra quando o PS escreve `oC<i>` e `RB_COLOR_MASK` mantém algum componente dele; a
 profundidade/estêncil entra quando `RB_DEPTHCONTROL` liga o teste de z ou de estêncil. No modo 5 (só profundidade) o PS
 não é usado e o pipeline não tem estágio de fragmento. Sem nenhum alvo, com `RB_SURFACE_INFO` de pitch 0, sem VS, com
-tipo de primitiva 0 ou viewport ou scissor vazios, o draw é pulado (com um aviso único quando é estranho). O render
+tipo de primitiva 0 ou viewport ou scissor vazios, o draw é pulado (com um aviso único quando é estranho; o do
+viewport ou scissor vazio traz a viewport e os valores de `PA_SC_WINDOW_SCISSOR_TL/BR`, `PA_SC_SCREEN_SCISSOR_TL/BR`
+e `PA_SC_WINDOW_OFFSET`). O render
 pass tem o anexo de cor i no slot i (`VK_ATTACHMENT_UNUSED` nos outros, então a location i do PS cai no slot i), tudo
 em `GENERAL` com load/store, como os passes da EDRAM. O framebuffer é cacheado pelas views e esquecido (destruição
 adiada) quando a EDRAM despeja um alvo.
@@ -1032,14 +1035,17 @@ Direct3D 9 nos inteiros). Com recorte, a viewport é ajustada a pixels inteiros 
 [0, w] como está; sem ele, [−w, w] é levado a [0, w]; a faixa de profundidade é a do z da viewport, limitada a [0, 1]
 ([0, 1] quando o PS escreve a profundidade) e dividida por 2 num alvo D24FS8. O Y não é invertido: o `YSCALE`
 negativo do convidado e o framebuffer do Vulkan, com y para baixo, concordam. Scissor (`scissor_rect`): o da janela,
-com o deslocamento salvo `window_offset_disable`, cortado pelo `PA_SC_SCREEN_SCISSOR` e pelo alvo.
+com o deslocamento salvo `window_offset_disable`, cortado pelo `PA_SC_SCREEN_SCISSOR` e pelo alvo. Um scissor de tela
+com TL = BR = (0, 0) (os dois registradores em 0, o valor de reset) conta como nunca escrito, não como vazio: só a
+janela e o alvo cortam.
 
 **Estado** (`PipelineKey`: chaves dos dois shaders, formatos e MSAA dos alvos, máscara de amostras, topologia,
 reinício, retângulos, cull, sentido, modo de polígono, depth bias ligado, vértice provocante, profundidade, estêncil,
 blend por alvo e a constante de especialização do alpha test). Cull só em triângulos (`cull_front`/`cull_back`);
 `face` 1 é horário. Modo de polígono duplo (`poly_mode` 1): o tipo mais especial entre as faces não descartadas
-(pontos, linhas, triângulos), com `fillModeNonSolid`. Depth bias dinâmico: a face da frente, ou a de trás quando a da
-frente é descartada ou não tem offset, e `poly_offset_para_enable` para linhas e pontos; constante × 2^24 (fatores
+(pontos, linhas, triângulos), com `fillModeNonSolid`. Depth bias dinâmico (a face preferida do Xenia): os valores da
+frente quando o offset da frente está ligado, a frente não é descartada e a escala ou o offset dela não é zero; senão
+os de trás, nas mesmas condições; linhas e pontos usam os da frente com `poly_offset_para_enable`; constante × 2^24 (fatores
 D3D10 do Xenia) e inclinação ÷ 16 (subpixels). Profundidade: com `z_enable`, teste, escrita e função de
 `RB_DEPTHCONTROL`; sem, nem teste nem escrita. Estêncil: operações da frente e, em triângulos com `backface_enable`,
 as de trás; referência e máscaras dinâmicas de `RB_STENCILREFMASK(_BF)`. Blend de `RB_BLENDCONTROL0..3` (fatores e
@@ -1071,7 +1077,9 @@ through the fetch table`, `16-bit indices with 8in16 swap`, `32-bit indices with
 index becomes primitive restart on a strip`, `indices outside min and max are clamped`, `depth-only draw has no
 fragment stage`, `sampler state from the fetch constant reaches the shader`, `alpha test greater-equal discards`,
 `ndc transform matches the D3D pixel center`, `pipeline is reused for the same state`, `untranslatable shader is fatal
-with the Vulkan backend` e `vertex fetch constant at an unallocated physical address is fatal`.
+with the Vulkan backend`, `vertex fetch constant at an unallocated physical address is fatal`, `reset index in a
+list is fatal`, `rect list with the right angle at any vertex` e `a backend fatal reaches GpuHooks::fatal through
+GpuSystem`.
 
 ## Contrato dos shaders traduzidos (plano B)
 
@@ -1346,7 +1354,10 @@ falham; texturas empilhadas (dimensão 2 com dados 2D em camadas, `stacked`) sã
 entre camadas e, com mips, reduz o número de camadas a cada nível, quando o certo seria um array 2D (silencioso no
 tradutor, que não vê a fetch constant: o cache de texturas da Tarefa 19 registra a primeira textura empilhada que o jogo usa,
 principalmente uma com mips, em vez de ficar calada); os filtros por instrução, `fetch_valid_only`,
-`exp_adjust` e o modo "unsigned biased" da fetch constant são ignorados (silencioso). A partir da Tarefa 15.9 o
+`exp_adjust` e o modo "unsigned biased" da fetch constant são ignorados (silencioso); numa lista de retângulos, as
+entradas flat seguem o vértice provocante da faixa que o geometry shader emite (canto r no primeiro triângulo, a no
+segundo, ou os últimos com `provoking_vtx_last`), e o quarto canto é extrapolado, então o vértice que o Xenos usaria
+com `provoking_vtx_last` não é garantido (silencioso). A partir da Tarefa 15.9 o
 tradutor aceita todo o controle de fluxo, toda a ALU, o vertex fetch e o texture fetch.
 
 ## Diagnóstico
