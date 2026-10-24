@@ -41,7 +41,10 @@ struct SwitchScan {
 // index scaling hoisted above the bound check are seen. Besides absolute word tables (`lwzx`) this
 // resolves relative tables: `lhzx rT, rTable, rI` (rI = index << 1, by `rlwinm` or `add rI, rX, rX`)
 // or `lbzx rT, rTable, rIdx`, optionally `rlwinm rT, rT, s, ...`, then `add rT, rT, rBase` (rBase the
-// table itself or another `lis`/`addi` address) -> `mtctr rT` -> `bctr`. Every label must be 4-aligned
+// table itself or another `lis`/`addi` address) -> `mtctr rT` -> `bctr`. Without a bound check, a table is sized
+// from an index mask in its block, or, when it sits right after its bctr (a switch whose bound the compiler dropped),
+// from where code resumes: the first case label or branch target after the bctr, every byte in between accounted
+// for by entries or < 4 zero bytes of alignment. Every label must be 4-aligned
 // inside its code range, at most 4096 cases. `image` is the loaded image (byte 0 = `image_base`, big-endian);
 // `code` lists executable ranges as (start, size). Never reads outside `image`.
 SwitchScan scan_switch_tables(std::span<const uint8_t> image, uint32_t image_base,

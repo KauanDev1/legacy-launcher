@@ -119,10 +119,17 @@ uint32_t mask32(uint32_t mb, uint32_t me) {
   return m;
 }
 
+// An indexed load (lwzx/lbzx/lhzx) seen by evaluate(): its effective address and size.
+struct IndexedLoad {
+  uint32_t addr = 0;
+  uint32_t size = 0;
+};
+
 // Evaluates the straight-line instructions in `window` with r[index] = value. Returns CTR, or nullopt
-// if anything is unsupported, unknown, or overwrites the index register.
+// if anything is unsupported, unknown, or overwrites the index register. `last_load` (optional) receives
+// the last indexed load whose address was known.
 std::optional<uint32_t> evaluate(const Memory& mem, std::span<const uint32_t> window, uint32_t index,
-                                 uint32_t aliases, uint32_t value) {
+                                 uint32_t aliases, uint32_t value, std::optional<IndexedLoad>* last_load = nullptr) {
   std::array<std::optional<uint32_t>, 32> r{};
   r[index] = value;
   for (uint32_t n = 0; n < 32; ++n)
@@ -194,6 +201,7 @@ std::optional<uint32_t> evaluate(const Memory& mem, std::span<const uint32_t> wi
           case 23: case 87: case 279: {  // lwzx / lbzx / lhzx
             uint32_t size = xo(i) == 23 ? 4 : xo(i) == 87 ? 1 : 2;
             auto addr = bin(get0(ra(i)), get(rb(i)), [](uint32_t a, uint32_t b) { return a + b; });
+            if (last_load && addr) *last_load = IndexedLoad{*addr, size};
             if (!set(rd(i), load(addr, size))) return std::nullopt;
             break;
           }
@@ -446,6 +454,72 @@ std::optional<SwitchTable> masked_table(const Memory& mem, uint32_t addr, uint32
   return std::nullopt;
 }
 
+// Unguarded switch whose table sits right after the bctr (the compiler dropped the bound check, e.g. a switch on
+// an enum). The table then ends where code resumes: at the first case label or branch target after the bctr. The
+// index is the only register for which the block's straight-line code (the longest suffix that works) computes CTR
+// through an indexed load whose address moves with the index; the table must start at bctr + 4 (or after < 4 zero
+// bytes). Entries are read while they lie before that end; a zero-padding entry (or any entry whose label is not a
+// 4-aligned address in the code range past the entries read so far) ends the table early. Only < 4 zero bytes may
+// remain between the last entry and the end, so every byte up to the first case is accounted for.
+std::optional<SwitchTable> inline_table(const Memory& mem, uint32_t addr, uint32_t start, uint32_t size,
+                                        const Targets& targets) {
+  std::vector<uint32_t> block;
+  uint32_t first = addr;
+  for (int k = 1; k <= kMaxWindow; ++k) {
+    const uint32_t a = addr - 4u * static_cast<uint32_t>(k);
+    auto w = mem.read(a, 4);
+    if (!w || is_branch(*w) || a < start) break;
+    first = a;
+  }
+  for (uint32_t a = first; a < addr; a += 4) block.push_back(*mem.read(a, 4));
+
+  std::optional<uint32_t> index;
+  uint32_t table = 0, entry = 0;
+  std::span<const uint32_t> window;
+  for (size_t s = 0; s < block.size() && !index; ++s) {
+    std::span<const uint32_t> w(block.data() + s, block.size() - s);
+    bool ambiguous = false;
+    for (uint32_t r = 0; r < 32; ++r) {
+      std::optional<IndexedLoad> l0, l1;
+      if (!evaluate(mem, w, r, 0, 0, &l0) || !evaluate(mem, w, r, 0, 1, &l1) || !l0 || !l1) continue;
+      if (l1->addr - l0->addr != l0->size || l1->size != l0->size) continue;
+      if (index) ambiguous = true;
+      index = r;
+      table = l0->addr;
+      entry = l0->size;
+    }
+    if (ambiguous) return std::nullopt;
+    if (index) window = w;
+  }
+  if (!index) return std::nullopt;
+  if (table < addr + 4 || table >= addr + 8) return std::nullopt;
+  for (uint32_t a = addr + 4; a < table; ++a)
+    if (mem.read(a, 1) != 0u) return std::nullopt;
+
+  const uint64_t code_end = uint64_t{start} + size;
+  uint64_t end = code_end;
+  if (auto it = targets.upper_bound(addr); it != targets.end()) end = std::min<uint64_t>(end, it->first);
+  SwitchTable t;
+  t.base = addr;
+  t.r = *index;
+  for (uint32_t v = 0; v < kMaxCases && uint64_t{table} + uint64_t{v + 1} * entry <= end; ++v) {
+    const uint32_t entry_end = table + (v + 1) * entry;
+    auto target = evaluate(mem, window, *index, 0, v);
+    if (!target || (*target & 3) || *target < start || *target >= code_end ||
+        (*target > addr && *target < entry_end))
+      break;
+    if (*target > addr) end = std::min<uint64_t>(end, *target);
+    if (entry_end > end) break;  // this entry overlaps code another label proves
+    t.labels.push_back(*target);
+  }
+  if (t.labels.empty()) return std::nullopt;
+  const uint32_t table_end = table + static_cast<uint32_t>(t.labels.size()) * entry;
+  if (end < table_end || end - table_end >= 4) return std::nullopt;
+  for (uint32_t a = table_end; a < end; ++a)
+    if (mem.read(a, 1) != 0u) return std::nullopt;
+  return t;
+}
+
 }  // namespace
 
 SwitchScan scan_switch_tables(std::span<const uint8_t> image, uint32_t image_base,
@@ -464,6 +538,11 @@ SwitchScan scan_switch_tables(std::span<const uint8_t> image, uint32_t image_bas
       if (!guard) {
         if (auto t = masked_table(mem, addr, start, size)) {
           out.tables.push_back(std::move(*t));
+        } else if (status == GuardStatus::None && has_indexed_load(mem, addr) && has_lis(mem, addr)) {
+          if (auto it = inline_table(mem, addr, start, size, targets))
+            out.tables.push_back(std::move(*it));
+          else
+            out.unbounded.push_back(addr);
         } else if (status == GuardStatus::Joined && has_indexed_load(mem, addr)) {
           out.joined.push_back(addr);
         } else if (status == GuardStatus::Incomplete && has_indexed_load(mem, addr)) {

@@ -834,6 +834,79 @@ TEST_CASE("resolve_dominated_switches proves a guard joined by a re-checked loop
   }
 }
 
+namespace {
+
+// Unguarded byte table placed right after its bctr, offsets in instructions from the table:
+//   blr | lwz r11, 0(r3); lis r12; addi r12, r12, 0x24; lbzx r0, r12, r11; slwi r0, r0, 2; add r0, r0, r12;
+//   mtctr r0; bctr (0x20) | 5 table bytes at 0x24, 3 zero bytes | case code from 0x2C.
+void inline_byte_switch(FakeImage& img, std::initializer_list<uint8_t> entries) {
+  img.code(kBase, {kBlr, lwz(11, 3, 0), lis(12, 0x8200), addi(12, 12, 0x24), lbzx(0, 12, 11), slwi(0, 0, 2),
+                   add(0, 0, 12), mtctr(0), kBctr});
+  uint32_t at = 0x24;
+  for (uint8_t e : entries) img.bytes[at++] = e;
+  img.code(kBase + 0x2C, {kBlr, kBlr, kBlr, kBlr});
+}
+
+}  // namespace
+
+TEST_CASE("scan_switch_tables sizes an unguarded table that sits right after its bctr", "[unit]") {
+  // The compiler dropped the bound check (an enum switch), but the table is inline: it ends where the first case
+  // starts, so the number of cases is the table length.
+  FakeImage img;
+  inline_byte_switch(img, {2, 3, 2, 4, 5});
+  auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+  REQUIRE(scan.tables.size() == 1);
+  CHECK(scan.unbounded.empty());
+  CHECK(scan.tables[0].base == kBase + 0x20);
+  CHECK(scan.tables[0].r == 11);
+  CHECK(scan.tables[0].default_label == 0);
+  CHECK(scan.tables[0].labels ==
+        std::vector<uint32_t>{kBase + 0x2C, kBase + 0x30, kBase + 0x2C, kBase + 0x34, kBase + 0x38});
+}
+
+TEST_CASE("scan_switch_tables sizes an unguarded absolute word table that sits right after its bctr", "[unit]") {
+  // The shape of the game's 0x8235B7AC: absolute labels (lwzx) right after the bctr, the first case right after the
+  // last entry. bctr at 0x18, 6 entries at 0x1C..0x34, case code from 0x34.
+  FakeImage img;
+  img.code(kBase, {kBlr, lis(11, 0x8200), addi(11, 11, 0x1C), slwi(0, 3, 2), lwzx(0, 11, 0), mtctr(0), kBctr});
+  const std::vector<uint32_t> labels = {kBase + 0x34, kBase + 0x38, kBase + 0x34,
+                                        kBase + 0x3C, kBase + 0x40, kBase + 0x34};
+  for (uint32_t v = 0; v < labels.size(); ++v) img.word(kBase + 0x1C + 4 * v, labels[v]);
+  img.code(kBase + 0x34, {kBlr, kBlr, kBlr, kBlr});
+  auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+  REQUIRE(scan.tables.size() == 1);
+  CHECK(scan.unbounded.empty());
+  CHECK(scan.tables[0].base == kBase + 0x18);
+  CHECK(scan.tables[0].r == 3);
+  CHECK(scan.tables[0].labels == labels);
+
+  SECTION("a word table whose case code does not start right after it is refused") {
+    img.code(kBase + 0x34, {0x7C000000u, kBlr, kBlr, kBlr, kBlr});  // something nobody points at
+    for (uint32_t v = 0; v < labels.size(); ++v) img.word(kBase + 0x1C + 4 * v, labels[v] + 4);
+    auto shifted = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(shifted.tables.empty());
+    CHECK(shifted.unbounded == std::vector<uint32_t>{kBase + 0x18});
+  }
+}
+
+TEST_CASE("scan_switch_tables refuses an inline table it cannot delimit", "[unit]") {
+  SECTION("an entry points into the table itself") {
+    FakeImage img;
+    inline_byte_switch(img, {0, 2, 3});
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(scan.tables.empty());
+    CHECK(scan.unbounded == std::vector<uint32_t>{kBase + 0x20});
+  }
+  SECTION("unexplained bytes between the table and the first case") {
+    FakeImage img;
+    inline_byte_switch(img, {3, 3});  // first case at 0x30: 2 entries, then 10 bytes nobody accounts for
+    img.code(kBase + 0x2C, {0x7C000000u});
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(scan.tables.empty());
+    CHECK(scan.unbounded == std::vector<uint32_t>{kBase + 0x20});
+  }
+}
+
 // XenonRecomp's own analysis of a bl-target function follows a forward `b` (a tail jump) into the next function: when
 // that next function is a derived leaf range, the analysed function swallows its switch and XenonRecomp reports the
 // cases as outside the function. The function just before the leaf range is then bounded explicitly too.
