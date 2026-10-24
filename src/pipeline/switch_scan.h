@@ -75,6 +75,11 @@ struct SwitchFit {
 // with no forward branch from the code before it reaching past it, moves the start up (the last one
 // below the table) or ends the range (the first one after the last label). Tables inside a .pdata
 // function must keep all labels inside it.
+// XenonRecomp analyses every `bl` target itself and follows a forward `b` into the next function, so the closest
+// `bl` target below a derived range (in the same gap) is bounded explicitly too, as [target, range start), when that
+// stretch has no zero word, ends with an unconditional branch and branches forward into the range; otherwise its
+// analysed copy would swallow the range's switch (seen at 0x82366518/0x82366530). That range goes through the same
+// checks, and a table is kept only if both of its ranges pass.
 // A derived range is rejected (and its tables dropped) if it overlaps another derived range or one
 // of `manual` (hand-written `functions` in recomp.toml), or if any call (`bl`/`bcl`) targets its
 // interior, or any branch from outside it lands in its interior.

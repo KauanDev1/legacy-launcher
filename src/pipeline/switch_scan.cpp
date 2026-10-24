@@ -543,7 +543,12 @@ SwitchFit fit_switch_functions(std::span<const uint8_t> image, uint32_t image_ba
   }
 
   SwitchFit out;
-  std::vector<std::pair<SwitchTable, FunctionRange>> leaf;  // tables waiting for range validation
+  struct Leaf {
+    SwitchTable table;
+    FunctionRange range;
+    std::optional<FunctionRange> before;  // the bl-target function right before it that jumps into it
+  };
+  std::vector<Leaf> leaf;  // tables waiting for range validation
   for (auto& t : tables) {
     const uint32_t lo = *std::min_element(t.labels.begin(), t.labels.end());
     const uint32_t hi = *std::max_element(t.labels.begin(), t.labels.end());
@@ -613,15 +618,32 @@ SwitchFit fit_switch_functions(std::span<const uint8_t> image, uint32_t image_ba
       out.dropped.push_back(t.base);
       continue;
     }
-    leaf.emplace_back(std::move(t), FunctionRange{start, end - start, false});
+    // XenonRecomp analyses each bl target itself and follows a forward `b` (a tail jump) into the next function:
+    // the bl-target function right below the range would swallow its start, switch included. Bound it explicitly
+    // when it ends with an unconditional branch just before the range and branches forward into the range.
+    std::optional<FunctionRange> before;
+    if (auto it = bl_targets.lower_bound(start); it != bl_targets.begin() && *std::prev(it) >= gap_lo) {
+      const uint32_t p = *std::prev(it);
+      bool clean = p < start && is_unconditional(mem.read(start - 4, 4).value_or(0));
+      bool jumps_in = false;
+      for (uint32_t a = p; clean && a < start; a += 4) {
+        const uint32_t w = mem.read(a, 4).value_or(0);
+        clean = w != 0;
+        if (auto tg = relative_target(w, a); tg && !(w & 1) && *tg >= start && *tg < end) jumps_in = true;
+      }
+      if (clean && jumps_in) before = FunctionRange{p, start - p, false};
+    }
+    leaf.push_back({std::move(t), FunctionRange{start, end - start, false}, before});
   }
 
   // Validate each distinct derived range: it must not overlap another derived range or a
   // hand-written one, and nothing outside it may call or branch into its middle (that would mean
   // it swallowed another function or a shared tail).
   std::vector<FunctionRange> ranges;
-  for (const auto& [t, f] : leaf)
-    if (std::find(ranges.begin(), ranges.end(), f) == ranges.end()) ranges.push_back(f);
+  for (const auto& l : leaf) {
+    if (std::find(ranges.begin(), ranges.end(), l.range) == ranges.end()) ranges.push_back(l.range);
+    if (l.before && std::find(ranges.begin(), ranges.end(), *l.before) == ranges.end()) ranges.push_back(*l.before);
+  }
   auto overlaps = [](const FunctionRange& a, const FunctionRange& b) {
     return uint64_t{a.start} < uint64_t{b.start} + b.size && uint64_t{b.start} < uint64_t{a.start} + a.size;
   };
@@ -635,17 +657,25 @@ SwitchFit fit_switch_functions(std::span<const uint8_t> image, uint32_t image_ba
       const auto [src, call] = it->second;
       ok = !call && src >= f.start && src < end;
     }
-    if (ok)
-      out.functions.push_back(f);
-    else
-      bad.push_back(f);
+    if (!ok) bad.push_back(f);
   }
-  for (auto& [t, f] : leaf) {
-    if (std::find(bad.begin(), bad.end(), f) != bad.end())
-      out.dropped.push_back(t.base);
-    else
-      out.tables.push_back(std::move(t));
+  // A table is kept only if its range and the range bounding the function before it are both good; only the ranges
+  // of kept tables are emitted.
+  auto emit = [&](const FunctionRange& f) {
+    if (std::find(out.functions.begin(), out.functions.end(), f) == out.functions.end()) out.functions.push_back(f);
+  };
+  for (auto& l : leaf) {
+    auto is_bad = [&](const FunctionRange& f) { return std::find(bad.begin(), bad.end(), f) != bad.end(); };
+    if (is_bad(l.range) || (l.before && is_bad(*l.before))) {
+      out.dropped.push_back(l.table.base);
+      continue;
+    }
+    emit(l.range);
+    if (l.before) emit(*l.before);
+    out.tables.push_back(std::move(l.table));
   }
+  std::sort(out.functions.begin(), out.functions.end(),
+            [](const FunctionRange& a, const FunctionRange& b) { return a.start < b.start; });
   out.dropped_functions = std::move(bad);
   return out;
 }

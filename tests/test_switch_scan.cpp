@@ -833,3 +833,29 @@ TEST_CASE("resolve_dominated_switches proves a guard joined by a re-checked loop
     CHECK(f.resolve().empty());
   }
 }
+
+// XenonRecomp's own analysis of a bl-target function follows a forward `b` (a tail jump) into the next function: when
+// that next function is a derived leaf range, the analysed function swallows its switch and XenonRecomp reports the
+// cases as outside the function. The function just before the leaf range is then bounded explicitly too.
+TEST_CASE("fit_switch_functions bounds the function that tail-jumps into a leaf range", "[unit]") {
+  LeafFixture f;
+  // P = [0x040, 0x050): li; beq 0x04C; b 0x050 (tail jump into the leaf); blr. A calls P.
+  f.img.code(kBase + 0x40, {addi(3, 0, 0), (16u << 26) | (12u << 21) | (2u << 16) | 8u, (18u << 26) | 8u, kBlr});
+  f.img.word(kBase + 0x14, (18u << 26) | (0x2Cu & 0x03FFFFFC) | 1u);  // bl -> 0x040
+  auto fit = fit_switch_functions(f.img.bytes, kBase, kCode, f.pdata, f.tables());
+  CHECK(fit.functions == std::vector<FunctionRange>{{kBase + 0x40, 0x10, false}, {kBase + 0x50, 0x1A0, false}});
+  CHECK(fit.tables.size() == 1);
+  CHECK(fit.dropped_functions.empty());
+
+  SECTION("no forward branch into the leaf: nothing extra") {
+    f.img.word(kBase + 0x48, kNop);
+    auto plain = fit_switch_functions(f.img.bytes, kBase, kCode, f.pdata, f.tables());
+    CHECK(plain.functions == std::vector<FunctionRange>{{kBase + 0x50, 0x1A0, false}});
+  }
+  SECTION("a branch from outside into P's interior rejects P, and the table goes with it") {
+    f.img.word(kBase + 0x20, (18u << 26) | (0x2Cu & 0x03FFFFFC));  // b 0x04C, from inside .pdata A
+    auto bad = fit_switch_functions(f.img.bytes, kBase, kCode, f.pdata, f.tables());
+    CHECK(bad.tables.empty());
+    CHECK(bad.dropped == std::vector<uint32_t>{kBase + 0x60});
+  }
+}
