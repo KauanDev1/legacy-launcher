@@ -32,9 +32,13 @@ using CodeRange = std::pair<uint32_t, uint32_t>;
 // candidate's start, padding or the end of the gap before it ends (the other candidate is then rejected
 // too), if any `bctr` in it is fed by an indexed load (an unresolved switch), or if any call, or any
 // branch from outside, lands in its interior (the `fit_switch_functions` rule). Result is sorted by start.
+// `import_thunks`: the start of every import thunk (16 bytes each, XenonRecomp maps them to the kernel imports). They
+// count as known functions: never emitted (a function at a thunk's address would run its placeholder bytes instead
+// of calling the import), and boundaries and tail-call targets like any known start.
 // Never reads outside `image` (byte 0 = `base`, big-endian).
 std::vector<FunctionRange> discover_pointer_functions(std::span<const uint8_t> image, uint32_t base,
                                                       const std::vector<CodeRange>& code,
-                                                      const std::vector<FunctionRange>& known);
+                                                      const std::vector<FunctionRange>& known,
+                                                      std::span<const uint32_t> import_thunks = {});
 
 }  // namespace lr::pipeline

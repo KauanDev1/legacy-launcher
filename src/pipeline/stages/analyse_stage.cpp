@@ -31,7 +31,7 @@ namespace {
 
 // Bumped whenever scan_switch_tables, fit_switch_functions or discover_pointer_functions changes
 // behaviour (part of the fingerprint).
-constexpr const char* kScannerVersion = "switch-scan-16";
+constexpr const char* kScannerVersion = "switch-scan-17";
 
 Result<std::vector<uint8_t>> read_file(const fs::path& p) {
   std::ifstream f(p, std::ios::binary | std::ios::ate);
@@ -215,8 +215,12 @@ class AnalyseStage : public Stage {
     std::vector<FunctionRange> known = pdata;
     known.insert(known.end(), fit.functions.begin(), fit.functions.end());
     known.insert(known.end(), manual.begin(), manual.end());
+    // XenonUtils names exactly the import thunks as symbols (Symbol_Function, one per resolved import).
+    std::vector<uint32_t> thunks;
+    for (const auto& sym : image.symbols)
+      if (sym.type == Symbol_Function) thunks.push_back(static_cast<uint32_t>(sym.address));
     auto pointer_only = discover_pointer_functions(std::span<const uint8_t>(image.data.get(), image.size),
-                                                   static_cast<uint32_t>(image.base), code, known);
+                                                   static_cast<uint32_t>(image.base), code, known, thunks);
     std::erase_if(pointer_only, [&](const FunctionRange& f) {
       auto it = std::lower_bound(labels.begin(), labels.end(), f.start);
       return it != labels.end() && uint64_t{*it} < uint64_t{f.start} + f.size;

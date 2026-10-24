@@ -32,7 +32,9 @@ O `analyse` também procura funções sem entrada no `.pdata` que só são alcan
 de callbacks, o comparador de um `qsort`), que o XenonRecomp nunca recompilaria
 (`src/pipeline/function_discovery.cpp`). Candidatas: palavras de 32 bits (big-endian, alinhadas) fora das seções
 de código cujo valor aponta para código e endereços de código montados com `lis` + `addi`. Alvos de `bl` nunca
-são emitidos (o XenonRecomp já cria uma função em cada um, ver ADR 0005), só servem de fronteira. Uma
+são emitidos (o XenonRecomp já cria uma função em cada um, ver ADR 0005), só servem de fronteira. Os thunks de
+importação (os símbolos que o XenonUtils cria, 16 bytes cada) contam como funções conhecidas: uma tabela de
+ponteiros que aponta para um deles (o `NtReadFile` da CRT) não gera uma segunda função no mesmo endereço. Uma
 candidata só vale se estiver num vão entre funções conhecidas (`.pdata`, funções derivadas dos `switch` e as
 escritas à mão no `recomp.toml`; os 8 bytes de dados do handler antes de uma função com exception handler contam
 como dela), se a palavra anterior não puder cair nela (`blr`, `bctr`, `b`, padding zero) e se terminar num

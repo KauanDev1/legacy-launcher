@@ -141,3 +141,24 @@ TEST_CASE("lis/addi address of code yields a function", "[unit]") {
   auto fns = discover_pointer_functions(img.bytes, kBase, kCode, known);
   CHECK(fns == std::vector<FunctionRange>{{kBase + 0x80, 8, false}});
 }
+
+// An import thunk (XenonRecomp rewrites each to nop, nop, nop, blr and maps it to the kernel import) reached only
+// through a pointer table, like the CRT's NtReadFile, looks like a tiny pointer-only function. Emitting it made a
+// second function mapping at the thunk's address that ran the placeholder bytes instead of calling the kernel.
+TEST_CASE("import thunks are never emitted as pointer-only functions", "[unit]") {
+  FakeImage img;
+  constexpr uint32_t kNop = 0x60000000;
+  img.code(kBase, {li(3, 0), kBlr});                             // .pdata F0
+  img.code(kBase + 0x10, {kNop, kNop, kNop, kBlr});              // thunk A
+  img.code(kBase + 0x20, {kNop, kNop, kNop, kBlr});              // thunk B
+  img.code(kBase + 0x30, {li(3, 7), b(0x10 - 0x34)});            // pointer-only function tail-calling thunk A
+  img.code(kBase + 0x800, {kBase + 0x10, kBase + 0x20, kBase + 0x30});  // pointer table (data)
+  const std::vector<FunctionRange> known = {{kBase, 8, false}};
+
+  // Without the thunk list the thunks come out as functions (the bug this guards against).
+  CHECK(discover_pointer_functions(img.bytes, kBase, kCode, known).size() == 3);
+
+  const std::vector<uint32_t> thunks = {kBase + 0x10, kBase + 0x20};
+  auto fns = discover_pointer_functions(img.bytes, kBase, kCode, known, thunks);
+  CHECK(fns == std::vector<FunctionRange>{{kBase + 0x30, 8, false}});
+}
