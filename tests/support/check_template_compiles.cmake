@@ -5,7 +5,8 @@
 # not stage makes this test fail instead of the user's install.
 # Include path (template order): GENERATED (fake generated dir), PPC_CONTEXT_DIR (staged tools/, stand-in for the
 # ppc_context.h XenonRecomp copies into work/generated), RUNTIME_INCLUDE (staged runtime/include), its simde/, then
-# EXTRA_INCLUDES ("|"-separated, SDL2's headers). Never src/: that is the point of the test.
+# EXTRA_INCLUDES ("|"-separated: SDL2's headers, and tests/ for the header-only test helpers fake_recomp.cpp uses).
+# Never src/: that is the point of the test.
 # The template force-includes runtime/indirect_call.h (found through RUNTIME_INCLUDE), so the check does too, and
 # SOURCES includes a file that expands PPC_CALL_INDIRECT_FUNC.
 # HEADERS ("|"-separated, optional): staged headers that must each compile on their own (the Vulkan backend's

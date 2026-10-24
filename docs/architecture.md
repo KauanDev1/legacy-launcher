@@ -1081,6 +1081,15 @@ with the Vulkan backend`, `vertex fetch constant at an unallocated physical addr
 list is fatal`, `rect list with the right angle at any vertex` e `a backend fatal reaches GpuHooks::fatal through
 GpuSystem`.
 
+**Ponta a ponta (Tarefa 21).** O teste do jogo falso `fake guest draws a textured quad` (`sub_820004A0` em
+`tests/support/fake_generated/fake_recomp.cpp`) passa pelo renderizador inteiro como o D3D faria: `Vd*` para iniciar a
+GPU, uma textura DXT1 de 256×160 em tiles (8in16; o tiling vem da referência de teste `xenos_tiling.h`, não do
+runtime), um quad e microcódigo de VS/PS montado com `xenos_shader_builder.h` na memória física; no anel, estado por
+pacotes tipo 0, uma limpeza (resolve com `copy_command` 3), `IM_LOAD` dos dois shaders, as fetch constants por
+`SET_CONSTANT`, um draw de lista de quads, o resolve para o front buffer A8R8G8B8 (8in32, troca vermelho/azul) e o
+`VdSwap`. A captura de `--screenshot-after 1` precisa mostrar cada texel no lugar e a cor da limpeza fora do quad, numa
+primeira execução (tradução, gravada no cache em disco da raiz temporária) e numa segunda (lida do disco).
+
 ## Contrato dos shaders traduzidos (plano B)
 
 Esta seção é o contrato entre o SPIR-V traduzido e a GPU emulada: o lado do runtime (Tarefa 20) se implementa só a

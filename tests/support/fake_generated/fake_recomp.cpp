@@ -2,10 +2,17 @@
 // Hand-written stand-ins for recompiled guest functions.
 #include "ppc_recomp_shared.h"
 
+#include "runtime/gpu/pm4.h"
+#include "runtime/gpu/registers.h"
 #include "runtime/gpu/texture_format.h"
+#include "support/xenos_shader_builder.h"
+#include "support/xenos_tiling.h"
 
+#include <bit>
 #include <cstdint>
+#include <initializer_list>
 #include <utility>
+#include <vector>
 
 // Calls an implemented import, a stub, then an unimplemented one: the run must stop with exit code 3.
 PPC_FUNC(sub_82000100) {
@@ -543,3 +550,249 @@ PPC_FUNC(sub_82000400) { gpu_boot::run(ctx, base, gpu_boot::kFrames); }
 
 // The same GPU boot, swapping the solid front buffer forever (the SIGTERM test ends it).
 PPC_FUNC(sub_820004E0) { gpu_boot::run(ctx, base, 0); }
+
+// --- Fake textured quad (sub_820004A0, Task 21): the whole renderer end to end, driven the way D3D drives it. ---
+namespace textured_quad {
+namespace x = lr::testing::xenos;
+namespace g = lr::gpu;
+using gpu_boot::kRingDwords;
+using gpu_boot::kRingLog2;
+using gpu_boot::kWptrMmio;
+// The frame: a kW x kH k_8_8_8_8 render target at EDRAM tile 0 and its tiled A8R8G8B8 front buffer.
+constexpr uint32_t kW = 512, kH = 320;
+constexpr uint32_t kClear = 0x40404040;  // grey: the same in every channel order
+// The texture: kTexW x kTexH DXT1 (4x4 blocks of 8 bytes), tiled, 8in16, drawn 1:1 with its top-left texel at pixel
+// (kQuadX0, kQuadY0). Block rows are allocated up to a multiple of 32 (the tiled layout's macro tile).
+constexpr uint32_t kTexW = 256, kTexH = 160, kTexBlocksW = kTexW / 4, kTexBlocksH = kTexH / 4, kTexAllocRows = 64;
+constexpr uint32_t kQuadX0 = 128, kQuadY0 = 80;
+constexpr uint32_t kSlot = 3;  // the quad's vertex fetch constant (registers SHADER_CONSTANT_FETCH_00_0 + 6, + 7)
+// Offsets in the data block D (physical memory).
+constexpr uint32_t kWriteBack = 0x00, kVblanks = 0x10, kSwapFetch = 0x40, kFrontPtr = 0x60, kWidth = 0x64,
+                   kHeight = 0x68, kQuad = 0x100, kRect = 0x200, kVs = 0x400, kPs = 0x800;
+
+// Block (bx, by) is one solid colour, unique per block: R5 = bx & 31, G6 = by, B5 = (bx >> 5) << 4 | 8 (never 0).
+constexpr uint16_t block_color(uint32_t bx, uint32_t by) {
+  return uint16_t(((bx & 31u) << 11) | ((by & 63u) << 5) | (((bx >> 5) << 4) | 8u));
+}
+
+x::Alu mov(uint32_t dest, uint32_t reg) {
+  x::Alu a;
+  a.vector_op = x::kVectorMax;
+  a.vector_dest = dest;
+  a.export_data = true;
+  a.src1 = {reg, true, 0};
+  a.src2 = {reg, true, 0};
+  return a;
+}
+
+// VS: r1 = float4 position, r2 = float4 texture coordinates from vertex fetch constant kSlot (8 dwords per vertex,
+// index r0.x); exports the position and interpolator 0 = r2.
+std::vector<uint32_t> vertex_shader() {
+  std::vector<uint32_t> code;
+  x::emit(code, x::cf_pair(x::cf_exec(true, 1, 4, 0b0101), x::cf_nop()));
+  x::emit(code, x::vfetch(1, 0, kSlot, 0, 8, x::kFormat32_32_32_32Float));
+  x::emit(code, x::vfetch_mini(2, 4, x::kFormat32_32_32_32Float));
+  x::emit(code, x::alu(mov(x::kExportVsPosition, 1)));
+  x::emit(code, x::alu(mov(x::kExportVsInterpolator0, 2)));
+  return code;
+}
+
+// PS: r1 = tfetch 2D of texture fetch constant 0 at r0 (interpolator 0); oC0 = r1.
+std::vector<uint32_t> pixel_shader() {
+  std::vector<uint32_t> code;
+  x::emit(code, x::cf_pair(x::cf_exec(true, 1, 2, 0b0001), x::cf_nop()));
+  x::emit(code, x::tfetch(1, 0, 0, x::kTextureDim2D));
+  x::emit(code, x::alu(mov(x::kExportPsColor0, 1)));
+  return code;
+}
+
+uint32_t f2u(float f) { return std::bit_cast<uint32_t>(f); }
+
+static void run(PPCContext& ctx, uint8_t* base) {
+  ctx.r1.u64 -= gpu_boot::kFrame;
+  const uint32_t l = uint32_t(ctx.r1.u64) + 0x60;  // locals: delay interval (be int64)
+  bool failed = false;
+  const auto fail = [&] {
+    if (failed) return;
+    failed = true;
+    ctx.lr = 0x820004A4;
+    __imp__FakeMissing(ctx, base);
+  };
+  const auto alloc_phys = [&](uint32_t size, uint32_t lr) {
+    ctx.r3.u64 = 0;
+    ctx.r4.u64 = size;
+    ctx.r5.u64 = 0x20000004;  // MEM_LARGE_PAGES | PAGE_READWRITE
+    ctx.r6.u64 = 0;
+    ctx.r7.u64 = 0xFFFFFFFF;
+    ctx.r8.u64 = 0;
+    ctx.lr = lr;
+    __imp__MmAllocatePhysicalMemoryEx(ctx, base);
+    const uint32_t guest = ctx.r3.u32;
+    if (guest == 0) fail();
+    ctx.r3.u64 = guest;
+    ctx.lr = lr + 4;
+    __imp__MmGetPhysicalAddress(ctx, base);
+    return std::pair<uint32_t, uint32_t>{guest, ctx.r3.u32};
+  };
+
+  ctx.r3.u64 = 0;
+  ctx.r4.u64 = 0;
+  ctx.r5.u64 = 0;
+  ctx.r6.u64 = 0;
+  ctx.lr = 0x820004A8;
+  __imp__VdInitializeEngines(ctx, base);
+  if (ctx.r3.u32 != 1) fail();
+
+  const auto [ring, ring_phys] = alloc_phys(kRingDwords * 4, 0x820004AC);
+  const auto [d, d_phys] = alloc_phys(0x10000, 0x820004B4);
+  const auto [fb, fb_phys] = alloc_phys(kW * kH * 4, 0x820004BC);  // kH is a multiple of 32
+  const auto [tex, tex_phys] = alloc_phys(kTexBlocksW * kTexAllocRows * 8, 0x820004E4);
+
+  // The texture, as the guest CPU writes a DXT1 surface for an 8in16 fetch constant: each 16-bit half of a block
+  // big-endian (colour 0, colour 1 = 0, the 32 index bits all 0: every texel is colour 0), each block at its Xenos
+  // 2D tiled offset (pitch in blocks, 8 bytes per block) from the test reference, not the runtime's tiling.
+  for (uint32_t by = 0; by < kTexBlocksH; ++by) {
+    for (uint32_t bx = 0; bx < kTexBlocksW; ++bx) {
+      const uint32_t at = tex + lr::testing::xenos_tiled_offset_2d(bx, by, kTexBlocksW, 3);
+      PPC_STORE_U16(at + 0, block_color(bx, by));
+      PPC_STORE_U16(at + 2, 0);
+      PPC_STORE_U16(at + 4, 0);
+      PPC_STORE_U16(at + 6, 0);
+    }
+  }
+  // The quad (clip space: the kTexW x kTexH rectangle at (kQuadX0, kQuadY0) of the frame) as a quad list TL, TR, BR,
+  // BL: float4 position, float4 texture coordinates (u right, v down), big-endian.
+  const float qx0 = float(kQuadX0) / (kW / 2.0f) - 1.0f, qx1 = float(kQuadX0 + kTexW) / (kW / 2.0f) - 1.0f;
+  const float qy0 = 1.0f - float(kQuadY0) / (kH / 2.0f), qy1 = 1.0f - float(kQuadY0 + kTexH) / (kH / 2.0f);
+  const float quad[4][8] = {{qx0, qy0, 0, 1, 0, 0, 0, 0},
+                            {qx1, qy0, 0, 1, 1, 0, 0, 0},
+                            {qx1, qy1, 0, 1, 1, 1, 0, 0},
+                            {qx0, qy1, 0, 1, 0, 1, 0, 0}};
+  for (uint32_t v = 0; v < 4; ++v)
+    for (uint32_t c = 0; c < 8; ++c) PPC_STORE_U32(d + kQuad + 4 * (8 * v + c), f2u(quad[v][c]));
+  // The resolve rectangle, as D3D draws it: three k_32_32_FLOAT vertices in pixels, in vertex fetch constant 0.
+  const float rect[6] = {0, 0, float(kW), 0, float(kW), float(kH)};
+  for (uint32_t i = 0; i < 6; ++i) PPC_STORE_U32(d + kRect + 4 * i, f2u(rect[i]));
+  // The microcode, big-endian, for IM_LOAD.
+  const std::vector<uint32_t> vs = vertex_shader(), ps = pixel_shader();
+  for (size_t i = 0; i < vs.size(); ++i) PPC_STORE_U32(d + kVs + uint32_t(4 * i), vs[i]);
+  for (size_t i = 0; i < ps.size(); ++i) PPC_STORE_U32(d + kPs + uint32_t(4 * i), ps[i]);
+
+  ctx.r3.u64 = 0x82000480;
+  ctx.r4.u64 = d + kVblanks;
+  ctx.lr = 0x820004EC;
+  __imp__VdSetGraphicsInterruptCallback(ctx, base);
+  ctx.r3.u64 = ring_phys;
+  ctx.r4.u64 = kRingLog2;
+  ctx.lr = 0x820004F0;
+  __imp__VdInitializeRingBuffer(ctx, base);
+  ctx.r3.u64 = d_phys + kWriteBack;
+  ctx.r4.u64 = 6;
+  ctx.lr = 0x820004F4;
+  __imp__VdEnableRingBufferRPtrWriteBack(ctx, base);
+
+  uint32_t wptr = 0;
+  const auto put = [&](uint32_t v) {
+    PPC_STORE_U32(ring + wptr * 4, v);
+    wptr = (wptr + 1) % kRingDwords;
+  };
+  const auto type0 = [&](uint32_t reg, std::initializer_list<uint32_t> values) {
+    put((uint32_t(values.size() - 1) << 16) | reg);
+    for (uint32_t v : values) put(v);
+  };
+  const auto type3 = [&](uint32_t opcode, std::initializer_list<uint32_t> payload) {
+    put((3u << 30) | (uint32_t(payload.size() - 1) << 16) | (opcode << 8));
+    for (uint32_t v : payload) put(v);
+  };
+  // SET_CONSTANT type 1 (fetch constants), starting at register SHADER_CONSTANT_FETCH_00_0 + offset.
+  const auto set_fetch = [&](uint32_t offset, std::initializer_list<uint32_t> values) {
+    put((3u << 30) | (uint32_t(values.size()) << 16) | (uint32_t(g::pm4::SET_CONSTANT) << 8));
+    put((1u << 16) | offset);
+    for (uint32_t v : values) put(v);
+  };
+  const uint32_t rect_fetch0 = (d_phys + kRect) | 3u, rect_fetch1 = g::pm4::kEndian8in32 | (6u << 2);
+  const uint32_t rect_draw = 8u | (2u << 6) | (3u << 16);  // rect list, auto index, 3 vertices
+
+  // Render state: the colour target, no depth test, no blending, the D3D viewport mapping clip [-1, 1] onto the
+  // frame (y down) with pixel centres at .5 (pix_center 1), the scissors on the whole frame, every index in range.
+  type0(g::RB_SURFACE_INFO, {kW, 0u /* RB_COLOR_INFO: tile 0, k_8_8_8_8 */});
+  type0(g::RB_COLOR_MASK, {0xF});
+  type0(g::RB_DEPTHCONTROL, {0, 0x00010001u /* RB_BLENDCONTROL0: one, zero, add */, 0 /* RB_COLORCONTROL */});
+  type0(g::PA_SC_WINDOW_SCISSOR_TL, {1u << 31, kW | (kH << 16)});
+  type0(g::PA_SC_SCREEN_SCISSOR_TL, {0, kW | (kH << 16)});
+  type0(g::PA_CL_VTE_CNTL, {0x3Fu | (1u << 10)});
+  type0(g::PA_CL_VPORT_XSCALE,
+        {f2u(kW / 2.0f), f2u(kW / 2.0f), f2u(-(kH / 2.0f)), f2u(kH / 2.0f), f2u(1.0f), f2u(0.0f)});
+  type0(g::PA_CL_CLIP_CNTL, {1u << 19});
+  type0(g::PA_SU_VTX_CNTL, {1});
+  type0(g::PA_SU_SC_MODE_CNTL, {0});
+  type0(g::VGT_MAX_VTX_INDX, {0xFFFFFF, 0, 0});
+  // Clear the colour target to kClear: a resolve that only clears (copy_command 3, color_clear_enable).
+  set_fetch(0, {rect_fetch0, rect_fetch1});
+  type0(g::RB_COPY_CONTROL, {(1u << 8) | (3u << 20)});
+  type0(g::RB_COLOR_CLEAR, {kClear});
+  type0(g::RB_MODECONTROL, {6});
+  type3(g::pm4::DRAW_INDX, {0 /* viz query token */, rect_draw});
+  // The shaders, from physical memory.
+  type3(g::pm4::IM_LOAD, {(d_phys + kVs) | 0u /* vertex */, uint32_t(vs.size())});
+  type3(g::pm4::IM_LOAD, {(d_phys + kPs) | 1u /* pixel */, uint32_t(ps.size())});
+  // Texture fetch constant 0: DXT1, 8in16, tiled, pitch kTexW, kTexW x kTexH, swizzle XYZW, point filters, clamp to
+  // edge, 2D. Then vertex fetch constant kSlot: the 32 quad dwords, 8in32.
+  set_fetch(0, {2u | (2u << 10) | (2u << 13) | (2u << 16) | ((kTexW / 32u) << 22) | (1u << 31),
+                uint32_t(g::XenosFormat::k_DXT1) | (g::pm4::kEndian8in16 << 6) | tex_phys,
+                (kTexW - 1) | ((kTexH - 1) << 13), (0u | (1u << 3) | (2u << 6) | (3u << 9)) << 1, 0, 1u << 9});
+  set_fetch(2 * kSlot, {(d_phys + kQuad) | 3u, g::pm4::kEndian8in32 | (32u << 2)});
+  // The quad: colour+depth, quad list, auto index, 4 vertices.
+  type0(g::RB_MODECONTROL, {4});
+  type3(g::pm4::DRAW_INDX_2, {0x0Du | (2u << 6) | (4u << 16)});
+  // Resolve colour target 0 into the front buffer as D3D's A8R8G8B8: k_8_8_8_8 with red/blue swapped, 8in32 (the
+  // rectangle's fetch constant overwrites the texture's first two dwords, as in D3D).
+  set_fetch(0, {rect_fetch0, rect_fetch1});
+  type0(g::RB_COPY_CONTROL, {0, fb_phys, kW | (kH << 16), g::pm4::kEndian8in32 | (6u << 7) | (1u << 24)});
+  type0(g::RB_MODECONTROL, {6});
+  type3(g::pm4::DRAW_INDX, {0, rect_draw});
+
+  // VdSwap of the front buffer: fetch constant k_8_8_8_8, 8in32, tiled, pitch kW, swizzle ZYXW (A8R8G8B8), 2D.
+  PPC_STORE_U32(d + kSwapFetch + 0, 2u | ((kW / 32u) << 22) | (1u << 31));
+  PPC_STORE_U32(d + kSwapFetch + 4, fb | gpu_boot::kFetch1Format);
+  PPC_STORE_U32(d + kSwapFetch + 8, (kW - 1) | ((kH - 1) << 13));
+  PPC_STORE_U32(d + kSwapFetch + 12, gpu_boot::kFetch3);
+  PPC_STORE_U32(d + kSwapFetch + 16, 0);
+  PPC_STORE_U32(d + kSwapFetch + 20, gpu_boot::kFetch5);
+  PPC_STORE_U32(d + kFrontPtr, fb);
+  PPC_STORE_U32(d + kWidth, kW);
+  PPC_STORE_U32(d + kHeight, kH);
+  ctx.r3.u64 = ring + wptr * 4;
+  ctx.r4.u64 = d + kSwapFetch;
+  ctx.r5.u64 = 0;
+  ctx.r6.u64 = 0;
+  ctx.r7.u64 = 0;
+  ctx.r8.u64 = d + kFrontPtr;
+  ctx.r9.u64 = 0;
+  ctx.r10.u64 = 0;
+  const uint32_t params = uint32_t(ctx.r1.u64) + 0x50;  // ninth and tenth arguments
+  PPC_STORE_U32(params + 0x4, d + kWidth);
+  PPC_STORE_U32(params + 0xC, d + kHeight);
+  ctx.lr = 0x820004F8;
+  __imp__VdSwap(ctx, base);
+  wptr = (wptr + 64) % kRingDwords;  // VdSwap filled the 64 reserved dwords
+  PPC_STORE_U32(kWptrMmio, wptr);
+
+  // --screenshot-after 1 ends the run (exit 0) once the frame is presented. Returning first would race the orderly
+  // exit against it, so wait (1 ms at a time, at most 60 s) and fail if it never comes.
+  PPC_STORE_U64(l, uint64_t(-10000));
+  for (int i = 0; i < 60000 && !failed; ++i) {
+    ctx.r3.u64 = 1;  // UserMode
+    ctx.r4.u64 = 0;  // not alertable
+    ctx.r5.u64 = l;
+    ctx.lr = 0x820004FC;
+    __imp__KeDelayExecutionThread(ctx, base);
+  }
+  fail();
+  ctx.r1.u64 += gpu_boot::kFrame;
+}
+}  // namespace textured_quad
+
+// Entry point: the textured quad. Meaningful only with --gpu vulkan --screenshot-after 1 (which ends the run with
+// exit 0); otherwise exit 3 after 60 s. A failed import calls FakeMissing from 0x820004A4.
+PPC_FUNC(sub_820004A0) { textured_quad::run(ctx, base); }

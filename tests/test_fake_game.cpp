@@ -10,8 +10,10 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -647,6 +649,82 @@ TEST_CASE("tiled front buffer frame is captured", "[unit][gpu][vulkan]") {
   if (wrong != 0) UNSCOPED_INFO("first pixel " << int(pixels[0]) << "," << int(pixels[1]) << "," << int(pixels[2]) << ","
                                                << int(pixels[3]));
   stbi_image_free(pixels);
+}
+
+namespace {
+// The textured-quad guest (sub_820004A0, Task 21): a 512x320 frame cleared to grey 0x40, a 256x160 DXT1 texture drawn
+// 1:1 with its top-left texel at pixel (128, 80). Each 4x4 block (bx, by) of the texture is one solid colour, written
+// here independently of the guest: R5 = bx & 31, G6 = by, B5 = (bx >> 5) << 4 | 8 (unique per block, so a wrong
+// untile, a swapped axis or a flipped U or V moves a block and changes the colour seen there).
+constexpr int kQuadFrameW = 512, kQuadFrameH = 320, kQuadX0 = 128, kQuadY0 = 80, kQuadTexW = 256, kQuadTexH = 160;
+constexpr int kQuadClear = 0x40;
+std::array<int, 3> quad_texel_rgb(int tx, int ty) {
+  const int bx = tx / 4, by = ty / 4;
+  const int r5 = bx & 31, g6 = by, b5 = ((bx >> 5) << 4) | 8;
+  return {(r5 << 3) | (r5 >> 2), (g6 << 2) | (g6 >> 4), (b5 << 3) | (b5 >> 2)};
+}
+}  // namespace
+
+// Task 21, the renderer end to end: the fake guest initializes the GPU through the Vd* imports, uploads a tiled DXT1
+// texture (8in16, tiled with the test reference support/xenos_tiling.h, not the runtime's tiling), a quad and VS/PS
+// microcode (support/xenos_shader_builder.h: vfetch of position and UV, a 2D tfetch) to physical memory, then
+// writes one frame of PM4 into the ring: render state (type 0), a clear (resolve with copy_command 3), IM_LOAD of
+// both shaders, the texture and vertex fetch constants (SET_CONSTANT), a quad-list draw, a resolve into its tiled
+// A8R8G8B8 front buffer (8in32, red/blue swap: D3D's layout) and VdSwap. The runtime translates both shaders (to the
+// disk cache in the temporary root), loads the texture, draws in EDRAM, resolves and presents; --screenshot-after 1
+// must show every texel where the quad is and the clear colour elsewhere. A second run reads both shaders back from
+// the disk cache and must give the same frame. Headless, lavapipe, validation layer on.
+TEST_CASE("fake guest draws a textured quad", "[unit][gpu][vulkan]") {
+  if (!has_icd()) SKIP("no Vulkan ICD installed");
+  TempDir td;
+  const fs::path cache = td.path / "work" / "shaders" / "runtime";
+  const std::string image = write_image(td.path, 0x820004A0);
+  for (const bool from_disk : {false, true}) {
+    INFO((from_disk ? "second run (disk cache)" : "first run (translated)"));
+    const fs::path png = td.path / (from_disk ? "frame_disk.png" : "frame.png");
+    auto r = run_game(td.path, {"--headless", "--gpu", "vulkan", "--shader-cache-dir", cache.string(),
+                                "--screenshot-after", "1", png.string(), "--image", image},
+                      {"LR_VULKAN_VALIDATION=1"});
+    INFO(r.out);
+    CHECK(r.code == 0);
+    CHECK(r.out.find("[gpu] screenshot after 1 swaps: " + png.string() + "\n") != std::string::npos);
+    CHECK(r.out.find(from_disk ? "translated=0 disk=2 failed=0" : "translated=2 disk=0 failed=0") !=
+          std::string::npos);
+    check_validation_clean(r.out);
+    size_t spv = 0;
+    for (const auto& e : fs::directory_iterator(cache)) spv += e.path().extension() == ".spv" ? 1 : 0;
+    CHECK(spv == 2);
+    REQUIRE(fs::exists(png));
+
+    int w = 0, h = 0, comp = 0;
+    stbi_uc* pixels = stbi_load(png.c_str(), &w, &h, &comp, 4);
+    REQUIRE(pixels != nullptr);
+    CHECK(w == kQuadFrameW);
+    CHECK(h == kQuadFrameH);
+    size_t wrong = 0, inside = 0;
+    std::string first;
+    for (int y = 0; y < std::min(h, kQuadFrameH); ++y) {
+      for (int x = 0; x < std::min(w, kQuadFrameW); ++x) {
+        const stbi_uc* p = pixels + (size_t(y) * size_t(w) + size_t(x)) * 4;
+        const int tx = x - kQuadX0, ty = y - kQuadY0;
+        const bool in_quad = tx >= 0 && tx < kQuadTexW && ty >= 0 && ty < kQuadTexH;
+        const std::array<int, 3> want = in_quad ? quad_texel_rgb(tx, ty) : std::array<int, 3>{kQuadClear, kQuadClear,
+                                                                                               kQuadClear};
+        inside += in_quad ? 1 : 0;
+        bool ok = p[3] == 0xFF;
+        for (int c = 0; c < 3; ++c) ok = ok && std::abs(int(p[c]) - want[size_t(c)]) <= 1;  // BC1 decode rounding
+        if (!ok && wrong++ == 0) {
+          first = "pixel (" + std::to_string(x) + ", " + std::to_string(y) + ") = " + std::to_string(p[0]) + "," +
+                  std::to_string(p[1]) + "," + std::to_string(p[2]) + "," + std::to_string(p[3]) + ", expected " +
+                  std::to_string(want[0]) + "," + std::to_string(want[1]) + "," + std::to_string(want[2]) + ",255";
+        }
+      }
+    }
+    INFO(first);
+    CHECK(inside == size_t(kQuadTexW) * size_t(kQuadTexH));
+    CHECK(wrong == 0);
+    stbi_image_free(pixels);
+  }
 }
 
 // Review Focus 4: SIGTERM while the GPU thread is presenting (sub_820004E0 swaps forever) ends the run in order:

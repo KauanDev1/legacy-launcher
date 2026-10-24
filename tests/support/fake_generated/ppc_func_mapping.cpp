@@ -38,6 +38,7 @@ PPCFuncMapping PPCFuncMappings[] = {
 	{ 0x820003DC, __imp__VdInitializeEngines },
 	{ 0x82000400, sub_82000400 },
 	{ 0x82000480, sub_82000480 },
+	{ 0x820004A0, sub_820004A0 },
 	{ 0x820004C0, __imp__MmAllocatePhysicalMemoryEx },
 	{ 0x820004C4, __imp__MmGetPhysicalAddress },
 	{ 0x820004C8, __imp__VdSetGraphicsInterruptCallback },

@@ -26,7 +26,9 @@ if(TARGET SDL2::SDL2)
     DEPENDS lr_gen_import_stubs ${LR_FAKE_DIR}/ppc_recomp_shared.h VERBATIM)
   add_executable(lr_fake_game ${CMAKE_SOURCE_DIR}/src/runtime/main.cpp ${LR_FAKE_DIR}/ppc_func_mapping.cpp
     ${LR_FAKE_DIR}/fake_recomp.cpp ${LR_FAKE_DIR}/fake_kernel.cpp ${LR_FAKE_STUBS})
-  target_include_directories(lr_fake_game PRIVATE ${LR_FAKE_DIR})
+  # tests/ too: the textured-quad guest (Task 21) builds its microcode with support/xenos_shader_builder.h and tiles
+  # its texture with the test reference support/xenos_tiling.h (both header-only, std only).
+  target_include_directories(lr_fake_game PRIVATE ${LR_FAKE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
   # --whole-archive like the game template, so LR_KERNEL registrations inside lr_runtime_core are linked exactly as
   # in the real game (an object nothing references is otherwise dropped with its registration).
   # lr_vulkan: the Vulkan backend main.cpp selects by default (--gpu vulkan), as the template links liblr_vulkan.a.
@@ -54,7 +56,7 @@ if(TARGET SDL2::SDL2)
             "-DSOURCES=${LR_RESOURCES_DIR}/runtime/src/main.cpp|${LR_FAKE_STUBS}|${LR_FAKE_DIR}/fake_recomp.cpp"
             "-DGENERATED=${LR_FAKE_DIR}" "-DPPC_CONTEXT_DIR=${LR_RESOURCES_DIR}/tools"
             "-DRUNTIME_INCLUDE=${LR_RESOURCES_DIR}/runtime/include"
-            "-DEXTRA_INCLUDES=$<JOIN:$<TARGET_PROPERTY:SDL2::SDL2,INTERFACE_INCLUDE_DIRECTORIES>,|>"
+            "-DEXTRA_INCLUDES=$<JOIN:$<TARGET_PROPERTY:SDL2::SDL2,INTERFACE_INCLUDE_DIRECTORIES>,|>|${CMAKE_CURRENT_SOURCE_DIR}"
             "-DMARCH=${_lr_x86}"
             "-DHEADERS=${_lr_vk_headers}"
             "-DLINK_SOURCES=${LR_RESOURCES_DIR}/runtime/src/main.cpp|${LR_FAKE_STUBS}|${LR_FAKE_DIR}/fake_recomp.cpp|${LR_FAKE_DIR}/fake_kernel.cpp|${LR_FAKE_DIR}/ppc_func_mapping.cpp"
