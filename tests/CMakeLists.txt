@@ -102,3 +102,12 @@ add_test(NAME spv_embed_empty_list
           "-DSCRIPT=${CMAKE_SOURCE_DIR}/cmake/LrSpvEmbed.cmake" "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/spv_embed_empty"
           -P ${CMAKE_CURRENT_SOURCE_DIR}/support/check_spv_embed_empty.cmake)
 set_tests_properties(spv_embed_empty_list PROPERTIES LABELS unit)
+
+# --- tools/frame_stats.py measures a frame without anyone viewing it (Task 22) ---
+find_program(LR_PYTHON3 python3)
+if(LR_PYTHON3)
+  add_test(NAME "frame_stats on a synthetic PNG"
+    COMMAND ${LR_PYTHON3} -I ${CMAKE_CURRENT_SOURCE_DIR}/support/check_frame_stats.py
+            ${CMAKE_SOURCE_DIR}/tools/frame_stats.py ${CMAKE_CURRENT_BINARY_DIR}/frame_stats)
+  set_tests_properties("frame_stats on a synthetic PNG" PROPERTIES LABELS unit)
+endif()

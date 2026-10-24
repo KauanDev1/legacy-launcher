@@ -76,6 +76,11 @@ na falha do teste).
 Para validar o cache inteiro, rode dentro do contêiner (`tools/dev/container.sh shell`)
 `tools/shader_cache_stats.sh [pasta]` (padrão `/data/work/shaders/runtime`): ele passa o SPIR-V de cada arquivo pelo
 `spirv-val --target-env vulkan1.2` e imprime só contagens (arquivos, válidos, inválidos, por estágio e por versão).
+Para julgar um screenshot do jogo (`run -- --screenshot-after <n> /data/shot.png`) sem abrir a imagem, rode no
+contêiner `python3 -I tools/frame_stats.py /data/shot.png`: ele imprime só uma linha,
+`colors=N mean_luminance=F edge_fraction=F` (cores RGB distintas, luminância média em [0, 1] e fração de pixels
+cuja luminância difere em mais de 0,1 do vizinho da direita ou de baixo). O screenshot é dado do jogo: nunca o
+versione.
 
 ## ISO do jogo
 
