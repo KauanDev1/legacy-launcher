@@ -82,6 +82,20 @@ contêiner `python3 -I tools/frame_stats.py /data/shot.png`: ele imprime só uma
 cuja luminância difere em mais de 0,1 do vizinho da direita ou de baixo). O screenshot é dado do jogo: nunca o
 versione.
 
+Para descobrir quem escreve um buffer do jogo (ou provar que ninguém escreve), use a vigia de escrita:
+`tools/dev/container.sh run -- --watch-guest <end>:<tam>` (hex com `0x` ou decimal; até 16 faixas, repetindo a
+flag; `src/runtime/write_watch.h`). As páginas de 4 KiB da faixa ficam somente leitura; cada escrita nelas gera uma
+falha que o tratador de SIGSEGV deixa passar (libera a página, executa a instrução em passo único e protege de novo
+no SIGTRAP). O jogo escreve no stderr `[watch] armed range N <end>+<tam>`, uma linha
+`[watch] write <end> range N n=<contagem> tid=<thread> fn <função> <- <chamadora> ... pc=<host>` por sítio novo
+(as três funções convidadas mais internas da pilha do host, mapeadas pela tabela de funções), uma linha `(count)`
+em cada potência de dois a partir de 1024, e `[watch] host zero|...` para escritas do próprio runtime que não
+falham (`GuestMemory::zero`; as leituras de arquivo passam por um buffer e um `memcpy`, que a vigia vê). Só
+endereços e contagens, nunca dados. Qualquer outra falha continua sendo a saída 4. É diagnóstico: enquanto uma
+thread executa o passo único, outra thread pode escrever na página sem ser contada. O trace da GPU
+(`--trace-gpu`) dá o endereço convidado de cada microcódigo de shader (`shader load ... at=0x...`), que serve de
+faixa para a vigia.
+
 ## ISO do jogo
 
 `install --iso <arquivo>` monta a pasta do arquivo, somente leitura, em `/iso` e passa `/iso/<arquivo>`

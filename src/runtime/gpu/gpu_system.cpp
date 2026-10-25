@@ -352,8 +352,8 @@ void GpuSystem::on_shader_load(ShaderStage stage, uint32_t guest_addr, uint32_t 
     if (!shaders_seen_.emplace(hash, stage).second) return;
   }
   if (trace_) {
-    trace_->line("shader load %s 0x%016llX dwords=%u\n", stage == ShaderStage::Vertex ? "vs" : "ps",
-                 static_cast<unsigned long long>(hash), dwords);
+    trace_->line("shader load %s 0x%016llX dwords=%u at=0x%08X\n", stage == ShaderStage::Vertex ? "vs" : "ps",
+                 static_cast<unsigned long long>(hash), dwords, guest_addr);
   }
 }
 

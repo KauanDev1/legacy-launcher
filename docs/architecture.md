@@ -60,7 +60,9 @@ Linha de comando do jogo:
 imprime a tabela de importações (ver `docs/kernel-coverage.md`); `--headless` não inicia SDL; `--gpu` escolhe o
 backend (ver "Renderizador Vulkan"); `--strict-memory` liga o modo estrito de memória (`KernelConfig.strict_memory`,
 ver abaixo). Contagens (`--exit-after-swaps`, `--screenshot-after`) aceitam só dígitos decimais: sinal, espaços,
-`0x` ou 0 são erro de uso (saída 2).
+`0x` ou 0 são erro de uso (saída 2). `--watch-guest <end>:<tam>` (diagnóstico, `src/runtime/write_watch.h`) registra
+quais funções convidadas escrevem numa faixa de memória do convidado (ver `docs/development.md`); o tratador de
+falhas (`src/runtime/fault.cpp`) consulta a vigia antes de reportar um SIGSEGV.
 
 ## Mapa de memória do convidado
 
@@ -570,7 +572,7 @@ adiantado, para os cabeçalhos do template do jogo continuarem pequenos.
 **Trace da GPU** (`--trace-gpu`, repassado por `legacyrecomp run -- --trace-gpu`): uma linha por pacote PM4
 (`pm4 type3 DRAW_INDX_2 dwords=3`, `pm4 type0 dwords=7`), por draw (`draw prim=4 count=3`), por resolve e por swap
 (`swap 1 fb=0x... 1280x720`), por microcódigo de shader na primeira vez que é carregado
-(`shader load vs|ps 0x<hash> dwords=N`), por chave de shader na primeira vez que um draw a usa
+(`shader load vs|ps 0x<hash> dwords=N at=0x<endereço guest>`), por chave de shader na primeira vez que um draw a usa
 (`shader vs|ps 0x<hash> dwords=N mod=0x<modificadores> translated|disk|failed: <motivo>`, ver "Shaders (M3, plano
 B)"), e uma vez por segundo
 `stats draws=N resolves=N textures=N swaps=N` (contagens daquele segundo). Destino: `--gpu-trace-file <caminho>` (sem ele, stderr); o `legacyrecomp run` sempre passa

@@ -12,6 +12,7 @@
 #include <string>
 
 #include "runtime/kernel/trace.h"
+#include "runtime/write_watch.h"
 
 namespace lr::runtime {
 
@@ -86,7 +87,9 @@ struct Installed {
 };
 Installed g_installed;
 
-void handler(int signo, siginfo_t* info, void*) {
+void handler(int signo, siginfo_t* info, void* uctx) {
+  // A write into a --watch-guest page is let through (runtime/write_watch.h); every other fault is reported.
+  if (signo == SIGSEGV && write_watch_handle_segv(info, uctx)) return;
   char buf[kFaultBufSize];
   size_t n = format_fault(buf, sizeof buf - 1, signo, g_installed.base, g_installed.size, info ? info->si_addr : nullptr);
   buf[n++] = '\n';

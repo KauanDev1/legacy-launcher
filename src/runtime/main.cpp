@@ -7,6 +7,7 @@
 // Usage: <game> --image <xex> [--data <dir>] [--user <dir>] [--headless] [--gpu vulkan|null] [--coverage]
 //        [--strict-memory] [--trace-imports] [--trace-file <path>] [--trace-gpu] [--gpu-trace-file <path>]
 //        [--exit-after-swaps <n>] [--screenshot-after <n> <png>] [--shader-cache-dir <dir>] [--dump-shaders]
+//        [--watch-guest <addr>:<len>]...
 // --trace-imports logs every import call (runtime/kernel/trace.h) to --trace-file, or stderr without one; the
 // launcher always passes --trace-file, which alone does nothing. --trace-gpu logs the GPU's PM4 packets, draws,
 // swaps and per-second counters (runtime/gpu/gpu_system.h) to --gpu-trace-file, or stderr without one (capped at
@@ -26,6 +27,8 @@
 // the microcode disassembly next to each cache file (<name>.txt). Once the guest started the GPU, every exit path but
 // the fault handler prints "[gpu] shaders: keys=N vs=N ps=N translated=N disk=N failed=N new_last_100_swaps=N" on
 // stderr (lr::gpu::format_shader_summary, through lr::kernel::set_exit_report_hook).
+// --watch-guest <addr>:<len> (repeatable, up to 16; a diagnostic) logs "[watch] ..." lines on stderr naming the guest
+// functions that write guest [addr, addr + len) (runtime/write_watch.h); the writes still happen.
 // SIGTERM, SIGINT and SIGHUP (and closing the window) end the run in order with exit code 0: the GPU thread stops
 // (any frame in flight finishes or, after 100 ms slices, is abandoned), the Vulkan backend waits for the device to be
 // idle and destroys everything ("[gpu] vulkan: shut down"), then the process exits. The signals are blocked in every
@@ -72,6 +75,7 @@
 #include "runtime/kernel/trace.h"
 #include "runtime/kernel/variables.h"
 #include "runtime/loader.h"
+#include "runtime/write_watch.h"
 #include "runtime/xex_imports.h"
 
 // Emitted by lr::pipeline::render_import_thunks.
@@ -100,6 +104,7 @@ struct Options {
   bool stall_gpu = false;          // --gpu test-stall (tests only): StallBackend
   uint64_t screenshot_after = 0;   // 0: no screenshot
   std::string screenshot_path;
+  std::vector<WatchRange> watches;  // --watch-guest
 };
 
 int usage(const char* msg) {
@@ -108,7 +113,7 @@ int usage(const char* msg) {
                "usage: game --image <xex> [--data <dir>] [--user <dir>] [--headless] [--gpu vulkan|null] [--coverage] "
                "[--strict-memory] [--trace-imports] [--trace-file <path>] [--trace-gpu] [--gpu-trace-file <path>] "
                "[--exit-after-swaps <n>] [--screenshot-after <n> <png>] [--shader-cache-dir <dir>] "
-               "[--dump-shaders]\n");
+               "[--dump-shaders] [--watch-guest <addr>:<len>]...\n");
   return kExitUsage;
 }
 
@@ -412,6 +417,12 @@ int main(int argc, char** argv) {
       opt.screenshot_after = *n;
       opt.screenshot_path = argv[++i];
       if (opt.screenshot_path.empty()) return usage("--screenshot-after needs a PNG path");
+    } else if (a == "--watch-guest") {
+      if (i + 1 >= argc) return usage("missing value for --watch-guest");
+      auto w = parse_watch_spec(argv[++i]);
+      if (!w) return usage(w.error().message.c_str());
+      if (opt.watches.size() >= 16) return usage("--watch-guest takes at most 16 ranges");
+      opt.watches.push_back(w.value());
     } else if (a == "--gpu") {
       if (i + 1 >= argc) return usage("missing value for --gpu");
       const std::string v = argv[++i];
@@ -571,6 +582,15 @@ int main(int argc, char** argv) {
   if (auto r = install_fault_handlers(mem.value()); !r) {
     std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
     exit_now(kExitUsage);
+  }
+  if (!opt.watches.empty()) {
+    std::vector<HostCodeEntry> code;
+    code.reserve(maps.size());
+    for (const FuncMapping& m : maps) code.push_back({reinterpret_cast<uintptr_t>(m.host), m.guest});
+    if (auto r = install_write_watch(mem.value(), opt.watches, HostCodeMap(std::move(code))); !r) {
+      std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
+      exit_now(kExitUsage);
+    }
   }
 
   g_guest_base = mem.value().base();

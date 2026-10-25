@@ -41,8 +41,8 @@
 //
 // --trace-gpu (enable_trace): one line per PM4 packet ("pm4 type3 DRAW_INDX_2 dwords=3"), per draw
 // ("draw prim=4 count=3"), per resolve and per swap ("swap 1 fb=0x... 1280x720"), per shader microcode the first
-// time it is loaded ("shader load vs|ps 0x<XXH3-64> dwords=N"), per shader key the first time a draw uses it
-// ("shader vs|ps 0x<hash> dwords=N mod=0x<modifiers> translated|disk|failed: <reason>"), and once per second
+// time it is loaded ("shader load vs|ps 0x<XXH3-64> dwords=N at=0x<guest address>"), per shader key the first time
+// a draw uses it ("shader vs|ps 0x<hash> dwords=N mod=0x<modifiers> translated|disk|failed: <reason>"), and once per second
 // "stats draws=N resolves=N textures=N swaps=N" (counts of that second). Written by the GPU thread, flushed after
 // every step before RPTR is written back (so a guest that saw RPTR advance also sees the lines on disk), on stop and on
 // the kernel's exit paths (flush_trace through kernel/trace.h's flush hook);

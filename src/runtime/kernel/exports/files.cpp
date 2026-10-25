@@ -23,6 +23,7 @@
 #include <cstring>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #include "runtime/kernel/dispatcher.h"
 #include "runtime/kernel/guest_structs.h"
@@ -30,6 +31,7 @@
 #include "runtime/kernel/registry.h"
 #include "runtime/kernel/status.h"
 #include "runtime/kernel/threads.h"
+#include "runtime/write_watch.h"
 
 namespace lr::kernel {
 
@@ -329,7 +331,7 @@ uint32_t start_offset(const GuestCall& c, OffsetPtr byte_offset, const FileObjec
 }
 
 // pread until `length` bytes, EOF or an error; errno-derived status in `status` on error.
-uint32_t read_at(int fd, uint8_t* dst, uint32_t length, uint64_t offset, uint32_t& done) {
+uint32_t read_raw(int fd, uint8_t* dst, uint32_t length, uint64_t offset, uint32_t& done) {
   done = 0;
   while (done < length) {
     const ssize_t n = ::pread(fd, dst + done, length - done, static_cast<off_t>(offset + done));
@@ -341,6 +343,17 @@ uint32_t read_at(int fd, uint8_t* dst, uint32_t length, uint64_t offset, uint32_
     done += static_cast<uint32_t>(n);
   }
   return STATUS_SUCCESS;
+}
+
+// read_raw into guest [guest, guest + length). A destination in a --watch-guest page (runtime/write_watch.h) is read
+// through a host buffer and copied with memcpy, whose stores the watch sees: read(2) into a read-only page would
+// fail with EFAULT.
+uint32_t read_at(int fd, uint8_t* base, uint32_t guest, uint32_t length, uint64_t offset, uint32_t& done) {
+  if (!runtime::write_watch_overlaps(guest, length)) return read_raw(fd, base + guest, length, offset, done);
+  std::vector<uint8_t> bounce(length);
+  const uint32_t status = read_raw(fd, bounce.data(), length, offset, done);
+  std::memcpy(base + guest, bounce.data(), done);
+  return status;
 }
 
 }  // namespace
@@ -373,7 +386,7 @@ uint32_t NtReadFile(GuestCall& c, uint32_t handle, uint32_t event, uint32_t apc_
   uint64_t start = 0;
   if (const uint32_t s = start_offset(c, byte_offset, f, start); s != STATUS_SUCCESS) return s;
   uint32_t done = 0;
-  uint32_t status = length == 0 ? STATUS_SUCCESS : read_at(f.fd(), c.base + buffer.addr, length, start, done);
+  uint32_t status = length == 0 ? STATUS_SUCCESS : read_at(f.fd(), c.base, buffer.addr, length, start, done);
   if (status == STATUS_SUCCESS && length != 0 && done == 0) status = STATUS_END_OF_FILE;
   if (status == STATUS_SUCCESS) f.position = start + done;
   return complete_io(c, req, iosb, apc_routine, apc_context, status, done);
@@ -407,7 +420,7 @@ uint32_t NtReadFileScatter(GuestCall& c, uint32_t handle, uint32_t event, uint32
   for (uint32_t i = 0; i < pages && status == STATUS_SUCCESS; ++i) {
     const uint32_t chunk = std::min(kPage, length - i * kPage);
     uint32_t done = 0;
-    status = read_at(f.fd(), c.base + pages_at[i], chunk, start + total, done);
+    status = read_at(f.fd(), c.base, pages_at[i], chunk, start + total, done);
     total += done;
     if (done < chunk) break;  // end of file
   }

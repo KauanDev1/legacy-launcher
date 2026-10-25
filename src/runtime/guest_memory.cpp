@@ -8,6 +8,8 @@
 #include <string>
 #include <utility>
 
+#include "runtime/write_watch.h"
+
 namespace lr::runtime {
 
 Result<GuestMemory> GuestMemory::reserve(uint64_t bytes) {
@@ -53,6 +55,7 @@ Result<void> GuestMemory::protect(uint32_t addr, uint32_t size, int prot) {
 Result<void> GuestMemory::zero(uint32_t addr, uint32_t size) {
   const uint64_t s = addr, e = s + size;
   if (e > size_) return Error{ErrorCode::OutOfRange, "zero: range runs past guest memory", ""};
+  write_watch_note_host_write(addr, size, "zero");  // the madvise below never faults (runtime/write_watch.h)
   const uint64_t ps = (s + kHostPage - 1) / kHostPage * kHostPage;  // first whole page
   const uint64_t pe = e / kHostPage * kHostPage;                     // end of the last whole page
   if (ps >= pe) {

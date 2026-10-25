@@ -962,8 +962,8 @@ TEST_CASE("GPU trace (--trace-gpu) names translated and failed shaders", "[unit]
 
   const std::string first = run(td.path / "first.log");
   INFO(first);
-  CHECK(count(first, "shader load vs " + vs_id + "\n") == 1);
-  CHECK(count(first, "shader load ps " + ps_id + "\n") == 1);
+  CHECK(count(first, "shader load vs " + vs_id + " at=0x") == 1);
+  CHECK(count(first, "shader load ps " + ps_id + " at=0x") == 1);
   CHECK(count(first, "shader vs " + vs_id + " mod=0x0 translated\n") == 1);
   CHECK(count(first, "shader ps " + ps_id + " mod=0xFF failed: ") == 1);
   CHECK_THAT(first, Catch::Matchers::ContainsSubstring("memexport"));
