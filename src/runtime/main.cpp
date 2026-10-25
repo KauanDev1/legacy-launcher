@@ -520,6 +520,11 @@ int main(int argc, char** argv) {
   if (auto r = install_function_table(mem.value(), PPC_IMAGE_BASE + PPC_IMAGE_SIZE, PPC_CODE_BASE, PPC_CODE_SIZE, maps); !r) {
     std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
     exit_now(kExitUsage);
+  } else if (!r.value().empty()) {
+    // A pipeline bug (runtime/func_table.h): the first mapping of each address was kept.
+    std::fprintf(stderr, "[runtime] warning: %zu duplicate function mappings dropped (first kept):", r.value().size());
+    for (size_t k = 0; k < r.value().size() && k < 16; ++k) std::fprintf(stderr, " 0x%08X", r.value()[k]);
+    std::fprintf(stderr, "%s\n", r.value().size() > 16 ? " ..." : "");
   }
   if (!entry_fn) {
     std::fprintf(stderr, "error: no recompiled function at entry point 0x%08X\n", img.value().entry);

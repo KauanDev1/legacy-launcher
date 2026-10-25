@@ -35,6 +35,12 @@ Fontes: spec do M1 (`docs/superpowers/specs/2026-10-14-legacyrecomp-m1-design.md
   patches não estão no upstream: atualizar o XenonRecomp exige reaplicá-los (`docs/development.md`).
 - **23 jump tables a confirmar no Ghidra** (de 221 `switch` detectados): o `analyse` as acha por varredura própria,
   mas a confirmação manual ainda não foi feita.
+- ~~Mapeamento duplicado de funções~~ (resolvido no M3, Tarefa 22): a descoberta de funções só por ponteiro
+  emitia uma função em 3 endereços de thunks de importação (alcançados só por tabela de ponteiros, como o
+  `NtReadFile` da CRT), e a tabela de chamadas indiretas ficava com a primeira entrada sem avisar. Agora o `analyse`
+  passa os thunks como funções conhecidas, e `install_function_table` devolve e o jogo imprime cada duplicata
+  (`[runtime] warning: N duplicate function mappings dropped`); a primeira continua valendo (os thunks vêm antes).
+  Thunks de ordinal sem nome no XenonUtils não viram símbolo e continuam fora dessa lista.
 - **Endereços dos helpers (prólogo/epílogo etc.) não confirmados no Ghidra**: aceitos por evidência
   estrutural (ruling R13); um endereço errado quebraria em tempo de execução.
 - **CPU com AVX obrigatória** enquanto o build for `-march=sandybridge` (ruling R20).

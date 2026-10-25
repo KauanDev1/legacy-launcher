@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include "runtime/be.h"
 
@@ -165,17 +166,32 @@ TEST_CASE("install_function_table writes 8-byte slots per 4-byte instruction", "
   CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x30) == nullptr);
 }
 
-// XenonRecomp lists an import thunk before a function the analysis also found at that address (the thunk is reached
-// through a pointer table, e.g. the CRT's NtReadFile): the first mapping must win, or the thunk bytes run as code.
-TEST_CASE("install_function_table keeps the first mapping of an address", "[unit]") {
+// Two mappings of one address are a pipeline bug (it was function discovery emitting a function at an import thunk,
+// fixed at the root in the analyse stage): the first mapping (XenonRecomp lists import thunks first) is kept, and
+// every dropped duplicate is reported, never silently.
+TEST_CASE("install_function_table keeps the first mapping of an address and reports the duplicates", "[unit]") {
   auto r = GuestMemory::reserve(0x1'0000'0000ull);
   REQUIRE(r.ok());
   const uint64_t off = 0x82000000ull + 0x32D0000ull;
   void* thunk = reinterpret_cast<void*>(&dummy_func);
   void* other = reinterpret_cast<void*>(&dummy_func2);
-  const FuncMapping maps[] = {{0x82000010, thunk}, {0x82000010, other}};
-  REQUIRE(install_function_table(r.value(), off, 0x82000000, 0x1000, maps).ok());
+  const FuncMapping maps[] = {{0x82000010, thunk}, {0x82000018, thunk}, {0x82000010, other}, {0x82000018, other}};
+  auto dups = install_function_table(r.value(), off, 0x82000000, 0x1000, maps);
+  REQUIRE(dups.ok());
+  CHECK(dups.value() == std::vector<uint32_t>{0x82000010, 0x82000018});
   CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x20) == thunk);
+  CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x30) == thunk);
+}
+
+TEST_CASE("install_function_table reports no duplicates for distinct addresses", "[unit]") {
+  auto r = GuestMemory::reserve(0x1'0000'0000ull);
+  REQUIRE(r.ok());
+  const uint64_t off = 0x82000000ull + 0x32D0000ull;
+  void* f = reinterpret_cast<void*>(&dummy_func);
+  const FuncMapping maps[] = {{0x82000010, f}, {0x82000014, f}};
+  auto dups = install_function_table(r.value(), off, 0x82000000, 0x1000, maps);
+  REQUIRE(dups.ok());
+  CHECK(dups.value().empty());
 }
 
 TEST_CASE("install_function_table rejects bad mappings", "[unit]") {
