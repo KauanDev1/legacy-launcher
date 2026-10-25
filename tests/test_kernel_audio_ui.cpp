@@ -15,6 +15,7 @@
 #include "runtime/kernel/kernel.h"
 #include "runtime/kernel/status.h"
 #include "runtime/kernel/xam.h"
+#include "runtime/memory_map.h"
 #include "support/kernel_fixture.h"
 
 using namespace lr::kernel;
@@ -77,6 +78,36 @@ TEST_CASE("silent audio driver answers like a driver", "[unit][kernel][audio]") 
   CHECK(f.call("XAudioRegisterRenderDriverClient", 0x1234u, drv) == 0);
   CHECK(rd(f, drv) == 0x41550000);
   CHECK(static_cast<uint32_t>(f.call("XAudioRegisterRenderDriverClient", cb, 0u)) == X_E_INVALIDARG);
+}
+
+// The game creates XMA decoder contexts before its title screen. No decoder runs them (silent, M4): a context is a
+// zeroed block in physical memory the game fills itself, and releasing it frees the block.
+TEST_CASE("XMA contexts are zeroed physical blocks that are never decoded", "[unit][kernel][audio]") {
+  KernelFixture f;
+  const uint32_t out1 = f.alloc(4), out2 = f.alloc(4);
+  REQUIRE(f.call("XMACreateContext", out1) == 0);
+  REQUIRE(f.call("XMACreateContext", out2) == 0);
+  const uint32_t a = rd(f, out1), b = rd(f, out2);
+  CHECK(a >= lr::runtime::kPhysicalViewA0);
+  CHECK(b >= lr::runtime::kPhysicalViewA0);
+  CHECK(a != b);
+  CHECK(a % 64 == 0);
+  CHECK(f.call("MmQueryAllocationSize", a) >= 64u);  // a real allocation, not a made-up address
+  for (uint32_t k = 0; k < 64; k += 4) CHECK(rd(f, a + k) == 0);
+
+  // A released context is freed; a new one is zeroed again even where the game left data.
+  for (uint32_t k = 0; k < 64; k += 4) wr32(f, a + k, 0xDEADBEEF);
+  CHECK(f.call("XMAReleaseContext", a) == 0);
+  CHECK(f.call("MmQueryAllocationSize", a) == 0u);
+  REQUIRE(f.call("XMACreateContext", out1) == 0);
+  const uint32_t c = rd(f, out1);
+  for (uint32_t k = 0; k < 64; k += 4) CHECK(rd(f, c + k) == 0);
+
+  // Releasing something that is not a context is ignored; an unwritable output is an error.
+  CHECK(f.call("XMAReleaseContext", 0u) == 0);
+  CHECK(f.call("XMAReleaseContext", b + 4) == 0);
+  CHECK(f.call("MmQueryAllocationSize", b) >= 64u);
+  CHECK(static_cast<uint32_t>(f.call("XMACreateContext", 0u)) == STATUS_INVALID_PARAMETER);
 }
 
 TEST_CASE("XamShowMessageBoxUI reports to the terminal and presses the first button", "[unit][kernel][xam]") {

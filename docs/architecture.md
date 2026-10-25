@@ -506,7 +506,9 @@ estrutura, são registradas como `stub` (`LR_KERNEL_STUB` ou `LR_KERNEL_STUB_FN`
   `XamShowDirtyDiscErrorUI` encerra com `guest_fatal("dirty disc")` (saída 5).
 - **M3 (áudio silencioso e UI)**: `exports/audio.cpp` — `XAudioRegisterRenderDriverClient` escreve o handle `0x41550000` e nunca chama o
   callback, `XAudioUnregisterRenderDriverClient`/`XAudioSubmitRenderDriverFrame` → 0 (quadro descartado),
-  `XAudioGetVoiceCategoryVolume` escreve `1.0f`; `exports/xam_ui.cpp` — `XamShowMessageBoxUI` imprime
+  `XAudioGetVoiceCategoryVolume` escreve `1.0f`, `XMACreateContext` entrega um bloco zerado de 64 bytes em memória
+  física (uma página de 4 KiB só dele) que nenhum decodificador lê e `XMAReleaseContext` o libera (Tarefa 22: o jogo
+  cria contextos XMA antes da tela de título); `exports/xam_ui.cpp` — `XamShowMessageBoxUI` imprime
   `[game] message box: <título> — <texto> [<botões>]` no stderr, escreve resultado 0 (primeiro botão) e completa o overlapped
   (`ERROR_IO_PENDING`; sem overlapped, `ERROR_SUCCESS`).
 

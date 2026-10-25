@@ -311,8 +311,8 @@ do binário que roda o jogo sobre a GPU emulada (NullBackend) por mais de 700 sw
 | XGetLanguage | function | implemented |
 | XGetVideoCapabilities | function | stub |
 | XGetVideoMode | function | stub |
-| XMACreateContext | function | missing |
-| XMAReleaseContext | function | missing |
+| XMACreateContext | function | stub |
+| XMAReleaseContext | function | stub |
 | XMsgCancelIORequest | function | missing |
 | XMsgCompleteIORequest | function | missing |
 | XMsgInProcessCall | function | implemented |
@@ -502,5 +502,5 @@ do binário que roda o jogo sobre a GPU emulada (NullBackend) por mais de 700 sw
 | KeDebugMonitorData | variable | implemented |
 | ExThreadObjectType | variable | implemented |
 
-Functions: implemented 176, stub 54, missing 229 / 459
+Functions: implemented 176, stub 56, missing 227 / 459
 Variables: implemented 15, stub 0, missing 0 / 15
