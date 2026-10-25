@@ -70,9 +70,13 @@ bool write_watch_handle_segv(siginfo_t* info, void* ucontext);
 // True when guest [addr, addr + len) touches a watched page (any thread, any time; lock-free).
 bool write_watch_overlaps(uint32_t addr, uint32_t len);
 
-// Logs a host-side write `what` into guest [addr, addr + len) when it touches a watched range (no-op otherwise).
-// Not for signal handlers.
+// Counts and logs (always in full) a host-side write `what` into guest [addr, addr + len) when it touches a watched
+// range (no-op otherwise). Not for signal handlers.
 void write_watch_note_host_write(uint32_t addr, uint32_t len, const char* what);
+
+// Logs a host-side event `what` (an allocation, a free) on guest [addr, addr + len) when it touches a watched range,
+// without counting it as a write. Not for signal handlers.
+void write_watch_note_host_event(uint32_t addr, uint32_t len, const char* what);
 
 // Prints one summary line per range ("[watch] summary range N <addr>+<len> writes=N nonzero_stores=N
 // nonzero_bytes=N") and one per call site ("[watch]   site K writes=N nonzero_stores=N fn ..."). A store counts as

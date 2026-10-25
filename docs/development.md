@@ -89,9 +89,13 @@ falha que o tratador de SIGSEGV deixa passar (libera a página, executa a instru
 no SIGTRAP). O jogo escreve no stderr `[watch] armed range N <end>+<tam>`, uma linha
 `[watch] write <end> range N n=<contagem> tid=<thread> fn <função> <- <chamadora> ... pc=<host>` por sítio novo
 (as três funções convidadas mais internas da pilha do host, mapeadas pela tabela de funções), uma linha `(count)`
-em cada potência de dois a partir de 1024, e `[watch] host zero|...` para escritas do próprio runtime que não
-falham (`GuestMemory::zero`; as leituras de arquivo passam por um buffer e um `memcpy`, que a vigia vê). Só
-endereços e contagens, nunca dados. Qualquer outra falha continua sendo a saída 4. É diagnóstico: enquanto uma
+em cada potência de dois a partir de 1024, e `[watch] host zero ...` para escritas do próprio runtime que não
+falham (`GuestMemory::zero`; as leituras de arquivo passam por um buffer e um `memcpy`, que a vigia vê). Alocações
+e liberações de memória física que tocam a faixa aparecem como `[watch] host alloc|free ...` (não contam como
+escrita). Depois do passo único, cada escrita é conferida: se deixou algum byte diferente de zero (até 8 bytes a
+partir do endereço da falha) conta como `nonzero_stores`, então um escritor que só grava zeros aparece sem olhar os
+dados. Na saída, o relatório imprime `[watch] summary range N ... writes=N nonzero_stores=N nonzero_bytes=N` e uma
+linha por sítio. Só endereços e contagens, nunca dados. Qualquer outra falha continua sendo a saída 4. É diagnóstico: enquanto uma
 thread executa o passo único, outra thread pode escrever na página sem ser contada. O trace da GPU
 (`--trace-gpu`) dá o endereço convidado de cada microcódigo de shader (`shader load ... at=0x...`), que serve de
 faixa para a vigia.

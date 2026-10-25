@@ -14,6 +14,7 @@
 #include "runtime/memory/page_heap.h"
 #include "runtime/memory/physical_heap.h"
 #include "runtime/memory_map.h"
+#include "runtime/write_watch.h"
 
 namespace lr::kernel {
 namespace {
@@ -223,13 +224,20 @@ uint32_t MmAllocatePhysicalMemoryEx(uint32_t /*flags*/, uint32_t size, uint32_t 
   auto r = k.physical().allocate(size, protect, min_addr, max_addr, alignment);
   if (!r) return 0;
   auto total = k.physical().allocation_size(r.value());
-  if (total) (void)k.memory().zero(r.value(), total.value());
+  if (total) {
+    runtime::write_watch_note_host_event(r.value(), total.value(), "alloc");  // --watch-guest
+    (void)k.memory().zero(r.value(), total.value());
+  }
   return r.value();
 }
 
 // MmFreePhysicalMemory(type, address): `address` must be what MmAllocatePhysicalMemoryEx returned; other values
 // are ignored, as Xenia ignores the release result.
-void MmFreePhysicalMemory(uint32_t /*type*/, uint32_t addr) { (void)kernel().physical().free(addr); }
+void MmFreePhysicalMemory(uint32_t /*type*/, uint32_t addr) {
+  Kernel& k = kernel();
+  if (auto size = k.physical().allocation_size(addr)) runtime::write_watch_note_host_event(addr, size.value(), "free");
+  (void)k.physical().free(addr);
+}
 
 // MmGetPhysicalAddress(address): physical views only (E0 adds 0x1000, as Xenia); 0 for anything else (Xenia
 // returns 0 after an assert for non-physical heaps).

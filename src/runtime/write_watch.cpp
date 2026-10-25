@@ -184,7 +184,8 @@ uint32_t record(size_t r, uint32_t guest, uint32_t len, uintptr_t pc, const char
   }
   range.site_count[index].fetch_add(1, std::memory_order_relaxed);
   const bool milestone = n >= 1024 && (n & (n - 1)) == 0;
-  if (!fresh && !milestone) return index;
+  const bool host = what != nullptr;  // rare: always logged in full
+  if (!fresh && !milestone && !host) return index;
 
   Line l;
   l.str("[watch] ");
@@ -206,7 +207,7 @@ uint32_t record(size_t r, uint32_t guest, uint32_t len, uintptr_t pc, const char
   l.dec(n);
   l.str(" tid=");
   l.dec(static_cast<uint64_t>(::syscall(SYS_gettid)));
-  if (!fresh) {
+  if (!fresh && !host) {
     l.str(" (count) nonzero_stores=");
     l.dec(range.nonzero_stores.load(std::memory_order_relaxed));
     l.str(" nonzero_bytes=");
@@ -378,6 +379,37 @@ bool write_watch_overlaps(uint32_t addr, uint32_t len) {
   for (size_t i = 0; i < n; ++i)
     if (first < g_ranges[i].end_page && end > g_ranges[i].first_page) return true;
   return false;
+}
+
+void write_watch_note_host_event(uint32_t addr, uint32_t len, const char* what) {
+  if (!g_armed.load(std::memory_order_acquire) || len == 0) return;
+  const size_t n = g_nranges.load(std::memory_order_acquire);
+  const uint64_t end = uint64_t{addr} + len;
+  for (size_t i = 0; i < n; ++i) {
+    if (addr >= uint64_t{g_ranges[i].addr} + g_ranges[i].len || end <= g_ranges[i].addr) continue;
+    uint32_t fns[kLogDepth] = {};
+    const int depth = guest_frames(0, fns, kLogDepth);
+    Lock lock;
+    Line l;
+    l.str("[watch] host ");
+    l.str(what);
+    l.put(' ');
+    l.hex(addr, 8);
+    l.put('+');
+    l.hex(len);
+    l.str(" range ");
+    l.dec(i);
+    l.str(" tid=");
+    l.dec(static_cast<uint64_t>(::syscall(SYS_gettid)));
+    l.str(" fn");
+    if (depth == 0) l.str(" (no guest frame)");
+    for (int k = 0; k < depth; ++k) {
+      l.str(k == 0 ? " " : " <- ");
+      l.hex(fns[k], 8);
+    }
+    l.put('\n');
+    l.flush();
+  }
 }
 
 void write_watch_note_host_write(uint32_t addr, uint32_t len, const char* what) {

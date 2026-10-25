@@ -110,6 +110,9 @@ TEST_CASE("the write watch logs writes into a watched range and lets them throug
     guest_store(b + 0x10020, 1);
     if (write_watch_count(0) != 4) return 101;
     guest_store(b + 0x10024, 0);  // a zero store: counted, but not as a nonzero one
+    write_watch_note_host_event(0x10000, 0x2000, "free");  // logged, never counted
+    write_watch_note_host_event(0x20000, 0x1000, "free");  // no watched range: nothing
+    if (!mem.zero(0x10000, 0x1000).ok()) return 102;          // a second zero from the same site: logged again
     write_watch_report();
     // Any other fault is still a real one: exit 4 from the fault handler.
     ::mprotect(b + 0x40000, 0x1000, PROT_NONE);
@@ -125,9 +128,12 @@ TEST_CASE("the write watch logs writes into a watched range and lets them throug
   CHECK(out.find("n=2") == std::string::npos);  // the second write of the same site is only counted
   CHECK(out.find("[watch] write 0x00010100") == std::string::npos);
   CHECK(out.find("[watch] host zero 0x00010000+0x1000 range 0 n=3") != std::string::npos);
+  CHECK(out.find("[watch] host zero 0x00010000+0x1000 range 0 n=6") != std::string::npos);
+  CHECK(out.find("[watch] host free 0x00010000+0x2000 range 0 tid=") != std::string::npos);
+  CHECK(out.find("[watch] host free 0x00020000") == std::string::npos);
   CHECK(out.find("range 1 n=1") != std::string::npos);
   CHECK(out.find("SIGSEGV at guest 0x00040000") != std::string::npos);
-  CHECK(out.find("[watch] summary range 0 0x00010010+0x20 writes=5 nonzero_stores=3 nonzero_bytes=1\n") !=
+  CHECK(out.find("[watch] summary range 0 0x00010010+0x20 writes=6 nonzero_stores=3 nonzero_bytes=0\n") !=
         std::string::npos);
   CHECK(out.find("[watch]   site 0 writes=4 nonzero_stores=3 fn 0x82001000\n") != std::string::npos);
   CHECK(out.find("[watch] summary range 1 0x00012FF0+0x20 writes=") != std::string::npos);
