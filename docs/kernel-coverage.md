@@ -337,8 +337,8 @@ do binário que roda o jogo sobre a GPU emulada (NullBackend) por mais de 700 sw
 | XamAvatarManifestGetBodyType | function | missing |
 | XamAvatarSetCustomAsset | function | missing |
 | XamAvatarShutdown | function | missing |
-| XamBackgroundDownloadGetMode | function | missing |
-| XamBackgroundDownloadSetMode | function | missing |
+| XamBackgroundDownloadGetMode | function | stub |
+| XamBackgroundDownloadSetMode | function | stub |
 | XamCacheCloseFile | function | missing |
 | XamCacheOpenFile | function | missing |
 | XamCacheReset | function | missing |
@@ -502,5 +502,5 @@ do binário que roda o jogo sobre a GPU emulada (NullBackend) por mais de 700 sw
 | KeDebugMonitorData | variable | implemented |
 | ExThreadObjectType | variable | implemented |
 
-Functions: implemented 176, stub 56, missing 227 / 459
+Functions: implemented 176, stub 58, missing 225 / 459
 Variables: implemented 15, stub 0, missing 0 / 15

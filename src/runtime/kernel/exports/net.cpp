@@ -2,6 +2,7 @@
 // Network startup probes: M2 is offline, the network libraries only need their startup calls to succeed and to see
 // no link. Every NetDll_* import takes the calling module (caller) in r3 before its Winsock/XNet arguments (Xenia's
 // xam_net.cc; semantic reference only, no code copied). The rest of NetDll_* stays missing until the trace shows it.
+// The background download mode (a LIVE marketplace service) is accepted and reads 0, as kernel-imports.md plans.
 #include <cstdint>
 #include <cstring>
 
@@ -48,5 +49,7 @@ LR_KERNEL_STUB(NetDll_XNetStartup, 0);                // XNet "started": offline
 LR_KERNEL_STUB(NetDll_XNetGetEthernetLinkStatus, 0);  // 0 = no Ethernet link: M2 is offline
 LR_KERNEL_STUB_FN(NetDll_XNetGetTitleXnAddr);         // offline: zeroed address, XNET_GET_XNADDR_NONE
 LR_KERNEL_STUB_FN(NetDll_XNetGetDebugXnAddr);         // same
+LR_KERNEL_STUB(XamBackgroundDownloadSetMode, 0);      // offline: no download service, any mode is accepted
+LR_KERNEL_STUB(XamBackgroundDownloadGetMode, 0);      // and reads back as 0
 
 }  // namespace lr::kernel

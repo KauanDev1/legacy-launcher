@@ -393,6 +393,14 @@ TEST_CASE("XNetGet*XnAddr report no network address (offline)", "[unit][kernel][
   CHECK(f.mem.translate<uint8_t>(addr)[35] == 0);
 }
 
+// The game sets the background download mode before its title screen; offline there is no download service, so the
+// mode is accepted and reads back as 0 (kernel-imports.md, "HLE mínima" of the LIVE group).
+TEST_CASE("background download mode: set succeeds, mode reads 0", "[unit][kernel][xam][net]") {
+  KernelFixture f;
+  CHECK(f.call("XamBackgroundDownloadSetMode", 1u) == 0);
+  CHECK(f.call("XamBackgroundDownloadGetMode") == 0);
+}
+
 TEST_CASE("voice chat: inactive, no headset", "[unit][kernel][xam]") {
   KernelFixture f;
   CHECK(f.call("XamVoiceIsActiveProcess") == 0);

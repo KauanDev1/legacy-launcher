@@ -501,7 +501,7 @@ estrutura, são registradas como `stub` (`LR_KERNEL_STUB` ou `LR_KERNEL_STUB_FN`
   tratam qualquer valor fora de 3/4/6/8 como PAL); `VdIsHSIOTrainingSucceeded` 1. Os `Vd*` que criam ou usam a GPU são do M3 (seção "GPU emulada" abaixo).
 - **Rede, UI, entrada, áudio**: os `NetDll_*` recebem o chamador em r3; `NetDll_WSAStartup` preenche o `WSADATA`
   (versão pedida, 100 sockets, datagramas de 1024 bytes) e devolve 0, `NetDll_XNetStartup` 0,
-  `NetDll_XNetGetEthernetLinkStatus` 0 (sem link). `XamIsUIActive` 0, `XNotifyPositionUI` no-op,
+  `NetDll_XNetGetEthernetLinkStatus` 0 (sem link), `XamBackgroundDownloadSetMode` aceita qualquer modo e `XamBackgroundDownloadGetMode` responde 0 (Tarefa 22 do M3). `XamIsUIActive` 0, `XNotifyPositionUI` no-op,
   `XamInputGetCapabilities` `ERROR_DEVICE_NOT_CONNECTED`, `XAudioGetSpeakerConfig` estéreo (`0x00010001`) e
   `XamShowDirtyDiscErrorUI` encerra com `guest_fatal("dirty disc")` (saída 5).
 - **M3 (áudio silencioso e UI)**: `exports/audio.cpp` — `XAudioRegisterRenderDriverClient` escreve o handle `0x41550000` e nunca chama o
