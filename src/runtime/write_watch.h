@@ -74,6 +74,12 @@ bool write_watch_overlaps(uint32_t addr, uint32_t len);
 // Not for signal handlers.
 void write_watch_note_host_write(uint32_t addr, uint32_t len, const char* what);
 
+// Prints one summary line per range ("[watch] summary range N <addr>+<len> writes=N nonzero_stores=N
+// nonzero_bytes=N") and one per call site ("[watch]   site K writes=N nonzero_stores=N fn ..."). A store counts as
+// nonzero when, once it ran, one of the (up to) 8 bytes from its faulting address inside the range is nonzero: a
+// writer of zeros shows nonzero_stores=0. For the exit report (main.cpp); no-op when nothing is watched.
+void write_watch_report();
+
 // Number of writes counted so far into watched range `index` (faults and host writes); 0 for an unknown index.
 uint64_t write_watch_count(size_t index);
 

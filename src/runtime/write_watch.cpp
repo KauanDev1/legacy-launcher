@@ -32,14 +32,20 @@ struct Site {
   uint32_t fn[kSiteDepth];
 };
 
+// Index kMaxSitesPerRange of the per-site counters collects the writes of sites past the table.
+constexpr uint32_t kOtherSite = kMaxSitesPerRange;
+
 struct Range {
   uint32_t addr = 0;
   uint32_t len = 0;
   uint32_t first_page = 0;  // guest page index
   uint32_t end_page = 0;    // one past the last page
   std::atomic<uint64_t> count{0};
+  std::atomic<uint64_t> nonzero_stores{0};  // stores that left a nonzero byte (see check_store)
   uint32_t nsites = 0;  // under g_lock
   Site sites[kMaxSitesPerRange]{};
+  std::atomic<uint64_t> site_count[kMaxSitesPerRange + 1]{};
+  std::atomic<uint64_t> site_nonzero[kMaxSitesPerRange + 1]{};
 };
 
 Range g_ranges[kMaxRanges];
@@ -53,6 +59,33 @@ std::atomic_flag g_lock = ATOMIC_FLAG_INIT;  // serializes the site tables and t
 
 thread_local uint32_t t_pending[kMaxPending];
 thread_local int t_npending = 0;
+
+// Stores of this thread's single step whose value is checked once it has run (trap_handler).
+struct PendingCheck {
+  uint32_t range;
+  uint32_t site;
+  uint32_t addr;
+};
+thread_local PendingCheck t_checks[kMaxPending];
+thread_local int t_nchecks = 0;
+
+// Nonzero bytes in guest [addr, addr + len). The watched pages are always readable.
+uint64_t nonzero_bytes(uint32_t addr, uint32_t len) {
+  uint64_t n = 0;
+  for (uint32_t i = 0; i < len; ++i) n += g_base[uint64_t{addr} + i] != 0;
+  return n;
+}
+
+// After a single step: did the store at `c.addr` leave a nonzero byte? Looks at up to 8 bytes from the faulting
+// address (the store's width is unknown), inside the range and the page.
+void check_store(const PendingCheck& c) {
+  Range& r = g_ranges[c.range];
+  const uint64_t end = std::min<uint64_t>({uint64_t{c.addr} + 8, uint64_t{r.addr} + r.len,
+                                           (uint64_t{c.addr} | (kPage - 1)) + 1});
+  if (nonzero_bytes(c.addr, static_cast<uint32_t>(end - c.addr)) == 0) return;
+  r.nonzero_stores.fetch_add(1, std::memory_order_relaxed);
+  r.site_nonzero[c.site].fetch_add(1, std::memory_order_relaxed);
+}
 
 // Async-signal-safe line builder (no allocation, no stdio).
 struct Line {
@@ -130,8 +163,9 @@ int guest_frames(uintptr_t pc, uint32_t* out, int max) {
 }
 
 // Counts one write into range `r` and logs it when its call site is new (or the count reaches a power of two from
-// 1024). `what` names a host-side write (nullptr for a faulting guest store). Async-signal-safe for what == nullptr.
-void record(size_t r, uint32_t guest, uint32_t len, uintptr_t pc, const char* what) {
+// 1024). `what` names a host-side write (nullptr for a faulting guest store). Returns the site's counter index.
+// Async-signal-safe for what == nullptr.
+uint32_t record(size_t r, uint32_t guest, uint32_t len, uintptr_t pc, const char* what) {
   Range& range = g_ranges[r];
   const uint64_t n = range.count.fetch_add(1, std::memory_order_relaxed) + 1;
   uint32_t fns[kLogDepth] = {};
@@ -140,12 +174,17 @@ void record(size_t r, uint32_t guest, uint32_t len, uintptr_t pc, const char* wh
   for (int i = 0; i < kSiteDepth && i < depth; ++i) site.fn[i] = fns[i];
 
   Lock lock;
-  bool fresh = true;
-  for (uint32_t i = 0; i < range.nsites && fresh; ++i) fresh = std::memcmp(&range.sites[i], &site, sizeof site) != 0;
-  if (fresh && range.nsites < kMaxSitesPerRange) range.sites[range.nsites++] = site;
-  else fresh = false;
+  uint32_t index = kOtherSite;
+  for (uint32_t i = 0; i < range.nsites && index == kOtherSite; ++i)
+    if (std::memcmp(&range.sites[i], &site, sizeof site) == 0) index = i;
+  const bool fresh = index == kOtherSite && range.nsites < kMaxSitesPerRange;
+  if (fresh) {
+    index = range.nsites++;
+    range.sites[index] = site;
+  }
+  range.site_count[index].fetch_add(1, std::memory_order_relaxed);
   const bool milestone = n >= 1024 && (n & (n - 1)) == 0;
-  if (!fresh && !milestone) return;
+  if (!fresh && !milestone) return index;
 
   Line l;
   l.str("[watch] ");
@@ -168,10 +207,16 @@ void record(size_t r, uint32_t guest, uint32_t len, uintptr_t pc, const char* wh
   l.str(" tid=");
   l.dec(static_cast<uint64_t>(::syscall(SYS_gettid)));
   if (!fresh) {
-    l.str(" (count)\n");
+    l.str(" (count) nonzero_stores=");
+    l.dec(range.nonzero_stores.load(std::memory_order_relaxed));
+    l.str(" nonzero_bytes=");
+    l.dec(nonzero_bytes(range.addr, range.len));
+    l.put('\n');
     l.flush();
-    return;
+    return index;
   }
+  l.str(" site ");
+  l.dec(index);
   l.str(" fn");
   if (depth == 0) l.str(" (no guest frame)");
   for (int i = 0; i < depth; ++i) {
@@ -184,6 +229,7 @@ void record(size_t r, uint32_t guest, uint32_t len, uintptr_t pc, const char* wh
   }
   l.put('\n');
   l.flush();
+  return index;
 }
 
 void trap_handler(int signo, siginfo_t*, void* uctx) {
@@ -192,6 +238,8 @@ void trap_handler(int signo, siginfo_t*, void* uctx) {
     ::raise(signo);
     return;
   }
+  for (int i = 0; i < t_nchecks; ++i) check_store(t_checks[i]);
+  t_nchecks = 0;
   for (int i = 0; i < t_npending; ++i) ::mprotect(const_cast<uint8_t*>(g_base) + t_pending[i], kPage, PROT_READ);
   t_npending = 0;
   static_cast<ucontext_t*>(uctx)->uc_mcontext.gregs[REG_EFL] &= ~kTrapFlag;
@@ -311,8 +359,10 @@ bool write_watch_handle_segv(siginfo_t* info, void* ucontext) {
   const auto pc = static_cast<uintptr_t>(uc->uc_mcontext.gregs[REG_RIP]);
   const size_t n = g_nranges.load(std::memory_order_acquire);
   for (size_t i = 0; i < n; ++i)
-    if (*g >= g_ranges[i].addr && uint64_t{*g} < uint64_t{g_ranges[i].addr} + g_ranges[i].len)
-      record(i, *g, 0, pc, nullptr);
+    if (*g >= g_ranges[i].addr && uint64_t{*g} < uint64_t{g_ranges[i].addr} + g_ranges[i].len) {
+      const uint32_t site = record(i, *g, 0, pc, nullptr);
+      if (t_nchecks < kMaxPending) t_checks[t_nchecks++] = {static_cast<uint32_t>(i), site, *g};
+    }
   const uint32_t page = *g & ~(kPage - 1);
   if (::mprotect(const_cast<uint8_t*>(g_base) + page, kPage, PROT_READ | PROT_WRITE) != 0) return false;
   t_pending[t_npending++] = page;
@@ -335,7 +385,51 @@ void write_watch_note_host_write(uint32_t addr, uint32_t len, const char* what) 
   const size_t n = g_nranges.load(std::memory_order_acquire);
   const uint64_t end = uint64_t{addr} + len;
   for (size_t i = 0; i < n; ++i)
-    if (addr < uint64_t{g_ranges[i].addr} + g_ranges[i].len && end > g_ranges[i].addr) record(i, addr, len, 0, what);
+    if (addr < uint64_t{g_ranges[i].addr} + g_ranges[i].len && end > g_ranges[i].addr) (void)record(i, addr, len, 0, what);
+}
+
+void write_watch_report() {
+  const size_t n = g_nranges.load(std::memory_order_acquire);
+  for (size_t r = 0; r < n; ++r) {
+    Range& range = g_ranges[r];
+    Lock lock;
+    Line l;
+    l.str("[watch] summary range ");
+    l.dec(r);
+    l.put(' ');
+    l.hex(range.addr, 8);
+    l.put('+');
+    l.hex(range.len);
+    l.str(" writes=");
+    l.dec(range.count.load());
+    l.str(" nonzero_stores=");
+    l.dec(range.nonzero_stores.load());
+    l.str(" nonzero_bytes=");
+    l.dec(nonzero_bytes(range.addr, range.len));
+    l.put('\n');
+    l.flush();
+    for (uint32_t s = 0; s <= range.nsites; ++s) {
+      if (s == range.nsites && range.site_count[kOtherSite].load() == 0) break;
+      const uint32_t index = s == range.nsites ? kOtherSite : s;
+      Line m;
+      m.str("[watch]   site ");
+      if (index == kOtherSite) m.str("other");
+      else m.dec(index);
+      m.str(" writes=");
+      m.dec(range.site_count[index].load());
+      m.str(" nonzero_stores=");
+      m.dec(range.site_nonzero[index].load());
+      if (index != kOtherSite) {
+        m.str(" fn");
+        for (int i = 0; i < kSiteDepth && range.sites[index].fn[i] != 0; ++i) {
+          m.str(i == 0 ? " " : " <- ");
+          m.hex(range.sites[index].fn[i], 8);
+        }
+      }
+      m.put('\n');
+      m.flush();
+    }
+  }
 }
 
 uint64_t write_watch_count(size_t index) {

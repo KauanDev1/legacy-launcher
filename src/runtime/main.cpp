@@ -247,6 +247,12 @@ void print_shader_summary() {
   std::fflush(stderr);
 }
 
+// The exit report: the shader summary and the --watch-guest summary (runtime/write_watch.h).
+void print_exit_reports() {
+  print_shader_summary();
+  write_watch_report();
+}
+
 // LR_DEADLOCK_SECONDS: the detector threshold (tests use 1). Unset or not a number: 10; 0 disables the detector.
 uint32_t deadlock_seconds() {
   const char* v = std::getenv("LR_DEADLOCK_SECONDS");
@@ -489,7 +495,7 @@ int main(int argc, char** argv) {
   // Before the guest runs (the GPU thread starts at VdInitializeRingBuffer).
   if (!opt.shader_cache_dir.empty()) lr::kernel::kernel().gpu().set_shader_cache_dir(opt.shader_cache_dir);
   lr::kernel::kernel().gpu().set_dump_shaders(opt.dump_shaders);
-  lr::kernel::set_exit_report_hook(&print_shader_summary);
+  lr::kernel::set_exit_report_hook(&print_exit_reports);
 
 
   const auto image_bytes = std::as_bytes(std::span(bytes));
