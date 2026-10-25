@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier:      // An XMemCpy-style line copy (dcbz128_line_copy above): r3 = destination, r4 = source.
 // Synthetic PowerPC functions recompiled by XenonRecomp at build time (see CMakeLists.txt) and executed by
 // test_recomp_instructions.cpp. Shared between the fixture generator and the tests.
 #pragma once
@@ -22,6 +22,18 @@ constexpr uint32_t vpkd3d128(uint32_t vd, uint32_t vb, uint32_t type, uint32_t p
   return 0x18000610u | (vd << 21) | (vb << 11) | (type << 18) | (pack << 16) | (shift << 6);
 }
 inline constexpr uint32_t kFloat16x4 = 5;  // VPACK_FLOAT16_4
+
+// dcbz128 0,r3 (zero the 128-byte destination line), then copy it from r4 with ld/std r7 (DS-form: ld = 58<<26,
+// std = 62<<26, RT=7, RA=4 or 3, ds = 8*i), then blr.
+inline std::vector<uint32_t> dcbz128_line_copy() {
+  std::vector<uint32_t> w{0x7C201FECu};  // dcbz128 0,r3
+  for (uint32_t i = 0; i < 16; ++i) {
+    w.push_back((58u << 26) | (7u << 21) | (4u << 16) | (8u * i));  // ld r7,8i(r4)
+    w.push_back((62u << 26) | (7u << 21) | (3u << 16) | (8u * i));  // std r7,8i(r3)
+  }
+  w.push_back(kBlr);
+  return w;
+}
 
 inline const std::vector<RecompCase>& recomp_cases() {
   static const std::vector<RecompCase> cases = {
@@ -129,6 +141,16 @@ inline const std::vector<RecompCase>& recomp_cases() {
       // Opcode 6: vrlw128 = VX128(6, 80) = 0x18000050; vcfpuxws128 v3,v5,UIMM = VX128_3(6, 624) = 0x18000270.
       {"vrlw128", 0x82004A00, {0x18642850, kBlr}},
       {"vcfpuxws128 2", 0x82004B00, {0x18622A70, kBlr}},
+      // Cache-block ops (X-form, 0x7C000000 | RT<<21 | RA<<16 | RB<<11 | XO<<1). dcbz XO=1014 (0x7EC); dcbz128 is
+      // dcbz with RT=1 (0x7C2007EC, the disassembler's dcbzl). rA=0 means "no base register". Hints: dcbt XO=278
+      // (0x22C), dcbtst XO=246 (0x1EC), dcbf XO=86 (0xAC).
+      {"dcbz", 0x82004D00, {0x7C0327EC, kBlr}},          // dcbz r3,r4
+      {"dcbz rA=0", 0x82004E00, {0x7C0027EC, kBlr}},     // dcbz 0,r4
+      {"dcbz128", 0x82004F00, {0x7C2327EC, kBlr}},       // dcbz128 r3,r4
+      {"dcbz128 rA=0", 0x82005000, {0x7C2027EC, kBlr}},  // dcbz128 0,r4
+      {"cache hints", 0x82005100, {0x7C03222C, 0x7C0321EC, 0x7C0320AC, kBlr}},  // dcbt; dcbtst; dcbf r3,r4
+      // An XMemCpy-style line copy (dcbz128_line_copy above): r3 = destination line, r4 = source.
+      {"dcbz128 then line store", 0x82005200, dcbz128_line_copy()},
   };
   return cases;
 }

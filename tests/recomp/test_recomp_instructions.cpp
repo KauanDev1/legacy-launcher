@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -860,4 +861,69 @@ TEST_CASE("vctuxs converts to unsigned words with saturation", "[unit][recomp]")
 TEST_CASE("vcfpuxws128 converts like vctuxs", "[unit][recomp]") {
   const auto scaled = f32x4(1.5f, -0.25f, 1073741824.0f, 3.0f);
   CHECK(lanes32(vrun("vcfpuxws128 2", PPCVRegister{}, scaled).v3) == W4{6, 0, 0xFFFFFFFF, 12});
+}
+
+// ---- Cache-block ops (the memory-fill hypothesis of Task 22) ----
+
+namespace {
+
+// Fills guest [addr, addr + n) with 0xAB, runs `name` with r3/r4 set, and returns which bytes became zero as
+// [first, last) relative to addr (first == last when none did; the zeroed bytes must be contiguous).
+std::pair<uint32_t, uint32_t> zeroed_span(const char* name, uint32_t addr, uint32_t n, uint64_t r3, uint64_t r4) {
+  std::memset(guest_ptr(addr), 0xAB, n);
+  PPCContext in{};
+  in.r3.u64 = r3;
+  in.r4.u64 = r4;
+  run_case(case_address(name), in, guest_memory());
+  uint32_t first = n, last = 0;
+  for (uint32_t i = 0; i < n; ++i)
+    if (guest_ptr(addr)[i] == 0) {
+      first = std::min(first, i);
+      last = i + 1;
+    }
+  if (first == n) return {0, 0};
+  for (uint32_t i = first; i < last; ++i) REQUIRE(guest_ptr(addr)[i] == 0);
+  return {first, last};
+}
+
+}  // namespace
+
+TEST_CASE("dcbz zeroes the 32-byte block containing rA + rB", "[unit][recomp]") {
+  // Window 0x20000..0x20200; EA = 0x20000 + 0x47 lies in the block 0x20040..0x20060.
+  CHECK(zeroed_span("dcbz", 0x20000, 0x200, 0x20000, 0x47) == std::pair<uint32_t, uint32_t>{0x40, 0x60});
+  CHECK(zeroed_span("dcbz rA=0", 0x20000, 0x200, 0xFFFF0000, 0x20047) ==
+        std::pair<uint32_t, uint32_t>{0x40, 0x60});
+}
+
+TEST_CASE("dcbz128 zeroes the 128-byte line containing rA + rB", "[unit][recomp]") {
+  // EA = 0x20000 + 0x1C7 lies in the line 0x20180..0x20200.
+  CHECK(zeroed_span("dcbz128", 0x20000, 0x300, 0x20000, 0x1C7) == std::pair<uint32_t, uint32_t>{0x180, 0x200});
+  CHECK(zeroed_span("dcbz128", 0x20000, 0x300, 0x20100, 0x80) == std::pair<uint32_t, uint32_t>{0x180, 0x200});
+  CHECK(zeroed_span("dcbz128 rA=0", 0x20000, 0x300, 0xFFFF0000, 0x20080) ==
+        std::pair<uint32_t, uint32_t>{0x80, 0x100});
+}
+
+TEST_CASE("dcbt, dcbtst and dcbf change no memory and no register", "[unit][recomp]") {
+  std::memset(guest_ptr(0x20000), 0xAB, 0x100);
+  PPCContext in{};
+  in.r3.u64 = 0x20000;
+  in.r4.u64 = 0x40;
+  const PPCContext out = run_case(case_address("cache hints"), in, guest_memory());
+  for (uint32_t i = 0; i < 0x100; ++i) REQUIRE(guest_ptr(0x20000)[i] == 0xAB);
+  CHECK(out.r3.u64 == 0x20000);
+  CHECK(out.r4.u64 == 0x40);
+}
+
+TEST_CASE("a dcbz128 line copy leaves the copied bytes and its neighbours intact", "[unit][recomp]") {
+  std::memset(guest_ptr(0x30000), 0xCD, 0x180);
+  for (uint32_t i = 0; i < 0x80; ++i) guest_ptr(0x31000)[i] = uint8_t(i + 1);  // source, no zero byte
+  PPCContext in{};
+  in.r3.u64 = 0x30080;
+  in.r4.u64 = 0x31000;
+  run_case(case_address("dcbz128 then line store"), in, guest_memory());
+  for (uint32_t i = 0; i < 0x80; ++i) {
+    REQUIRE(guest_ptr(0x30000)[i] == 0xCD);  // line before
+    REQUIRE(guest_ptr(0x30080)[i] == uint8_t(i + 1));
+    REQUIRE(guest_ptr(0x30100)[i] == 0xCD);  // line after
+  }
 }
