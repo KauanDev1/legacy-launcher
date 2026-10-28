@@ -8,7 +8,7 @@ Fontes: spec do M1 (`docs/superpowers/specs/2026-10-14-legacyrecomp-m1-design.md
 | M1 | Pipeline completo (doctor a build), formatos, runtime mínimo, CLI e GUI, documentação. O jogo compila e para na primeira importação do kernel sem implementação (saída 3) | feito |
 | M1, Task 17 | AppImage autossuficiente com toolchain embutido (zig c++, cmake, ninja, SDL2), `THIRD-PARTY-LICENSES` e arquivo-fonte completo (`docs/packaging.md`) | feito |
 | M2 | Kernel HLE: memória virtual e física, threads/TLS/KTHREAD, sincronização, timers/DPC, handles, arquivos (VFS), strings/printf, XEX, LZX, XAM mínima, consultas de vídeo. O boot sem interface gráfica roda até a primeira chamada que cria a GPU, `VdInitializeEngines` (saída 3); 0 avisos do recompilador | feito |
-| M3 | GPU: Vulkan + tradutor próprio de shaders (plano B) | próximo |
+| M3 | GPU: Vulkan + tradutor próprio de shaders (plano B). O jogo roda 600 quadros com a GPU emulada; falta a imagem da tela de título (`docs/m3-status.md`) | em andamento |
 | M4 | Áudio, entrada e saves | futuro |
 | M5 | Jogável: menu e mundo | futuro |
 
