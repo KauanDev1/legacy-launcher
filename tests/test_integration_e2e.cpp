@@ -1,17 +1,12 @@
 // SPDX-License-Identifier: MIT
-// End to end on the real game: pipeline::run (doctor..build) into a data root, then launch the recompiled game
-// headless. M1 acceptance: the guest runs until the first unimplemented kernel import (exit 3), and a second run
-// executes no stage at all.
+// End to end on the real game: pipeline::run (doctor..build) into a data root, and a second run executes no stage at
+// all. Running the game is tests/test_integration_m3.cpp (until M3 this test also expected the startup to stop at the
+// first GPU-creating Vd import, exit 3; the GPU imports exist now).
 #include <catch2/catch_test_macros.hpp>
-
-#include <fcntl.h>
-#include <unistd.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -53,38 +48,11 @@ void report(const Result<void>& r) {
                  r.error().message.c_str(), r.error().hint.c_str());
 }
 
-// Runs launch() with the process's stdout+stderr redirected to `log` (the game inherits them).
-Result<int> launch_captured(const Options& opts, const std::vector<std::string>& extra, const fs::path& log) {
-  std::fflush(nullptr);
-  const int saved_out = ::dup(1), saved_err = ::dup(2);
-  const int fd = ::open(log.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-  REQUIRE(saved_out >= 0);
-  REQUIRE(saved_err >= 0);
-  REQUIRE(fd >= 0);
-  ::dup2(fd, 1);
-  ::dup2(fd, 2);
-  ::close(fd);
-  auto r = launch(opts, extra);
-  std::fflush(nullptr);
-  ::dup2(saved_out, 1);
-  ::dup2(saved_err, 2);
-  ::close(saved_out);
-  ::close(saved_err);
-  return r;
-}
-
-std::string slurp(const fs::path& p) {
-  std::ifstream f(p, std::ios::binary);
-  std::ostringstream os;
-  os << f.rdbuf();
-  return os.str();
-}
-
 }  // namespace
 
 // Env: LEGACYRECOMP_ISO (required), LEGACYRECOMP_TEST_ROOT (default: fresh temp dir, removed on success).
 // Resources come from the build tree (<build>/share/legacyrecomp, found next to lr_tests).
-TEST_CASE("real ISO: install, launch until the first unimplemented import, cached rerun", "[integration]") {
+TEST_CASE("real ISO: install, cached rerun", "[integration]") {
   const char* iso = std::getenv("LEGACYRECOMP_ISO");
   if (!iso) SKIP("LEGACYRECOMP_ISO not set");
 
@@ -107,14 +75,6 @@ TEST_CASE("real ISO: install, launch until the first unimplemented import, cache
   report(r);
   REQUIRE(r);
   CHECK(fs::exists(root / "bin" / "legacyrecomp-game"));
-
-  const fs::path log = root / "work" / "logs" / "e2e-launch.log";
-  auto code = launch_captured(opts, {"--headless"}, log);
-  REQUIRE(code);
-  const std::string out = slurp(log);
-  std::fprintf(stderr, "legacyrecomp-game exited with %d:\n%s\n", code.value(), out.c_str());
-  CHECK(code.value() == 3);
-  CHECK(out.find("Unimplemented import:") != std::string::npos);
 
   RecordingSink second;
   auto again = run(opts, second);

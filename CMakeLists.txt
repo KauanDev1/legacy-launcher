@@ -13,11 +13,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(cmake/LrWarnings.cmake)
+include(cmake/LrGpuShaders.cmake)
 include(CTest)
 
 # XenonRecomp's bundled fmt would otherwise add its headers/library to `cmake --install`.
 set(FMT_INSTALL OFF CACHE BOOL "Install fmt (bundled by XenonRecomp)" FORCE)
-add_subdirectory(thirdparty/XenonRecomp)
+# XenonRecomp = upstream submodule + thirdparty/patches/xenonrecomp (cmake/LrSubmodulePatches.cmake).
+include(cmake/LrSubmodulePatches.cmake)
+lr_apply_submodule_patches(XenonRecomp "${CMAKE_SOURCE_DIR}/thirdparty/XenonRecomp"
+  "${CMAKE_SOURCE_DIR}/thirdparty/patches/xenonrecomp" LR_XENONRECOMP_DIR)
+add_subdirectory(${LR_XENONRECOMP_DIR} ${CMAKE_BINARY_DIR}/thirdparty/XenonRecomp)
+
 add_subdirectory(thirdparty/Catch2)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/Catch2/extras")
 
@@ -32,6 +38,21 @@ if(TARGET SDL2::SDL2)
   target_include_directories(imgui SYSTEM PUBLIC ${LR_IMGUI_DIR} ${LR_IMGUI_DIR}/backends)
   target_link_libraries(imgui PUBLIC SDL2::SDL2)
 endif()
+
+# Vulkan loader (volk), allocator (VMA) and headers: third-party, built without our strict flags. VK_NO_PROTOTYPES
+# because every entry point comes from volk; lr_vulkan (src/runtime) is our wrapper on top of this.
+add_library(lr_vulkan_thirdparty STATIC
+  thirdparty/volk/volk.c src/runtime/gpu/vk/vma_impl.cpp)
+target_include_directories(lr_vulkan_thirdparty SYSTEM PUBLIC
+  thirdparty/Vulkan-Headers/include thirdparty/volk thirdparty/VulkanMemoryAllocator/include)
+target_compile_definitions(lr_vulkan_thirdparty PUBLIC VK_NO_PROTOTYPES
+  VMA_STATIC_VULKAN_FUNCTIONS=0 VMA_DYNAMIC_VULKAN_FUNCTIONS=1 VMA_VULKAN_VERSION=1002000)
+target_link_libraries(lr_vulkan_thirdparty PUBLIC ${CMAKE_DL_LIBS})
+set_target_properties(lr_vulkan_thirdparty PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# SPIRV-Headers (Khronos): header-only, the enums the plan B translator's SpirvBuilder writes (runtime/gpu/shader).
+add_library(lr_spirv_headers INTERFACE)
+target_include_directories(lr_spirv_headers SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/SPIRV-Headers/include)
 
 add_subdirectory(src)
 add_subdirectory(tests)

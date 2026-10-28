@@ -39,14 +39,14 @@ LegacyRecomp 是自由软件，采用 MIT 许可证。欢迎任何形式的贡�
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
 | M1 | 从光盘到原生可执行文件的完整流程，运行时骨架 | 已完成 |
-| M2 | 内核模拟：内存、线程、文件、同步 | 下一步 |
-| M3 | 图形：Vulkan 渲染器，用 XenosRecomp 翻译着色器 | 计划中 |
+| M2 | 内核模拟：内存、线程、文件、同步 | 已完成 |
+| M3 | 图形：Vulkan 渲染器，运行时翻译着色器 | 下一步 |
 | M4 | 音频、手柄输入、存档 | 计划中 |
 | M5 | 可游玩：主菜单和世界 | 计划中 |
 
-M1 完成后，启动器可以把你的光盘变成 `legacyrecomp-game`，`legacyrecomp run` 会启动重编译后的入口点。游戏代码会一直运行，直到第一次调用运行时尚未提供的 Xbox 内核函数 `NtAllocateVirtualMemory`，随后以退出码 3 结束，并输出一份指明该调用的报告。游戏一共从 xboxkrnl（内核）和 XAM 导入了 459 个系统函数，目前一个都还没有实现，这正是 M2 要做的事。
+启动器可以把你的光盘变成 `legacyrecomp-game`，`legacyrecomp run` 会启动重编译后的游戏。M2 完成后，运行时模拟了游戏启动所需的 Xbox 内核部分：内存、线程、文件、同步、定时器，以及游戏在启动时请求的 XAM 服务。现在游戏会运行完它的启动流程，直到第一次图形调用 `VdInitializeEngines`（它会创建 GPU），随后以退出码 3 结束，并输出一份指明该调用的报告。游戏从 xboxkrnl（内核）和 XAM 导入的 459 个系统函数中，已有 163 个实现、29 个为桩函数；图形相关的函数是 M3 的工作。不过，在到达 GPU 之前，真实游戏只在单个线程上用到其中 27 个导入，因此 M2 内核的大部分功能（线程、等待、文件、定时器、LZX 解压等）目前只经过单元测试和一个用于测试的假游戏的验证。
 
-后续里程碑有一个已知的障碍：当前固定版本的 XenonRecomp 不支持游戏用到的部分 PowerPC 指令（`bdzf`、`stfsu`、`lfsu`、`vsel128` 等），重编译时会因此产生 3279 条警告。
+当前固定版本的 XenonRecomp 原本不支持的 PowerPC 指令（`bdzf`、`stfsu`、`lfsu`、`vsel128` 等）现在由本仓库中的补丁（`thirdparty/patches/xenonrecomp/`）覆盖，重编译时的警告数为 0。
 
 ## 工作原理
 
@@ -166,7 +166,7 @@ LegacyRecomp 与 Mojang Studios、Microsoft 和 4J Studios 没有任何关联，
 
 ## 致谢
 
-- [hedge-dev](https://github.com/hedge-dev)：XenonRecomp 和 XenosRecomp，以及 UnleashedRecomp。我们把 UnleashedRecomp 作为重编译游戏如何组织的参考。
+- [hedge-dev](https://github.com/hedge-dev)：XenonRecomp，以及 UnleashedRecomp。我们把 UnleashedRecomp 作为重编译游戏如何组织的参考。
 - [Xenia](https://github.com/xenia-project/xenia) 团队：他们的模拟器是关于 Xbox 360 内部机制最好的公开资料。
 - [free60](https://free60.org) wiki：关于主机文件格式的资料。
 - [Dear ImGui](https://github.com/ocornut/imgui)、[SDL](https://www.libsdl.org)、[Catch2](https://github.com/catchorg/Catch2) 和 [toml++](https://github.com/marzer/tomlplusplus)。

@@ -1,0 +1,83 @@
+From fc2d45c3d151a5410f86cff7334efd89760b9f5f Mon Sep 17 00:00:00 2001
+From: Kauan Turcato Storto <159664484+KauanDev1@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 20:01:38 -0400
+Subject: [PATCH 10/10] fix: vpkd3d128 float16_4 handles every pack/shift and
+ vD == vB
+
+Only pack 2 with shift 0-2 was accepted; other forms printed "Unexpected
+float16_4 pack instruction" and wrote the halves at the shift-0..2
+places anyway. Following Xenia's InstrEmit_vpkd3d128 permute table, the
+packed value is [0, 0, XY, ZW] (XY = half(x) << 16 | half(y),
+ZW = half(z) << 16 | half(w)) and (pack, shift) picks the vD words it
+replaces: pack 2/3 with shift 0-2 put XY, ZW at words 2-shift and
+3-shift, pack 2 shift 3 puts ZW in x, pack 3 shift 3 puts XY in w, and
+pack 1 puts ZW at word 3-shift. Any other pack traps.
+
+The halves are now built in vTemp and copied afterwards: writing them
+straight into vD clobbered the source when vD == vB with a non-zero
+shift. The half conversion itself is unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ XenonRecomp/recompiler.cpp | 36 +++++++++++++++++++++++++++++++++---
+ 1 file changed, 33 insertions(+), 3 deletions(-)
+
+diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
+index 17501a7..6751567 100644
+--- a/XenonRecomp/recompiler.cpp
++++ b/XenonRecomp/recompiler.cpp
+@@ -2263,9 +2263,34 @@ bool Recompiler::Recompile(
+             break;
+ 
+         case 5: // float16_4
+-            if (insn.operands[3] != 2 || insn.operands[4] > 2)
++        {
++            // The packed value is, in guest words, [0, 0, XY, ZW] with XY = half(x) << 16 | half(y) and
++            // ZW = half(z) << 16 | half(w); (pack, shift) selects which of its words replace which words of vD
++            // (Xenia's InstrEmit_vpkd3d128 permute table). Guest word g is u32[3 - g] here.
++            const uint32_t pack = insn.operands[3];
++            const uint32_t shift = insn.operands[4];
++            int xyWord = -1;
++            int zwWord = -1;
++            if ((pack == 2 || pack == 3) && shift < 3)
++            {
++                xyWord = int(2 - shift);
++                zwWord = int(3 - shift);
++            }
++            else if (pack == 2 && shift == 3)
++                zwWord = 0;
++            else if (pack == 3 && shift == 3)
++                xyWord = 3;
++            else if (pack == 1)
++                zwWord = int(3 - shift);
++            else
++            {
+                 fmt::println("Unexpected float16_4 pack instruction at {:X}", base);
++                println("\t__builtin_debugtrap();");
++                break;
++            }
+ 
++            // The halves go to vTemp.u16[4..7] (vTemp.u8[0] is scratch), so all of vB is read before vD is
++            // written: vD may alias vB. vTemp.u32[2] is then ZW and vTemp.u32[3] is XY.
+             for (size_t i = 0; i < 4; i++)
+             {
+         		// Strip sign from source
+@@ -2278,11 +2303,16 @@ bool Recompiler::Recompile(
+         		// If saved and > 127-15, exponent is converted from 8 to 5-bit by subtracting 0x70
+         		// If saved but not > 127-15, clamp exponent at 0, add 0x400 to mantissa and shift right by (0x71-exponent)
+         		// If right shift is greater than 31 bits, manually clamp mantissa to 0 or else the output of the shift will be wrong
+-        		println("\t{0}.u16[{1}] = {2}.u8[0] != 0xFF ? ({2}.u8[0] > 0x70 ? ((({2}.u8[0]-0x70)<<10)+{3}.u16) : (0x71-{2}.u8[0] > 31 ? 0x0 : ((0x400+{3}.u16)>>(0x71-{2}.u8[0])))) : 0x7FFF;", v(insn.operands[0]), i+(2*insn.operands[4]), vTemp(), temp());
++        		println("\t{0}.u16[{1}] = {2}.u8[0] != 0xFF ? ({2}.u8[0] > 0x70 ? ((({2}.u8[0]-0x70)<<10)+{3}.u16) : (0x71-{2}.u8[0] > 31 ? 0x0 : ((0x400+{3}.u16)>>(0x71-{2}.u8[0])))) : 0x7FFF;", vTemp(), i + 4, vTemp(), temp());
+         		// Add back original sign
+-        		println("\t{}.u16[{}] |= (({}.u32[{}]&0x80000000)>>16);", v(insn.operands[0]), i+(2*insn.operands[4]), v(insn.operands[1]), i);
++        		println("\t{}.u16[{}] |= (({}.u32[{}]&0x80000000)>>16);", vTemp(), i + 4, v(insn.operands[1]), i);
+             }
++            if (zwWord >= 0)
++                println("\t{}.u32[{}] = {}.u32[2];", v(insn.operands[0]), 3 - zwWord, vTemp());
++            if (xyWord >= 0)
++                println("\t{}.u32[{}] = {}.u32[3];", v(insn.operands[0]), 3 - xyWord, vTemp());
+             break;
++        }
+ 
+         default:
+             println("\t__builtin_debugtrap();");

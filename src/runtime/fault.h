@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "common/result.h"
 #include "runtime/guest_memory.h"
@@ -13,6 +14,15 @@ namespace lr::runtime {
 
 // Guest address of `host` if it lies inside [base, base+size) and fits in 32 bits.
 std::optional<uint32_t> guest_address_of(const uint8_t* base, uint64_t size, const void* host);
+
+// Names the 4 KiB guest page containing `page` in fault reports: a fault inside it gets " (<what>)" appended, e.g.
+// "SIGSEGV at guest 0x80003004 (missing kernel variable Foo)". `what` is copied (truncated to 95 chars) into a
+// fixed-size table that format_fault reads without locking or allocating. Fill it before guest code runs (it is not
+// meant to change while a fault can be reported). Returns false when the table (512 entries) is full.
+bool note_fault_page(uint32_t page, std::string_view what);
+
+// Empties the note_fault_page table.
+void clear_fault_page_notes();
 
 // Async-signal-safe: no allocation, no stdio. Writes a NUL-terminated message into buf
 // (truncating to n-1 chars) and returns the number of chars written (excluding the NUL).

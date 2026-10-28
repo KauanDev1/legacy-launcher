@@ -24,7 +24,9 @@
 #include "launcher/cli/args.h"
 #include "launcher/cli/progress_bar.h"
 #include "pipeline/doctor.h"
+#include "pipeline/game_exit.h"
 #include "pipeline/pipeline.h"
+#include "runtime/xex_imports.h"
 
 #include <image.h>
 
@@ -225,6 +227,18 @@ Result<void> inspect_image(const std::string& xex_path, const char* dump_path) {
   return {};
 }
 
+// One line per import of a loaded XEX: "library ordinal name kind", kind function (it has a thunk) or variable.
+// Unknown ordinals print "?" as name.
+Result<void> inspect_imports(const std::string& xex_path) {
+  LR_TRY_ASSIGN(bytes, load_bytes(xex_path));
+  LR_TRY_ASSIGN(imports, lr::runtime::list_imports(std::as_bytes(std::span(bytes))));
+  for (const auto& r : imports) {
+    std::printf("%s 0x%04X %s %s\n", r.library.c_str(), r.ordinal, r.name.empty() ? "?" : r.name.c_str(),
+                r.thunk != 0 ? "function" : "variable");
+  }
+  return {};
+}
+
 int report_error(const lr::Error& e) {
   std::fprintf(stderr, "error: %s\n", e.message.c_str());
   if (!e.hint.empty()) std::fprintf(stderr, "hint: %s\n", e.hint.c_str());
@@ -235,6 +249,7 @@ int run_inspect(const std::vector<std::string>& a) {
   Result<void> r = lr::Error{lr::ErrorCode::InvalidFormat, "bad inspect arguments", "run `legacyrecomp --help` for usage"};
   if (a.size() == 2 && a[0] == "--iso") r = inspect(a[1]);
   else if (a.size() == 2 && a[0] == "--sections") r = inspect_image(a[1], nullptr);
+  else if (a.size() == 2 && a[0] == "--imports") r = inspect_imports(a[1]);
   else if (a.size() == 3 && a[0] == "--dump-image") r = inspect_image(a[1], a[2].c_str());
   else {
     report_error(r.error());
@@ -250,6 +265,8 @@ int run_doctor_cmd(const fs::path& root) {
   auto report = lr::pipeline::run_doctor(probe, root, resources ? resources.value() : fs::path{});
   if (!report) return report_error(report.error());
   for (const auto& w : report.value().warnings) std::printf("warning: %s\n", w.c_str());
+  if (!report.value().vulkan_device.empty())
+    std::printf("doctor: Vulkan device: %s\n", report.value().vulkan_device.c_str());
   std::printf("doctor: all checks passed (data root: %s)\n", root.c_str());
   return 0;
 }
@@ -284,8 +301,9 @@ int run_game(const lr::cli::CliArgs& args, const fs::path& root) {
   opts.root = root;
   auto r = lr::pipeline::launch(opts, args.passthrough);
   if (!r) return report_error(r.error());
-  if (r.value() == 3)
-    std::fprintf(stderr, "M1: game stopped at the first unimplemented kernel import (expected at this milestone).\n");
+  const std::string why = lr::pipeline::describe_game_exit(
+      r.value(), lr::pipeline::game_trace_file(lr::pipeline::data_root(opts)), lr::pipeline::ExitTextLanguage::English);
+  if (!why.empty()) std::fprintf(stderr, "%s\n", why.c_str());
   return r.value();
 }
 

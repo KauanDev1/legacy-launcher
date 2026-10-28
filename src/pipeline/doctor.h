@@ -21,6 +21,9 @@ struct DoctorProbe {
   virtual bool pkg_config_exists(std::string_view package) = 0;
   // The game is compiled with -march=sandybridge (src/runtime/template/CMakeLists.txt): the host CPU needs AVX.
   virtual bool cpu_supports_avx() = 0;
+  // The Vulkan device the game would use (its name), or an error whose message names the missing piece ("no
+  // Vulkan driver: ...", "Vulkan device lacks textureCompressionBC", ...). `resources`: share/legacyrecomp.
+  virtual Result<std::string> vulkan_device(const std::filesystem::path& resources) = 0;
 };
 
 // Probe backed by the real system (PATH lookup, statvfs, sysconf, pkg-config).
@@ -31,16 +34,21 @@ struct SystemDoctorProbe : DoctorProbe {
   uint64_t total_ram() override;
   bool pkg_config_exists(std::string_view package) override;
   bool cpu_supports_avx() override;  // CPUID/XGETBV (AVX usable) on x86-64; true elsewhere
+  // Runs <resources>/tools/legacyrecomp-vkprobe (src/runtime/vkprobe.cpp) in its own process and reads its line.
+  Result<std::string> vulkan_device(const std::filesystem::path& resources) override;
 };
 
 struct DoctorReport {
   std::vector<std::string> warnings;
+  std::string vulkan_device;  // the Vulkan device the game will use; empty when there is none (see warnings)
 };
 
 // Requires a CPU with AVX (InsufficientResources), a toolchain and 8 GiB free at root (or its nearest existing
 // parent). Less than 8 GiB of RAM only produces a warning. Toolchain: when <resources>/toolchain exists (the
 // AppImage, see resolve_toolchain) every bundled file must be present, else ToolMissing with a "corrupted AppImage"
-// hint; otherwise clang++ >= 18, cmake >= 3.25, ninja and pkg-config sdl2 from the system (probe).
+// hint; otherwise clang++ >= 18, cmake >= 3.25, ninja and pkg-config sdl2 from the system (probe). Vulkan
+// (probe.vulkan_device) is reported, not required: without a usable device a warning names the missing piece (the
+// install still works; the game itself refuses to start with exit 2).
 Result<DoctorReport> run_doctor(DoctorProbe& probe, const std::filesystem::path& root,
                                 const std::filesystem::path& resources = {});
 

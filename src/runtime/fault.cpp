@@ -4,10 +4,15 @@
 #include <signal.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
+#include <mutex>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+
+#include "runtime/kernel/trace.h"
+#include "runtime/write_watch.h"
 
 namespace lr::runtime {
 
@@ -58,16 +63,37 @@ const char* signal_name(int signo) {
   }
 }
 
+// note_fault_page table. Entries [0, g_page_note_count) are complete: a writer fills an entry, then publishes it by
+// bumping the count with release order; format_fault reads the count with acquire order.
+struct PageNote {
+  uint32_t page;
+  char what[96];
+};
+constexpr size_t kMaxPageNotes = 512;
+PageNote g_page_notes[kMaxPageNotes];
+std::atomic<size_t> g_page_note_count{0};
+
+const char* page_note(uint32_t guest) {
+  const size_t n = g_page_note_count.load(std::memory_order_acquire);
+  for (size_t i = 0; i < n; ++i) {
+    if (g_page_notes[i].page == (guest & ~0xFFFu)) return g_page_notes[i].what;
+  }
+  return nullptr;
+}
+
 struct Installed {
   const uint8_t* base = nullptr;
   uint64_t size = 0;
 };
 Installed g_installed;
 
-void handler(int signo, siginfo_t* info, void*) {
+void handler(int signo, siginfo_t* info, void* uctx) {
+  // A write into a --watch-guest page is let through (runtime/write_watch.h); every other fault is reported.
+  if (signo == SIGSEGV && write_watch_handle_segv(info, uctx)) return;
   char buf[kFaultBufSize];
   size_t n = format_fault(buf, sizeof buf - 1, signo, g_installed.base, g_installed.size, info ? info->si_addr : nullptr);
   buf[n++] = '\n';
+  lr::kernel::flush_import_trace_from_signal();  // async-signal-safe: never blocks, may skip (kernel/trace.h)
   ssize_t ignored = ::write(2, buf, n);
   (void)ignored;
   ::_exit(4);
@@ -96,6 +122,11 @@ size_t format_fault(char* buf, size_t n, int signo, const uint8_t* base, uint64_
   if (auto g = guest_address_of(base, size, host)) {
     o.str(" at guest ");
     o.hex(*g, 8);
+    if (const char* what = page_note(*g)) {
+      o.str(" (");
+      o.str(what);
+      o.put(')');
+    }
   } else {
     o.str(" at host ");
     o.hex(reinterpret_cast<uintptr_t>(host), 1);
@@ -108,6 +139,22 @@ size_t format_fault(char* buf, size_t n, int signo, const uint8_t* base, uint64_
   buf[o.len] = '\0';
   return o.len;
 }
+
+bool note_fault_page(uint32_t page, std::string_view what) {
+  static std::mutex m;  // serializes writers; readers (format_fault) only use the published count
+  std::lock_guard<std::mutex> lock(m);
+  const size_t n = g_page_note_count.load(std::memory_order_relaxed);
+  if (n >= kMaxPageNotes) return false;
+  PageNote& e = g_page_notes[n];
+  e.page = page & ~0xFFFu;
+  const size_t len = what.size() < sizeof e.what - 1 ? what.size() : sizeof e.what - 1;
+  std::memcpy(e.what, what.data(), len);
+  e.what[len] = '\0';
+  g_page_note_count.store(n + 1, std::memory_order_release);
+  return true;
+}
+
+void clear_fault_page_notes() { g_page_note_count.store(0, std::memory_order_release); }
 
 std::string describe_fault(int signo, const uint8_t* base, uint64_t size, const void* host_addr) {
   char buf[kFaultBufSize];

@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdint>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -129,4 +130,50 @@ TEST_CASE("inspect --iso terminates on a directory cycle", "[unit]") {
   REQUIRE(done);
   CHECK(WIFEXITED(st));
   if (WIFEXITED(st)) CHECK(WEXITSTATUS(st) == 0);
+}
+
+#include "support/xex2_builder.h"
+
+TEST_CASE("inspect --imports lists every import with its kind", "[unit]") {
+  // xboxkrnl.exe: DbgPrint (0x003) as function (type-0 + type-1 records), XexExecutableModuleHandle (0x193) as
+  // variable; xam.xex: one unknown-ordinal variable.
+  std::vector<uint8_t> text(0x100, 0), data(0x100, 0);
+  lr::testing::put_be32(data, 0x0, 0x003);
+  lr::testing::put_be32(text, 0x10, 0x01000003);
+  lr::testing::put_be32(data, 0x4, 0x193);
+  lr::testing::put_be32(data, 0x8, 0xFFFE);
+  const auto xex = lr::testing::Xex2Builder()
+                       .entry_point(0x82001000)
+                       .image_base(0x82000000)
+                       .import_library("xboxkrnl.exe", {0x82002000, 0x82001010, 0x82002004})
+                       .import_library("xam.xex", {0x82002008})
+                       .pe_image(0x82000000, 0x3000, {{".text", 0x1000, text, true}, {".data", 0x2000, data, false}})
+                       .build();
+  lr::testing::TempDir tmp{"lr_inspect_imports"};
+  const auto path = tmp.path / "default.xex";
+  std::ofstream(path, std::ios::binary)
+      .write(reinterpret_cast<const char*>(xex.data()), static_cast<std::streamsize>(xex.size()));
+  const auto log = tmp.path / "out.log";
+
+  posix_spawn_file_actions_t fa;
+  posix_spawn_file_actions_init(&fa);
+  posix_spawn_file_actions_addopen(&fa, 1, log.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  posix_spawn_file_actions_adddup2(&fa, 1, 2);
+  std::vector<std::string> store = {LR_CLI_PATH, "inspect", "--imports", path.string()};
+  std::vector<char*> argv;
+  for (auto& a : store) argv.push_back(a.data());
+  argv.push_back(nullptr);
+  pid_t pid = -1;
+  REQUIRE(posix_spawn(&pid, LR_CLI_PATH, &fa, nullptr, argv.data(), environ) == 0);
+  posix_spawn_file_actions_destroy(&fa);
+  int st = 0;
+  REQUIRE(::waitpid(pid, &st, 0) == pid);
+  std::ifstream in(log);
+  const std::string out((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  INFO(out);
+  REQUIRE(WIFEXITED(st));
+  CHECK(WEXITSTATUS(st) == 0);
+  CHECK(out == "xboxkrnl.exe 0x0003 DbgPrint function\n"
+               "xboxkrnl.exe 0x0193 XexExecutableModuleHandle variable\n"
+               "xam.xex 0xFFFE ? variable\n");
 }

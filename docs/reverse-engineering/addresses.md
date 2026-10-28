@@ -89,14 +89,54 @@ tempo de execução. Por isso a etapa `analyse` roda também `src/pipeline/switc
   código linear entre ela e o `bctr` para cada índice `0..max` (lê a tabela da imagem). Independe da
   ordem das instruções e dos `nop`; instruções que não tocam a cadeia (FPU, VMX/VMX128, stores) são
   ignoradas; cópias do índice com `mr` antes da guarda são seguidas.
+- Guarda invertida: `cmplwi crN, rI, max` + `ble crN, +8` + `b padrão`, com o bloco da tabela logo após o
+  `b`. O rótulo padrão é o alvo do `b`.
+- Junções: se algum desvio cai depois do `cmplwi` (até o `bgt`/`ble`; na forma `bgt`, até o `bctr`; na forma
+  invertida, no bloco da tabela vindo de outro lugar que não o `ble`), a guarda sozinha não prova nada —
+  outro caminho pode trazer um índice não conferido. O sítio vai para a análise de fluxo de dados do item
+  seguinte, que decide; se ela não provar o limite, fica "não resolvido". Típico: laço cujo fim confere o
+  índice de novo e salta de volta para o bloco da tabela, depois da guarda.
 - Sem guarda, aceita um índice limitado por máscara (`clrlwi`/`rlwinm ..., 31`/`andi.`) com `2^k` entradas.
-- Resultado na imagem TU1: **222 tabelas** (7 298 rótulos, até 440 casos), todas com rótulos em código.
+- A avaliação começa antes do `cmplwi`, no início do bloco linear, parando numa instrução que escreva o
+  índice ou uma de suas cópias `mr` (ou numa instrução desconhecida), sem nunca passar para antes de um
+  alvo de desvio (`b`/`bc`/`bl` relativos: outro caminho poderia trazer outros valores nos registradores)
+  nem do início da seção de código: o compilador costuma subir o
+  `lis`/`addi` da tabela e a escala do índice (`rlwinm rI, rIdx, 1, 0, 30`) para antes da guarda.
+- Tabelas relativas (M3): além de tabelas de palavras absolutas (`lwzx`), resolve tabelas de deslocamentos
+  `lhzx rT, rTabela, rI` (índice escalado por 2 com `rlwinm` ou `add rI, rX, rX`) ou `lbzx rT, rTabela,
+  rIdx`, opcionalmente `rlwinm rT, rT, s, ...`, seguidas de `add rT, rT, rBase` → `mtctr rT` → `bctr`, com
+  `rBase` sendo a própria tabela ou outro endereço montado por `lis`/`addi`; rótulo = `rBase + (entrada <<
+  s)`. Mesmos critérios: limite por `cmplwi`/máscara, todo rótulo alinhado a 4 dentro da seção de código,
+  no máximo 4096 casos. Sem limite, o sítio continua na lista "sem guarda" abaixo, a menos que o próximo
+  item o resolva.
+- Limite num bloco anterior (`resolve_dominated_switches`, M3): um sítio sem guarda (ou com guarda juntada) dentro de uma função do
+  `.pdata` cujo bloco linear só sabe calcular o alvo com um registrador (o índice) é resolvido se uma
+  análise de fluxo de dados no grafo da função provar um limite superior sem sinal para esse registrador.
+  O limite nasce na saída "dentro da faixa" de `cmplwi crN, rI, max` (o caminho que não salta de `bgt`/
+  `bgtlr`, ou o salto de `ble`) e se perde em qualquer escrita no registrador, chamada, instrução
+  desconhecida, na entrada da função, em todo desvio vindo de fora dela e nos rótulos de tabelas de fora
+  dela ou descartadas; arestas: queda, desvios relativos e rótulos das tabelas já conhecidas. Só refinam o
+  limite `cmplwi` (sem sinal) do próprio registrador, no mesmo campo CR do desvio, e o bit `gt` com a
+  polaridade certa; `cmpwi`, `blt`/`bge`, outro campo CR ou outro registrador não refinam. Um `bctr` não
+  resolvido sem carga indexada nem `lis` no seu bloco linear é tomado como chamada de cauda por ponteiro. A função inteira é recusada se tiver desvio absoluto,
+  `bcctr` condicional ou outro salto indexado não resolvido alcançável. Depois de calcular os rótulos, a
+  análise roda de novo com as arestas da nova tabela, e o limite tem de se manter (um caso que muda o
+  índice e volta ao `switch` é recusado). Rótulos alinhados a 4 e dentro da função. O índice precisa ser o
+  único registrador que torna o alvo calculável (ambíguo = recusado). Típico: um segundo
+  `switch` sobre o mesmo índice de um primeiro, num bloco que é rótulo do primeiro. Os sítios do
+  experimento conferidos com a ISO estão em "Sítios do experimento do M3" abaixo.
+- Resultado na imagem TU1: **223 tabelas mantidas** (7 348 rótulos, até 440 casos), todas com rótulos em
+  código; 159 delas são relativas (`lhzx`/`lbzx`). No M2 eram 222 encontradas e 221 mantidas (7 298 rótulos).
 
 Funções folha (sem quadro de pilha) não têm entrada no `.pdata`, e a análise do XenonRecomp para no
 `bctr` — os rótulos dos casos caíam "fora da função" (1 329 erros `Switch case ... jump outside function`
 em 46 tabelas). `fit_switch_functions` deriva a extensão delas: início = alvo de `bl` mais próximo (ou a
 primeira palavra não nula após a função anterior do `.pdata`), fim = primeiro alvo de `bl` após o último
-rótulo, senão a próxima função do `.pdata` (descontando os 8 bytes de handler e o preenchimento). Na TU1:
+rótulo, senão a próxima função do `.pdata` (descontando os 8 bytes de handler e o preenchimento). O
+preenchimento também separa funções (M3): uma palavra nula logo após um desvio incondicional, sem desvio
+anterior que salte além dela, sobe o início (a última abaixo da tabela) ou encerra a faixa (a primeira após o
+último rótulo); a de baixo é ignorada se algum desvio depois dela voltar para antes dela. Sem isso a faixa engolia as funções minúsculas chamadas por ponteiro que vêm depois (ver
+`0x82A12650` abaixo). Na TU1 (M2):
 **38 funções folha**, gravadas em `work/analysis/functions.toml` e mescladas em `[main] functions` pela
 etapa `recompile` (entradas escritas à mão em `recomp.toml` têm prioridade); 31 das 38 começam num alvo de
 `bl`.
@@ -107,18 +147,43 @@ descartadas — se sobrepõe outra faixa derivada ou uma entrada `functions` esc
 de que engoliu outra função ou um final compartilhado). Na TU1: **0 faixas rejeitadas**. Tabelas cujos
 rótulos saem da própria função do `.pdata` também são descartadas (não "consertadas").
 
-Contagem final na TU1: 222 tabelas encontradas, **221 mantidas**, 1 descartada (`0x8243C83C`), 38 funções
-folha, 0 faixas rejeitadas.
+Contagem final na TU1 (M3, Tarefa 4): 224 tabelas encontradas (217 pela varredura linear, 7 provadas pela
+análise de fluxo de dados: `0x8294E434` e seis guardas juntadas por laços em `0x825DEBF4`, `0x825E6D64`,
+`0x825E8EEC`, `0x829D94A4`, `0x829EA93C` e `0x829EDD14`, cada uma com o mesmo número de casos da guarda),
+**223 mantidas**, 1 descartada (`0x8243C83C`), **41 funções folha** (eram 38: o preenchimento
+separou três faixas que juntavam duas funções cada, em `0x82A18A68`, `0x82B14CB8` e `0x82B14FD0`), 0 faixas
+rejeitadas, **3 254 funções só por ponteiro** (eram 3 253). Saída do `analyse.log`:
+
+```
+jump tables: 0 from XenonAnalyse + 217 from the LegacyRecomp scanner + 7 proven by the dataflow = 224 found: 223 kept (159 relative), 1 dropped, 41 leaf-function boundaries (0 rejected), 1 guarded bctr sites unresolved, 19 unguarded indexed bctr sites
+pointer-only functions: 3254
+```
+
+### Sítios do experimento do M3 (Tarefa 4)
+
+Conferidos com a ISO (`install --force analyse`, mapa de funções do XenonRecomp gerado), sem nenhuma entrada
+manual em `recomp.toml`:
+
+| Sítio | Forma | Resultado |
+|---|---|---|
+| `0x82AB1528` (em `sub_82AB0C68`) | guarda invertida `cmplwi cr6, r11, 34` / `ble cr6, +8` / `b 0x82AB9A34`; tabela `lhzx` relativa a `0x82AB152C` | **coberto**: 35 casos, `r11`, padrão `0x82AB9A34` |
+| `0x8294E434` (em `sub_8294DF28`) | segundo `switch` sobre `r9`, sem guarda no bloco; `r9` é limitado por `cmplwi cr6, r9, 14` + `bgt` antes do primeiro `switch` (`0x8294E3DC`, tabela `lbzx`), do qual este bloco (`0x8294E410`) é rótulo | **coberto**: 15 casos (`r9` ≤ 14 provado em todos os caminhos). O experimento estimou 17; a tabela de meias palavras em `0x82106F68` tem só 16 posições antes da tabela de bytes do primeiro `switch` (`0x82106F88`), e índices acima de 14 não chegam ao bloco |
+| `0x82A12650`–`0x82A127F0` | `0x82A12650` é uma função folha com salto calculado (`0x82A12688`, 42 rótulos) chamada por ~300 `bl`; depois dela, separadas por palavras nulas, `0x82A126E0`, `0x82A126F0`, `0x82A12730`, `0x82A12768` e `0x82A127A8` (comparador passado a uma ordenação: `lis`/`addi` em `0x82A17A3C`). A faixa folha do M2 ia até `0x82A127F0` e engolia as cinco | **coberto**: `0x82A12650` (+`0x8C`) e `0x82A127A8` (+`0x48`, só por ponteiro) em `functions.toml`; as seis estão no mapa de funções do XenonRecomp (as quatro sem referência achada são criadas pela análise de lacunas dele) |
+
+Com o build refeito, `legacyrecomp run -- --headless --trace-imports` continua saindo com **código 3** em
+`VdInitializeEngines` (chamado de `0x82446210`), como no fim do M2: nenhuma regressão.
 
 ### Pendências para revisão humana (Ghidra + XEXLoaderWV)
 
-Listadas também em `work/logs/analyse.log` a cada execução.
+Listadas também em `work/logs/analyse.log` a cada execução. Para ver a forma de um sítio:
+`python3 -I tools/site_window.py <dump.bin> <endereço> [antes] [depois]` (dump de `legacyrecomp inspect
+--dump-image`) imprime no máximo 64 instruções decodificadas em volta do endereço, nunca bytes.
 
 | Endereço do `bctr` | Situação | O que verificar |
 |---|---|---|
 | `0x8243C83C` | descartada: índice limitado por `clrlwi ..., 26` (64 entradas), mas parte dos rótulos cai na função seguinte (`0x8243C9B0`) | o número real de casos (a tabela de bytes em `0x8202F558` provavelmente tem menos de 64 entradas válidas); depois, `[[switch]]` manual |
 | `0x826796FC` | guarda `cmpw` com sinal: muito provavelmente chamada virtual num vetor 2D, não `switch` | confirmar que não é tabela |
-| `0x8235B7AC`, `0x82366274`, `0x82366544`, `0x825495A0`, `0x82549798`, `0x82615C18`, `0x8261F07C`, `0x826282C0`, `0x8265827C`, `0x826582B4`, `0x826A6818`, `0x826A6910`, `0x826F92B4`, `0x82787348`, `0x82787370`, `0x82787398`, `0x8294E434`, `0x82A1A6C4`, `0x82AB1528`, `0x82B1AA00`, `0x82B1CA68` | sem guarda nem máscara, com carga indexada de endereço montado por `lis` | separar `switch` sem limite (ex.: `0x8235B7AC` e `0x82A1A6C4`, tabelas de deslocamentos de código) de chamadas por vetor de ponteiros (ex.: `0x82787348`, `0x82B1AA00`); para os `switch`, achar o número de casos e escrever `[[switch]]` manual |
+| `0x82615C18`, `0x8261F07C`, `0x826282C0`, `0x8265827C`, `0x826582B4`, `0x826A6818`, `0x826A6910`, `0x826F92B4`, `0x82787348`, `0x82787370`, `0x82787398`, `0x82A1A6C4`, `0x82B1AA00`, `0x82B1CA68` (14; `0x8294E434` e `0x82AB1528` saíram da lista no M3; `0x8235B7AC`, `0x82366274`, `0x82366544`, `0x825495A0` e `0x82549798` saíram na Tarefa 22 do M3: a tabela fica logo depois do `bctr` e termina onde o código recomeça, regra "tabela em linha" de `src/pipeline/switch_scan.cpp`; `0x8235B7AC` tem 30 entradas absolutas, de `0x8235B7B0` a `0x8235B827`, e o primeiro caso em `0x8235B828`; a faixa folha da tabela de `0x82366544` começa em `0x82366530` (+`0x10C`), e a função de `0x82366518` (+`0x18`), alvo de `bl` que salta para ela, ganhou limite próprio para que a análise do XenonRecomp não engula o `switch`) | sem guarda nem máscara, com carga indexada de endereço montado por `lis` | separar `switch` sem limite (ex.: `0x8235B7AC` e `0x82A1A6C4`, tabelas de deslocamentos de código) de chamadas por vetor de ponteiros (ex.: `0x82787348`, `0x82B1AA00`); para os `switch`, achar o número de casos e escrever `[[switch]]` manual |
 
 ## Desvios condicionais para fora da função
 
@@ -143,7 +208,31 @@ de `switch` fora da função vira `return;`): `PPC_IMAGE_BASE 0x82000000`,
 `PPC_IMAGE_SIZE 0x32D0000`, `PPC_CODE_BASE 0x82200000`, `PPC_CODE_SIZE 0x96428C`; 219 arquivos
 (215 `ppc_recomp.*.cpp`, ~162 MB), 55 343 símbolos (459 importações `__imp__*`), 221 `switch`.
 
-Avisos que restam (não fatais, afetam a fase de runtime): 3 279 "Unrecognized instruction" — instruções
-que o XenonRecomp `ddd128b` ainda não implementa (as mais frequentes: `bdzf` 754, `stfsu` 507, `lfsu` 350,
-`vsel128` 253, `lhzu` 219, `sthu` 211, `eqv` 94, `subfze` 65, `bso` 65, `lfsux` 63) — e 20
-"Unexpected float16_4 pack instruction". As funções afetadas ficam incompletas no C++ gerado.
+### Instruções que o XenonRecomp não reconhecia (M2, Tarefas 2 a 7)
+
+Contagens de `python3 -I tools/recomp_warnings.py work/logs/recompile.log` (só contagens; endereços apenas
+dos sites float16_4). Cada aviso deixava a função afetada incompleta no C++ gerado.
+
+| Momento | "Unrecognized instruction" | Mnemônicos | "Unexpected float16_4 pack" |
+|---|---|---|---|
+| M1, XenonRecomp `ddd128b` sem patches | 3 279 | `bdzf` 754, `stfsu` 507, `lfsu` 350, `vsel128` 253, `lhzu` 219, `sthu` 211, `eqv` 94, `subfze` 65, `bso` 65, `lfsux` 63, ... | 20 |
+| Depois das Tarefas 2 a 5 (patches 0001 a 0003) | 683 | 37 (tabela abaixo) | 20 |
+| Depois da Tarefa 7 (patches 0001 a 0010) | **0** | — | **0** |
+
+Os 683 do início da Tarefa 7, por mnemônico: `vmaxuh` 60, `addc` 48, `addme` 48, `vpkswss128` 48, `vslo128` 48,
+`lhzux` 47, `vadduhs` 42, `vcfpuxws128` 40, `vminuh` 40, `vpkuwum128` 35, `sthux` 23, `stfdu` 21, `vsl` 18,
+`vpkuwus128` 17, `vcmpequh` 16, `mulhd` 14, `lbzux` 10, `lfdu` 9, `lwzux` 9, `stbux` 9, `vpkuhum128` 8,
+`vpkuhus128` 8, `bns` 6, `lfdux` 6, `lhbrx` 6, `stdux` 6, `vctuxs` 6, `vnor128` 5, `vsubuws` 5, `lhau` 4,
+`lvehx` 4, `vcmpgtuw` 4, `vslh` 4, `ldux` 3, `vrlw128` 3, `bdnzt` 2, `vavguw` 1. Todos foram implementados
+(nenhum ficou de fora da cauda longa); ver ADR 0004, M7.
+
+Sites `vpkd3d128` FLOAT16_4 (classificados por `python3 -I tools/vpkd3d_sites.py <dump> --log
+work/logs/recompile.log`, que imprime só os campos decodificados): todos os 20 são `pack=3 shift=0`, em
+0x82467584, 0x824675F8, 0x82467624, 0x82467650, 0x8246770C, 0x82467710, 0x82467714, 0x82467728, 0x82467734,
+0x824677B0, 0x82467CEC, 0x82467FB4, 0x82467FE0, 0x82467FF0, 0x82468004, 0x8246801C, 0x8246802C, 0x82468058,
+0x8246806C e 0x82468110 (todos entre 0x82467584 e 0x82468110). Pela tabela do Xenia, `pack=3` com shift 0 grava `XY` e
+`ZW` nas palavras z e w de vD, como `pack=2`; o patch 0010 implementa a tabela inteira. Confirmado por: execução
+da ferramenta sobre a imagem carregada (Tarefa 7); revisão no Ghidra não feita.
+
+Com os patches, a recompilação termina sem nenhuma linha de aviso além do contador (`unrecognized
+instructions: 0`).

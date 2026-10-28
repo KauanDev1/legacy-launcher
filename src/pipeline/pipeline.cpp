@@ -13,6 +13,7 @@
 
 #include "common/paths.h"
 #include "pipeline/game_config.h"
+#include "pipeline/game_exit.h"
 #include "pipeline/runner.h"
 #include "pipeline/stages/stages.h"
 #include "pipeline/state.h"
@@ -74,7 +75,23 @@ Result<int> launch(const Options& options, std::span<const std::string> extra_ar
     return Error{ErrorCode::NotFound, "patched image missing: " + image.string(),
                  "run `legacyrecomp install --iso <iso>` again"};
 
-  std::vector<std::string> args = {game.string(), "--image", image.string(), "--data", p.game.string()};
+  // user/ holds the saves and the cache; the pipeline never deletes it. Creation failure aborts the launch.
+  {
+    std::error_code ec;
+    fs::create_directories(p.user, ec);
+    if (ec || !fs::is_directory(p.user))
+      return Error{ErrorCode::IoError,
+                   "cannot create user data folder " + p.user.string() + ": " + (ec ? ec.message() : "not a directory"),
+                   "check the permissions of the data root or choose another one with --root"};
+  }
+
+  // --trace-file and --gpu-trace-file always: the game only writes them when --trace-imports / --trace-gpu is among
+  // the extra arguments (spec section 11). --shader-cache-dir always: the game keeps its translated shaders there.
+  std::vector<std::string> args = {game.string(), "--image", image.string(), "--data", p.game.string(),
+                                   "--user", p.user.string(),
+                                   "--trace-file", game_trace_file(p.root).string(),
+                                   "--gpu-trace-file", gpu_trace_file(p.root).string(),
+                                   "--shader-cache-dir", runtime_shader_cache_dir(p.root).string()};
   args.insert(args.end(), extra_args.begin(), extra_args.end());
   std::vector<char*> argv;
   for (auto& a : args) argv.push_back(a.data());

@@ -8,8 +8,11 @@
 #endif
 
 #include <charconv>
+#include <chrono>
 #include <regex>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 #include "pipeline/process.h"
 #include "pipeline/toolchain.h"
@@ -101,7 +104,48 @@ bool SystemDoctorProbe::cpu_supports_avx() {
 #endif
 }
 
+Result<std::string> SystemDoctorProbe::vulkan_device(const fs::path& resources) {
+  const fs::path probe = resources / "tools" / "legacyrecomp-vkprobe";
+  std::error_code ec;
+  if (resources.empty() || !fs::exists(probe, ec))
+    return Error{ErrorCode::ToolMissing, "Vulkan probe not found (" + probe.string() + ")",
+                 "reinstall LegacyRecomp (the probe is part of share/legacyrecomp/tools)"};
+  // run_tool, not capture_output: a hung driver must not hang the doctor (killed after kProbeTimeout), and stderr
+  // (merged) may carry driver chatter such as lavapipe's "not a conformant implementation" warning, so the result is
+  // the one line that starts with "ok<TAB>" or "missing<TAB>" (src/runtime/vkprobe.cpp).
+  constexpr auto kProbeTimeout = std::chrono::seconds(30);
+  const auto deadline = std::chrono::steady_clock::now() + kProbeTimeout;
+  std::string result_line, all;
+  ToolInvocation inv;
+  inv.program = probe;
+  inv.cancelled = [deadline] { return std::chrono::steady_clock::now() > deadline; };
+  inv.on_line = [&](std::string_view line) {
+    std::string l(line);
+    while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+    if (result_line.empty() && (l.rfind("ok\t", 0) == 0 || l.rfind("missing\t", 0) == 0)) result_line = l;
+    if (all.size() < 4096) all += l + "\n";
+  };
+  if (auto r = run_tool(inv); !r) {
+    if (r.error().code == ErrorCode::Cancelled)
+      return Error{ErrorCode::ToolFailed,
+                   "the Vulkan probe did not answer within " + std::to_string(kProbeTimeout.count()) + " s",
+                   "the Vulkan driver may be hanging; update it or check the GPU"};
+    return Error(r.error());
+  }
+  std::vector<std::string> fields;
+  for (size_t start = 0;;) {
+    const size_t tab = result_line.find('\t', start);
+    fields.push_back(result_line.substr(start, tab == std::string::npos ? std::string::npos : tab - start));
+    if (tab == std::string::npos) break;
+    start = tab + 1;
+  }
+  if (fields.size() == 2 && fields[0] == "ok") return fields[1];
+  if (fields.size() == 3 && fields[0] == "missing") return Error{ErrorCode::ToolMissing, fields[1], fields[2]};
+  return Error{ErrorCode::ToolFailed, "unexpected output from " + probe.string() + ": " + all, ""};
+}
+
 Result<DoctorReport> run_doctor(DoctorProbe& probe, const fs::path& root, const fs::path& resources) {
+  std::vector<std::string> notes;  // non-fatal findings, reported as warnings
   // Checked first: no toolchain install can fix it. InsufficientResources (a property of the machine, like RAM/disk).
   if (!probe.cpu_supports_avx())
     return Error{ErrorCode::InsufficientResources, "CPU without AVX support",
@@ -131,6 +175,15 @@ Result<DoctorReport> run_doctor(DoctorProbe& probe, const fs::path& root, const 
                  "free disk space or choose another data root with --root"};
 
   DoctorReport report;
+  report.warnings = std::move(notes);
+  // Vulkan: reported, not required (an install can be built on a machine without a GPU and run elsewhere).
+  if (auto vk = probe.vulkan_device(resources)) {
+    report.vulkan_device = vk.value();
+  } else {
+    std::string w = "no usable Vulkan device: " + vk.error().message;
+    if (!vk.error().hint.empty()) w += " (" + vk.error().hint + ")";
+    report.warnings.push_back(w + "; the game will not start until this is fixed");
+  }
   uint64_t ram = probe.total_ram();
   if (ram < 8 * kGiB)
     report.warnings.push_back("only " + std::to_string(ram / (1024 * 1024)) +

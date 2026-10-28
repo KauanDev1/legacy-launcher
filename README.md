@@ -30,7 +30,7 @@ That translation happens on your computer. The launcher reads your own disc imag
 
 ## Open source
 
-LegacyRecomp is free software under the MIT license. Contributions are welcome, from bug reports and reverse-engineering notes to code. [AGENTS.md](AGENTS.md) has the build commands and the project rules, and [docs/](docs/) has the design notes, file format notes and decision records (written in Portuguese).
+LegacyRecomp is free software under the MIT license. Contributions are welcome, from bug reports and reverse-engineering notes to code. [AGENTS.md](AGENTS.md) has the build commands and the project rules (on Windows or macOS, [docs/development.md](docs/development.md) explains the Docker dev container), and [docs/](docs/) has the design notes, file format notes and decision records (written in Portuguese).
 
 ## Status
 
@@ -39,14 +39,14 @@ The game is not playable yet. Nothing is drawn on screen.
 | Milestone | Scope | State |
 |---|---|---|
 | M1 | Pipeline from disc to native executable, runtime skeleton | Done |
-| M2 | Kernel emulation: memory, threads, files, synchronization | Next |
-| M3 | Graphics: Vulkan renderer, shaders translated with XenosRecomp | Planned |
+| M2 | Kernel emulation: memory, threads, files, synchronization | Done |
+| M3 | Graphics: Vulkan renderer, shaders translated at run time | Next |
 | M4 | Audio, input, saves | Planned |
 | M5 | Playable: main menu and worlds | Planned |
 
-With M1 done, the launcher turns your disc into `legacyrecomp-game`, and `legacyrecomp run` starts the recompiled entry point. The game's code runs until its first call into the Xbox kernel that the runtime does not provide yet, `NtAllocateVirtualMemory`, and then exits with code 3 and a report naming that call. The game imports 459 system functions from xboxkrnl (the kernel) and XAM, and none of them are implemented so far. That is the work of M2.
+The launcher turns your disc into `legacyrecomp-game`, and `legacyrecomp run` starts the recompiled game. With M2 done, the runtime emulates the parts of the Xbox kernel the game needs to start: memory, threads, files, synchronization, timers and the XAM services it asks for at boot. The game now runs its startup until its first graphics call, `VdInitializeEngines`, which would create the GPU, and then exits with code 3 and a report naming that call. Of the 459 system functions the game imports from xboxkrnl (the kernel) and XAM, 163 are implemented and 29 are stubs; the graphics ones are the work of M3. Before reaching the GPU, though, the real game uses only 27 of those imports, on a single thread, so most of the M2 kernel (threads, waits, files, timers, LZX decompression and more) has so far been exercised only by unit tests and a fake test game.
 
-One known obstacle for later milestones: the pinned XenonRecomp version does not handle some PowerPC instructions this game uses (`bdzf`, `stfsu`, `lfsu`, `vsel128` and others), which shows up as 3,279 warnings during recompilation.
+The PowerPC instructions the pinned XenonRecomp version did not handle (`bdzf`, `stfsu`, `lfsu`, `vsel128` and others) are now covered by patches kept in this repository (`thirdparty/patches/xenonrecomp/`), and recompilation finishes with 0 warnings.
 
 ## How it works
 
@@ -93,15 +93,15 @@ The launcher's interface is only in Portuguese for now. Drop the ISO onto the wi
 
 ### Build from source
 
-You need Clang 18 or newer, CMake 3.25 or newer, Ninja, SDL2 and pkg-config.
+You need Clang 18 or newer, CMake 3.25 or newer, Ninja, SDL2, pkg-config and glslang (`glslangValidator`, which compiles the renderer's own GLSL shaders at build time). To run the game you need a Vulkan 1.2 driver; `legacyrecomp doctor` reports the device it finds.
 
 ```sh
 # Arch, Manjaro
-sudo pacman -S --needed clang cmake ninja sdl2 pkgconf git
+sudo pacman -S --needed clang cmake ninja sdl2 pkgconf glslang git
 # Debian, Ubuntu
-sudo apt install clang cmake ninja-build libsdl2-dev pkg-config git
+sudo apt install clang cmake ninja-build libsdl2-dev pkg-config glslang-tools git
 # Fedora
-sudo dnf install clang cmake ninja-build SDL2-devel pkgconf git
+sudo dnf install clang cmake ninja-build SDL2-devel pkgconf glslang git
 ```
 
 ```sh
@@ -146,7 +146,7 @@ config/            recompiler settings and expected file hashes for the supporte
 tests/             unit tests and integration tests that use a real disc
 tools/             reverse-engineering helper scripts
 assets/fonts/      launcher fonts
-thirdparty/        git submodules: XenonRecomp, Dear ImGui, Catch2
+thirdparty/        git submodules: XenonRecomp, Dear ImGui, Catch2, volk, VMA, Vulkan-Headers, SPIRV-Headers
 docs/              format notes, reverse-engineering notes, decision records, specs and plans
 ```
 
@@ -166,7 +166,7 @@ You must own Minecraft: Xbox 360 Edition and make the disc image yourself. This 
 
 ## Credits
 
-- [hedge-dev](https://github.com/hedge-dev) for XenonRecomp and XenosRecomp, and for UnleashedRecomp, which we use as a reference for how a recompiled game fits together.
+- [hedge-dev](https://github.com/hedge-dev) for XenonRecomp, and for UnleashedRecomp, which we use as a reference for how a recompiled game fits together.
 - The [Xenia](https://github.com/xenia-project/xenia) team, whose emulator is the best public documentation of the Xbox 360 internals.
 - The [free60](https://free60.org) wiki, for its notes on the console's file formats.
 - [Dear ImGui](https://github.com/ocornut/imgui), [SDL](https://www.libsdl.org), [Catch2](https://github.com/catchorg/Catch2) and [toml++](https://github.com/marzer/tomlplusplus).

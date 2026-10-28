@@ -111,7 +111,7 @@ TEST_CASE("stage_message translates the pipeline's progress messages", "[unit]")
         "Procurando tabelas de salto (LegacyRecomp)");
   CHECK(stage_message(StageId::Recompile, "Recompiling functions... 42%") == "Recompilando funções… 42%");
   CHECK(stage_message(StageId::Recompile, "[x] Recompiling functions... 7.5%") == "Recompilando funções… 7.5%");
-  CHECK(stage_message(StageId::Build, "wrote 812 import stubs") == "812 stubs de importação gerados");
+  CHECK(stage_message(StageId::Build, "wrote 812 import thunks") == "812 thunks de importação gerados");
   CHECK(stage_message(StageId::Build, "configuring the game build") == "Configurando a compilação do jogo");
   CHECK(stage_message(StageId::Build, "compiling with 16 jobs") == "Compilando com 16 processos");
   CHECK(stage_message(StageId::Build, "[12/345]") == "Compilando [12/345]");
@@ -121,5 +121,5 @@ TEST_CASE("stage_message never passes unknown English through", "[unit]") {
   CHECK(stage_message(StageId::Verify, "hashing default.xex") == "Em andamento…");
   CHECK(stage_message(StageId::Build, "something new") == "Em andamento…");
   CHECK(stage_message(StageId::Build, "") == "Em andamento…");
-  CHECK(stage_message(StageId::Build, "wrote x import stubs") == "Em andamento…");
+  CHECK(stage_message(StageId::Build, "wrote x import thunks") == "Em andamento…");
 }

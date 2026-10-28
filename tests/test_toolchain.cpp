@@ -57,6 +57,7 @@ struct HealthyProbe : DoctorProbe {
   uint64_t total_ram() override { return 16ull << 30; }
   bool pkg_config_exists(std::string_view) override { return false; }
   bool cpu_supports_avx() override { return true; }
+  Result<std::string> vulkan_device(const fs::path&) override { return std::string("Fake GPU"); }
 };
 
 }  // namespace
@@ -138,4 +139,14 @@ TEST_CASE("doctor in bundled mode still refuses a CPU without AVX", "[unit]") {
   auto r = run_doctor(probe, t.path / "root", t.path);
   REQUIRE_FALSE(r);
   CHECK(r.error().code == ErrorCode::InsufficientResources);
+}
+
+TEST_CASE("doctor in bundled mode does not require dxc", "[unit]") {
+  TempDir t;
+  make_bundled_tree(t.path);
+  HealthyProbe probe;
+  auto ok = run_doctor(probe, t.path / "root", t.path);
+  REQUIRE(ok);
+  CHECK(ok.value().warnings.empty());
+  CHECK_FALSE(fs::exists(t.path / "toolchain" / "dxc"));
 }

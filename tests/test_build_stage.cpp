@@ -3,8 +3,11 @@
 
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
+#include <vector>
 
+#include "pipeline/game_exit.h"
 #include "pipeline/pipeline.h"
 #include "pipeline/stages/build_stage.h"
 #include "support/temp_dir.h"
@@ -128,11 +131,15 @@ TEST_CASE("reset_stale_build_dir wipes a build dir configured from another templ
   CHECK_FALSE(fs::exists(build));
 }
 
-TEST_CASE("default_stages lists every stage in order", "[unit]") {
+TEST_CASE("stage order has no shaders stage", "[unit]") {
   SystemDoctorProbe probe;
   auto stages = default_stages(probe);
-  REQUIRE(stages.size() == 7);
-  for (size_t i = 0; i < stages.size(); ++i) CHECK(static_cast<size_t>(stages[i]->id()) == i);
+  const std::vector<std::string> want = {"doctor", "extract", "verify", "patch", "analyse", "recompile", "build"};
+  REQUIRE(stages.size() == want.size());
+  for (size_t i = 0; i < stages.size(); ++i) {
+    CHECK(static_cast<size_t>(stages[i]->id()) == i);
+    CHECK(stage_name(stages[i]->id()) == want[i]);
+  }
 }
 
 TEST_CASE("launch reports a missing game build", "[unit]") {
@@ -157,4 +164,83 @@ TEST_CASE("launch forwards Ctrl+C to the game, survives it and returns 128 + SIG
   auto r = launch(opts, {});
   REQUIRE(r);
   CHECK(r.value() == 130);
+}
+
+TEST_CASE("launch passes --trace-file and --gpu-trace-file under <root>/work/logs to the game", "[unit][trace]") {
+  TempDir t;
+  write(t.path / "work" / "image" / "default_tu1.xex", "image");
+  // Stand-in game: records its arguments, one per line.
+  const fs::path game = t.path / "bin" / "legacyrecomp-game";
+  const fs::path args = t.path / "args.txt";
+  write(game, "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done > '" + args.string() + "'\nexit 0\n");
+  fs::permissions(game, fs::perms::owner_all);
+  Options opts;
+  opts.root = t.path;
+  const std::vector<std::string> extra = {"--trace-imports"};
+  auto r = launch(opts, extra);
+  REQUIRE(r);
+  CHECK(r.value() == 0);
+  std::ifstream f(args);
+  std::stringstream ss;
+  ss << f.rdbuf();
+  const std::string expect_file = (t.path / "work" / "logs" / "game-trace.log").string();
+  CHECK(ss.str().find("--trace-file\n" + expect_file + "\n") != std::string::npos);
+  const std::string expect_gpu = (t.path / "work" / "logs" / "gpu-trace.log").string();
+  CHECK(ss.str().find("--gpu-trace-file\n" + expect_gpu + "\n") != std::string::npos);
+  CHECK(ss.str().find("--trace-imports\n") != std::string::npos);  // extra arguments still reach the game
+}
+
+TEST_CASE("launch passes the runtime shader cache dir", "[unit]") {
+  TempDir t;
+  write(t.path / "work" / "image" / "default_tu1.xex", "image");
+  const fs::path game = t.path / "bin" / "legacyrecomp-game";
+  const fs::path args = t.path / "args.txt";
+  write(game, "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done > '" + args.string() + "'\nexit 0\n");
+  fs::permissions(game, fs::perms::owner_all);
+  Options opts;
+  opts.root = t.path;
+  auto r = launch(opts, {});
+  REQUIRE(r);
+  CHECK(r.value() == 0);
+  std::ifstream f(args);
+  std::stringstream ss;
+  ss << f.rdbuf();
+  // Game-derived SPIR-V: under work/, never anywhere that gets committed or packaged.
+  const std::string expect = (t.path / "work" / "shaders" / "runtime").string();
+  CHECK(ss.str().find("--shader-cache-dir\n" + expect + "\n") != std::string::npos);
+  CHECK(lr::pipeline::runtime_shader_cache_dir(t.path) == t.path / "work" / "shaders" / "runtime");
+}
+
+TEST_CASE("launch passes --data <root>/game and --user <root>/user and creates user/", "[unit][vfs]") {
+  TempDir t;
+  write(t.path / "work" / "image" / "default_tu1.xex", "image");
+  const fs::path game = t.path / "bin" / "legacyrecomp-game";
+  const fs::path args = t.path / "args.txt";
+  write(game, "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done > '" + args.string() + "'\nexit 0\n");
+  fs::permissions(game, fs::perms::owner_all);
+  Options opts;
+  opts.root = t.path;
+  REQUIRE(launch(opts, {}));
+  std::ifstream f(args);
+  std::stringstream ss;
+  ss << f.rdbuf();
+  CHECK(ss.str().find("--data\n" + (t.path / "game").string() + "\n") != std::string::npos);
+  CHECK(ss.str().find("--user\n" + (t.path / "user").string() + "\n") != std::string::npos);
+  CHECK(fs::is_directory(t.path / "user"));
+}
+
+TEST_CASE("launch fails with IoError when user/ cannot be created", "[unit][vfs]") {
+  TempDir t;
+  write(t.path / "work" / "image" / "default_tu1.xex", "image");
+  const fs::path game = t.path / "bin" / "legacyrecomp-game";
+  write(game, "#!/bin/sh\nexit 0\n");
+  fs::permissions(game, fs::perms::owner_all);
+  write(t.path / "user", "a regular file blocks the folder");
+  Options opts;
+  opts.root = t.path;
+  auto r = launch(opts, {});
+  REQUIRE_FALSE(r);
+  CHECK(r.error().code == lr::ErrorCode::IoError);
+  CHECK(r.error().message.find((t.path / "user").string()) != std::string::npos);
+  CHECK_FALSE(r.error().hint.empty());
 }

@@ -38,6 +38,10 @@ while [ "$#" -gt 0 ]; do
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
+# glslangValidator compiles the renderer's own GLSL shaders while LegacyRecomp is built (cmake/LrGpuShaders.cmake);
+# checked first so that a missing tool stops the script before anything is downloaded.
+command -v glslangValidator > /dev/null ||
+  die "glslangValidator is required on the build machine (sudo pacman -S --needed glslang)"
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 
@@ -254,15 +258,18 @@ rm -rf "$tc/sdl2/bin" "$tc/sdl2/lib/pkgconfig" "$tc/sdl2/share/aclocal"
 # --- LegacyRecomp ------------------------------------------------------------------------------------------------
 # The release preset, with zig instead of the system clang and Release (no debug info) instead of RelWithDebInfo.
 # -include cstdlib: XenonRecomp's bundled {fmt} relies on <cstdlib> arriving through other libstdc++ headers,
-# which libc++ does not do. -idirafter /usr/include: imgui's SDL2 backend includes SDL_syswm.h, which includes
-# the X11 headers. --strip-debug: zig's cached libc++ carries debug info (about 20 MB per launcher).
+# which libc++ does not do.
+# -idirafter /usr/include: imgui's SDL2 backend includes SDL_syswm.h, which includes the X11 headers.
+# --strip-debug: zig's cached libc++ carries debug info (about 20 MB per launcher).
 
 lr_build=$cache/build/legacyrecomp
-log "building LegacyRecomp"
+log "building LegacyRecomp (glslangValidator: $(glslangValidator --version | head -n 1))"
+{ printf 'glslangValidator: %s\n' "$(command -v glslangValidator)"; glslangValidator --version; } \
+  > "$cache/build/legacyrecomp.log"
 (cd "$repo" && "$cmake" --preset release -B "$lr_build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_MAKE_PROGRAM="$ninja" \
   "${zig_cmake_args[@]}" -DCMAKE_CXX_FLAGS="-include cstdlib -idirafter /usr/include" \
   -DCMAKE_PREFIX_PATH="$tc/sdl2" -DSDL2_DIR="$tc/sdl2/lib/cmake/SDL2" -DCMAKE_EXE_LINKER_FLAGS=-Wl,--strip-debug \
-  -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$lr_build/bin") > "$cache/build/legacyrecomp.log" 2>&1 ||
+  -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$lr_build/bin") >> "$cache/build/legacyrecomp.log" 2>&1 ||
   die "LegacyRecomp configure failed, see $cache/build/legacyrecomp.log"
 "$cmake" --build "$lr_build" -j "$jobs" --target legacyrecomp legacyrecomp-gui lr_resources \
   >> "$cache/build/legacyrecomp.log" 2>&1 || die "LegacyRecomp build failed, see $cache/build/legacyrecomp.log"
@@ -292,7 +299,7 @@ cp "$repo/LICENSE" "$doc/LICENSE"
 log "checking the binaries"
 gpl_disasm_marker="attempt to set y bit when using + or - modifier"  # thirdparty/.../disasm/ppc-dis.c
 for f in "$appdir/usr/bin/legacyrecomp" "$appdir/usr/bin/legacyrecomp-gui" "$res/tools/XenonAnalyse" \
-  "$res/tools/XenonRecomp" "$ninja"; do
+  "$res/tools/XenonRecomp" "$res/tools/legacyrecomp-vkprobe" "$ninja"; do
   [ -x "$f" ] || die "missing $f"
   newest=$(readelf -V --wide "$f" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -n 1)
   if [ -n "$newest" ] && [ "$(printf '%s\n%s\n' "$newest" "$glibc_target" | sort -V | tail -n 1)" != "$glibc_target" ]
@@ -307,7 +314,7 @@ for f in "$appdir/usr/bin/legacyrecomp" "$appdir/usr/bin/legacyrecomp-gui" "$res
   # .symtab in these binaries, so besides the decode_insn_ppc symbol (checked when a symbol table exists) we look
   # for one of ppc-dis.c's message strings, which must be present in the tools (else the marker is stale).
   case $f in
-    */usr/bin/legacyrecomp | */usr/bin/legacyrecomp-gui)
+    */usr/bin/legacyrecomp | */usr/bin/legacyrecomp-gui | */tools/legacyrecomp-vkprobe)
       syms=$(LC_ALL=C readelf -sW "$f")  # no pipe into grep -q: with pipefail, readelf's SIGPIPE would mask a hit
       ! grep -qw decode_insn_ppc <<< "$syms" ||
         die "${f#"$appdir"/} contains decode_insn_ppc: the GPL-2.0-or-later binutils disassembler got linked in"

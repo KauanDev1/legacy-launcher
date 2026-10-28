@@ -5,12 +5,14 @@ LegacyRecomp statically recompiles Minecraft: Xbox 360 Edition to a native Linux
 ## Build and test
 
 ```
-sudo pacman -S --needed clang cmake ninja sdl2 pkgconf   # toolchain
+sudo pacman -S --needed clang cmake ninja sdl2 pkgconf glslang   # toolchain (glslangValidator builds only our own GLSL; the game's shaders are translated at run time)
 cmake --preset dev                                        # configure (Debug, ASan+UBSan)
 cmake --build --preset dev
 ctest --preset dev -L unit                                # fast tests, no game data needed
 LEGACYRECOMP_ISO=/path/to/game.iso ctest --preset dev -L integration
 ```
+
+On Windows or macOS (or without a local toolchain) use the Docker dev container: `tools/dev/container.sh test` runs the unit tests, and `shell`, `build`, `install --iso`, `run` are also available (see `docs/development.md`).
 
 Requirements: x86-64 CPU with AVX (the game is compiled with `-march=sandybridge`; `doctor` checks it), Clang ≥ 18, CMake ≥ 3.25, Ninja, SDL2, 8 GiB free disk.
 
@@ -19,7 +21,7 @@ Release build and usage:
 ```
 cmake --preset release && cmake --build --preset release
 build/release/bin/legacyrecomp install --iso /path/to/game.iso   # CLI: doctor..build, cached via work/state.toml
-build/release/bin/legacyrecomp run                               # exit 3 = first unimplemented kernel import (expected in M1)
+build/release/bin/legacyrecomp run                               # game exit: 0 ok, 2 usage/load, 3 missing import, 4 fault, 5 guest fatal, 6 deadlock (`run -- --trace-imports` writes work/logs/game-trace.log)
 build/release/bin/legacyrecomp-gui                               # GUI launcher (see docs/gui.md)
 packaging/appimage/build.sh                                      # AppImage + source archive in packaging/appimage/out (docs/packaging.md)
 ```
@@ -33,18 +35,20 @@ Include root is `src/`: write `#include "common/result.h"`.
 ```
 launcher (cli, gui)
    |-> pipeline  (stages: doctor, extract, verify, patch, analyse, recompile, build)
-   |-> runtime   (guest memory, loader, kernel/ imports, threads)
+   |-> runtime   (guest memory, loader, kernel/ imports, threads, gpu/; plan B: gpu/shader/ translates microcode to SPIR-V at run time, ADR 0005 M8)
 pipeline -> formats (xdvdfs, stfs, xex2) -> common
-runtime  -> common
+runtime  -> formats (xex2 only), common
 common: Result/Error, log, sha256, paths, fs_util
-thirdparty: XenonRecomp (and its bundled tomlplusplus/fmt/xxHash), Catch2, imgui
+thirdparty: XenonRecomp (pinned upstream + thirdparty/patches/xenonrecomp, applied to a copy at configure by
+            cmake/LrSubmodulePatches.cmake; bundles tomlplusplus/fmt/xxHash), Catch2, imgui, volk, VMA, Vulkan-Headers,
+            SPIRV-Headers (header-only, for the shader translator's SpirvBuilder)
 ```
 
 Namespaces: `lr`, `lr::formats`, `lr::pipeline`, `lr::runtime`, `lr::kernel`.
 
 ## Inviolable rules
 
-- Public APIs return `lr::Result<T>`; no exceptions cross module boundaries (sole exception: `lr::kernel::UnimplementedImport`, thrown and caught inside the runtime).
+- Public APIs return `lr::Result<T>`; no exceptions cross module boundaries (only two exceptions, both thrown and caught inside the runtime: `lr::kernel::UnimplementedImport` for a missing import, and `lr::kernel::GuestThreadExit`, thrown by `ExTerminateThread` and caught at the top of the guest thread; see `docs/adr/0004-m2-plan-deviations.md`).
 - Never commit `*.iso`, `*.xex`, `*.xexp`, `private/`, `work/`, generated `ppc_*` files. Before every commit: `git status --short` must show none of them.
 - Every commit passes `ctest --preset dev -L unit`. Conventional Commits, one commit per task step marked "Commit", ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - External tools are launched with `posix_spawn` and an argv vector, never through a shell.

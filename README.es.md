@@ -39,14 +39,14 @@ Todavía no se puede jugar. No se dibuja nada en pantalla.
 | Hito | Alcance | Estado |
 |---|---|---|
 | M1 | Pipeline del disco al ejecutable nativo, esqueleto del runtime | Hecho |
-| M2 | Emulación del kernel: memoria, hilos, archivos, sincronización | Siguiente |
-| M3 | Gráficos: renderizador Vulkan, shaders traducidos con XenosRecomp | Previsto |
+| M2 | Emulación del kernel: memoria, hilos, archivos, sincronización | Hecho |
+| M3 | Gráficos: renderizador Vulkan, shaders traducidos en tiempo de ejecución | Siguiente |
 | M4 | Audio, mandos, partidas guardadas | Previsto |
 | M5 | Jugable: menú principal y mundos | Previsto |
 
-Con el M1 terminado, el launcher convierte tu disco en `legacyrecomp-game`, y `legacyrecomp run` arranca el punto de entrada recompilado. El código del juego se ejecuta hasta su primera llamada al kernel de la Xbox que el runtime todavía no ofrece, `NtAllocateVirtualMemory`, y entonces termina con el código 3 y un informe que indica esa llamada. El juego importa 459 funciones del sistema de xboxkrnl (el kernel) y XAM y, por ahora, ninguna está implementada. Ese es el trabajo del M2.
+El launcher convierte tu disco en `legacyrecomp-game`, y `legacyrecomp run` arranca el juego recompilado. Con el M2 terminado, el runtime emula las partes del kernel de la Xbox que el juego necesita para arrancar: memoria, hilos, archivos, sincronización, temporizadores y los servicios de XAM que pide al inicio. Ahora el juego ejecuta su arranque hasta su primera llamada gráfica, `VdInitializeEngines`, que crearía la GPU, y entonces termina con el código 3 y un informe que indica esa llamada. De las 459 funciones del sistema que el juego importa de xboxkrnl (el kernel) y XAM, 163 están implementadas y 29 son stubs; las gráficas son el trabajo del M3. Sin embargo, antes de llegar a la GPU el juego real usa solo 27 de esas importaciones, en un único hilo, así que la mayor parte del kernel del M2 (hilos, esperas, archivos, temporizadores, descompresión LZX y más) por ahora solo la ejercitan pruebas unitarias y un juego falso de prueba.
 
-Hay un obstáculo conocido para los siguientes hitos: la versión fijada de XenonRecomp no admite algunas instrucciones PowerPC que usa el juego (`bdzf`, `stfsu`, `lfsu`, `vsel128` y otras), lo que aparece como 3279 avisos durante la recompilación.
+Las instrucciones PowerPC que la versión fijada de XenonRecomp no admitía (`bdzf`, `stfsu`, `lfsu`, `vsel128` y otras) ahora están cubiertas por parches guardados en este repositorio (`thirdparty/patches/xenonrecomp/`), y la recompilación termina con 0 avisos.
 
 ## Cómo funciona
 
@@ -166,7 +166,7 @@ Tienes que tener Minecraft: Xbox 360 Edition y crear tú mismo la imagen del dis
 
 ## Créditos
 
-- [hedge-dev](https://github.com/hedge-dev), por XenonRecomp y XenosRecomp, y por UnleashedRecomp, que usamos como referencia de cómo se organiza un juego recompilado.
+- [hedge-dev](https://github.com/hedge-dev), por XenonRecomp y por UnleashedRecomp, que usamos como referencia de cómo se organiza un juego recompilado.
 - El equipo de [Xenia](https://github.com/xenia-project/xenia), cuyo emulador es la mejor documentación pública del funcionamiento interno de la Xbox 360.
 - La wiki de [free60](https://free60.org), por sus notas sobre los formatos de archivo de la consola.
 - [Dear ImGui](https://github.com/ocornut/imgui), [SDL](https://www.libsdl.org), [Catch2](https://github.com/catchorg/Catch2) y [toml++](https://github.com/marzer/tomlplusplus).

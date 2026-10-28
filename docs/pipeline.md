@@ -8,16 +8,48 @@ fica em `work/state.toml`. Tudo roda na máquina do usuário e nada do jogo sai 
 
 | # | Etapa | O que faz | Saídas (relativas à pasta de dados) |
 |---|---|---|---|
-| 1 | `doctor` | Confere ferramentas (clang++ ≥ 18, cmake ≥ 3.25, ninja, `pkg-config sdl2`; no AppImage, os arquivos do toolchain embutido), CPU com AVX, 8 GiB livres e RAM | nenhuma |
+| 1 | `doctor` | Confere ferramentas (clang++ ≥ 18, cmake ≥ 3.25, ninja, `pkg-config sdl2`; no AppImage, os arquivos do toolchain embutido), CPU com AVX, 8 GiB livres e RAM; informa o dispositivo Vulkan (`tools/legacyrecomp-vkprobe`, num processo à parte), e a falta dele é só um aviso que nomeia a peça ausente | nenhuma |
 | 2 | `extract` | Lê a ISO (XDVDFS), acha o pacote STFS do jogo e o do TU1 e extrai `default.xex`, `default.xexp` e os dados do jogo | `work/input/package.xex`, `work/input/tu.xexp`, `game/.extracted` |
 | 3 | `verify` | Compara o SHA-256 dos arquivos extraídos com `config/minecraft-tu1/game.toml` | nenhuma |
 | 4 | `patch` | Aplica o `.xexp` ao XEX (XenonUtils `XexPatcher`), gerando um XEX2 sem criptografia e sem compressão | `work/image/default_tu1.xex` |
 | 5 | `analyse` | Roda o XenonAnalyse e a varredura de `switch` própria (jump tables) | `work/analysis/switch_tables.toml`, `work/analysis/functions.toml` |
 | 6 | `recompile` | Roda o XenonRecomp com `config/minecraft-tu1/recomp.toml`; falha se houver qualquer linha `ERROR:` (o XenonRecomp sai com 0 mesmo gerando código errado) | `work/generated/ppc_recomp_shared.h`, `ppc_func_mapping.cpp`, `ppc_config.h` (mais ~215 `ppc_recomp.*.cpp`) |
-| 7 | `build` | Gera os stubs de importação, compila o C++ gerado com o `main.cpp` e as bibliotecas do runtime (template CMake/Ninja) e instala o binário. Usa o clang++/cmake/ninja do sistema ou, no AppImage, o toolchain embutido (ver "Toolchain") | `bin/legacyrecomp-game` |
+| 7 | `build` | Gera os thunks de importação (`import_stubs.cpp`, ver `docs/architecture.md`, "Kernel"), compila o C++ gerado com o `main.cpp` e as bibliotecas do runtime (template CMake/Ninja) e instala o binário. Usa o clang++/cmake/ninja do sistema ou, no AppImage, o toolchain embutido (ver "Toolchain") | `bin/legacyrecomp-game` |
 
 O código gerado tem cerca de 160 MB, o `recompile` + `build` levam alguns minutos e usam bastante RAM por
 job (use `--jobs <n>` para limitar).
+
+Os shaders não têm etapa de instalação: o runtime traduz o microcódigo que o jogo carrega, na primeira vez que o vê (plano B, `docs/adr/0005-m3-plan-deviations.md`, M8). Um `work/state.toml` escrito por uma instalação anterior, com uma tabela `[stages.shaders]`, continua válido: a entrada é ignorada. Os restos dessa etapa (`work/shaders/in/`, `hlsl/`, `shader_cache.cpp`) podem ser apagados.
+
+O `legacyrecomp run` sempre passa ao jogo `--shader-cache-dir <raiz>/work/shaders/runtime`: é ali que o runtime guarda
+o SPIR-V que traduziu (um arquivo por chave de shader, ver `docs/architecture.md`, "Shaders (M3, plano B)"), para não
+traduzir de novo na próxima execução. É SPIR-V derivado do jogo: fica só nessa pasta, nunca vai para o repositório
+nem para um pacote. Apagar a pasta é seguro (o runtime traduz de novo); arquivos de outra versão do tradutor,
+truncados ou corrompidos são ignorados e reescritos. `legacyrecomp run -- --dump-shaders` grava também a
+desmontagem do microcódigo (`<nome>.txt`) ao lado de cada arquivo.
+
+O `analyse` também procura funções sem entrada no `.pdata` que só são alcançadas por ponteiro (vtables, tabelas
+de callbacks, o comparador de um `qsort`), que o XenonRecomp nunca recompilaria
+(`src/pipeline/function_discovery.cpp`). Candidatas: palavras de 32 bits (big-endian, alinhadas) fora das seções
+de código cujo valor aponta para código e endereços de código montados com `lis` + `addi`. Alvos de `bl` nunca
+são emitidos (o XenonRecomp já cria uma função em cada um, ver ADR 0005), só servem de fronteira. Os thunks de
+importação (os símbolos que o XenonUtils cria, 16 bytes cada) contam como funções conhecidas: uma tabela de
+ponteiros que aponta para um deles (o `NtReadFile` da CRT) não gera uma segunda função no mesmo endereço. Uma
+candidata só vale se estiver num vão entre funções conhecidas (`.pdata`, funções derivadas dos `switch` e as
+escritas à mão no `recomp.toml`; os 8 bytes de dados do handler antes de uma função com exception handler contam
+como dela), se a palavra anterior não puder cair nela (`blr`, `bctr`, `b`, padding zero) e se terminar num
+desvio incondicional sem desvio adiante pendente. É rejeitada se correr para dentro de outra função (ou de um
+alvo de `bl`), do padding ou do fim do vão, se tiver um `bctr` alimentado por load indexado (`switch` não
+resolvido), se uma chamada ou um desvio de fora cair no seu interior ou se contiver um rótulo de `switch`. Na dúvida ela é
+descartada: uma fronteira errada gera código errado, uma função perdida só falha com relatório claro. As
+aceitas vão para `work/analysis/functions.toml` e o `work/logs/analyse.log` ganha a linha
+`pointer-only functions: N`.
+
+O `recompile` nunca falha por avisos do XenonRecomp. Ao terminar, ele conta as instruções que o XenonRecomp não soube traduzir
+(`Unrecognized instruction at ...`) e acrescenta ao fim de `work/logs/recompile.log`, e emite como última mensagem de progresso,
+a linha `unrecognized instructions: N (top: bdzf 754, stfsu 507, ...)` (até 10 mnemônicos, mais `, float16_4 packs: K` se houver).
+`python3 -I tools/recomp_warnings.py work/logs/recompile.log` imprime a tabela completa por mnemônico e o endereço de cada
+`float16_4` (o aviso só traz o endereço, sem operandos); lê apenas o log, nunca a imagem.
 
 ## Toolchain
 
@@ -40,6 +72,7 @@ Precedência: `--root` > variável `LEGACYRECOMP_ROOT` > `$XDG_DATA_HOME/legacyr
 ```
 <root>/
   game/                  dados extraídos do jogo (pertence ao LegacyRecomp: é apagado a cada extract)
+  user/                  dados do jogador (saves, cache:): o pipeline nunca apaga, nem no extract (ao contrário de game/)
   bin/legacyrecomp-game  executável compilado
   work/
     state.toml           estado das etapas
@@ -73,7 +106,8 @@ fingerprint = "..."
   `recompile`, `build`.
 - O carregamento é tolerante: chave ausente ou com tipo errado significa "não completo" e só causa
   re-execução. TOML ilegível é `InvalidFormat`.
-- O fingerprint do `doctor` é constante (`doctor-1`): ele é cacheado como as outras etapas, então mudanças
+- O fingerprint do `doctor` é constante (`doctor-2` desde a Tarefa 17, que acrescentou a sonda Vulkan; a troca
+  faz uma instalação existente rodar todas as etapas de novo uma vez): ele é cacheado como as outras etapas, então mudanças
   no ambiente (instalar/remover clang) só são notadas se uma etapa posterior rodar e falhar, ou com
   `--force doctor`. `legacyrecomp doctor` sempre confere o sistema.
 - `legacyrecomp build` roda `recompile` + `build` sem ISO. Sem `--iso`, o `extract` só vale se já estiver
@@ -104,9 +138,16 @@ grupo da ferramenta com SIGKILL e encerra a CLI na hora, pelo próprio sinal; ne
 | 0 | fim normal |
 | 1 | o launcher não conseguiu iniciar o jogo (jogo não compilado, `work/image/default_tu1.xex` ausente, falha no `posix_spawn`); a mensagem vai para stderr como `error:` |
 | 2 | uso ou preparação falhou dentro do jogo (imagem ausente, base diferente da compilada, mapeamento de memória) |
-| 3 | importação do kernel não implementada (esperado no M1; o relatório vai para stderr) |
+| 3 | importação do kernel não implementada (o relatório vai para stderr e nomeia a importação; veja `docs/kernel-coverage.md`) |
 | 4 | falha de execução (SIGSEGV, SIGILL etc. tratada pelo handler) |
+| 5 | erro fatal do convidado (`lr::kernel::guest_fatal`: o jogo chegou a um estado de onde o kernel não segue; motivo em stderr) |
+| 6 | deadlock: todas as threads do jogo ficaram bloqueadas além do limite do detector; stderr lista o que cada uma espera |
 | 128 + sinal | o jogo morreu por um sinal não tratado (por exemplo 130 com Ctrl+C, 137 com SIGKILL) |
+
+Para cada código diferente de 0, a CLI (em inglês) e a GUI (em português) mostram uma explicação vinda de
+`lr::pipeline::describe_game_exit` (`src/pipeline/game_exit.h`). Nos códigos 3 a 6 ela sugere rodar
+`legacyrecomp run -- --trace-imports` e ler `<raiz>/work/logs/game-trace.log`, o rastro das chamadas ao kernel
+que antecederam a parada.
 
 ## Solução de problemas por código de erro
 
@@ -120,7 +161,7 @@ grupo da ferramenta com SIGKILL e encerra a CLI na hora, pelo próprio sinal; ne
 | `ToolFailed` | XenonRecomp, XenonAnalyse ou compilador saíram com erro | Veja `work/logs/`; para falta de memória reduza `--jobs` |
 | `IoError` | Falha ao ler ou escrever (permissão, disco cheio) | Confira permissões e espaço; não use tmpfs como pasta de dados |
 | `Cancelled` | Ctrl+C ou botão Cancelar | Rode o comando de novo |
-| `UnimplementedImport` | O jogo chamou uma importação do kernel sem implementação (saída 3) | Esperado no M1; veja `docs/kernel-coverage.md` e `docs/roadmap.md` |
+| `UnimplementedImport` | O jogo chamou uma importação do kernel sem implementação (saída 3) | Veja o relatório em stderr, `docs/kernel-coverage.md` e `docs/roadmap.md`; `legacyrecomp run -- --trace-imports` grava as chamadas anteriores em `work/logs/game-trace.log` |
 | `Internal` | Bug | Abra uma issue com o log de `work/logs/` |
 
 ## Requisito de CPU

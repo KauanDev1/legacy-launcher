@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include "runtime/be.h"
 
@@ -151,6 +152,7 @@ TEST_CASE("install_fault_handlers reports a guest fault (forked child)", "[unit]
 #include "runtime/func_table.h"
 
 static void dummy_func() {}
+static void dummy_func2() { asm volatile("nop"); }  // a different body: never folded into dummy_func
 
 TEST_CASE("install_function_table writes 8-byte slots per 4-byte instruction", "[unit]") {
   auto r = GuestMemory::reserve(0x1'0000'0000ull);
@@ -162,6 +164,34 @@ TEST_CASE("install_function_table writes 8-byte slots per 4-byte instruction", "
   CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x20) == f);
   CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x28) == f);
   CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x30) == nullptr);
+}
+
+// Two mappings of one address are a pipeline bug (it was function discovery emitting a function at an import thunk,
+// fixed at the root in the analyse stage): the first mapping (XenonRecomp lists import thunks first) is kept, and
+// every dropped duplicate is reported, never silently.
+TEST_CASE("install_function_table keeps the first mapping of an address and reports the duplicates", "[unit]") {
+  auto r = GuestMemory::reserve(0x1'0000'0000ull);
+  REQUIRE(r.ok());
+  const uint64_t off = 0x82000000ull + 0x32D0000ull;
+  void* thunk = reinterpret_cast<void*>(&dummy_func);
+  void* other = reinterpret_cast<void*>(&dummy_func2);
+  const FuncMapping maps[] = {{0x82000010, thunk}, {0x82000018, thunk}, {0x82000010, other}, {0x82000018, other}};
+  auto dups = install_function_table(r.value(), off, 0x82000000, 0x1000, maps);
+  REQUIRE(dups.ok());
+  CHECK(dups.value() == std::vector<uint32_t>{0x82000010, 0x82000018});
+  CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x20) == thunk);
+  CHECK(*reinterpret_cast<void**>(r.value().base() + off + 0x30) == thunk);
+}
+
+TEST_CASE("install_function_table reports no duplicates for distinct addresses", "[unit]") {
+  auto r = GuestMemory::reserve(0x1'0000'0000ull);
+  REQUIRE(r.ok());
+  const uint64_t off = 0x82000000ull + 0x32D0000ull;
+  void* f = reinterpret_cast<void*>(&dummy_func);
+  const FuncMapping maps[] = {{0x82000010, f}, {0x82000014, f}};
+  auto dups = install_function_table(r.value(), off, 0x82000000, 0x1000, maps);
+  REQUIRE(dups.ok());
+  CHECK(dups.value().empty());
 }
 
 TEST_CASE("install_function_table rejects bad mappings", "[unit]") {

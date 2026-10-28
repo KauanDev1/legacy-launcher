@@ -18,6 +18,11 @@ class Sha256 {
   void update(std::span<const std::byte> data);
   std::array<uint8_t, 32> finish();
 
+  // Resume from / save the running state (see Sha1::load/store): chaining words, bytes hashed so far, pending block.
+  void load(const uint32_t (&h)[8], uint64_t total_len, const uint8_t (&buf)[64]);
+  void store(uint32_t (&h)[8], uint8_t (&buf)[64]) const;
+  uint64_t total_len() const { return total_len_; }
+
  private:
   void process_block(const uint8_t* block);
 

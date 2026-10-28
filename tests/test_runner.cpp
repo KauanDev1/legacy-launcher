@@ -177,3 +177,19 @@ TEST_CASE("state survives reload", "[unit]") {
   REQUIRE_FALSE(bad);
   CHECK(bad.error().code == ErrorCode::InvalidFormat);
 }
+
+TEST_CASE("state with a stale shaders entry still loads", "[unit]") {
+  // An install made before plan B (ADR 0005 M8) wrote a [stages.shaders] table; the stage no longer exists.
+  lr::testing::TempDir tmp{"lr_state_stale_test"};
+  const auto p = tmp.path / "state.toml";
+  {
+    std::ofstream(p) << "[stages.patch]\ncomplete = true\nfingerprint = \"fp\"\n\n"
+                        "[stages.shaders]\ncomplete = true\nfingerprint = \"old\"\n";
+  }
+  auto st = StateStore::load(p);
+  REQUIRE(st);
+  CHECK(st.value().is_complete(StageId::Patch, "fp"));
+  CHECK_FALSE(parse_stage("shaders"));
+  CHECK(st.value().save());  // and it can be written back
+  CHECK(StateStore::load(p));
+}

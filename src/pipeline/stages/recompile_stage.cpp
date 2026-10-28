@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "pipeline/stages/recompile_stage.h"
 
+#include <algorithm>
 #include <charconv>
 #include <fstream>
 #include <span>
@@ -146,6 +147,44 @@ Error recomp_errors(size_t count, std::span<const std::string> first, const fs::
   return Error{ErrorCode::ToolFailed, std::move(msg), std::move(hint)};
 }
 
+RecompWarnings count_recomp_warnings(std::string_view log) {
+  constexpr std::string_view kUnrecognized = "Unrecognized instruction at 0x";
+  constexpr std::string_view kFloat16 = "Unexpected float16_4 pack instruction at ";
+  RecompWarnings w;
+  while (!log.empty()) {
+    const auto nl = log.find('\n');
+    std::string_view line = log.substr(0, nl);
+    log.remove_prefix(nl == std::string_view::npos ? log.size() : nl + 1);
+    if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+    if (line.starts_with(kUnrecognized)) {
+      const auto colon = line.find(": ", kUnrecognized.size());
+      if (colon == std::string_view::npos) continue;
+      std::string_view name = line.substr(colon + 2);
+      if (!name.empty()) ++w.unrecognized[std::string(name)];
+    } else if (line.starts_with(kFloat16)) {
+      ++w.float16_pack;
+    }
+  }
+  return w;
+}
+
+std::string format_recomp_warnings(const RecompWarnings& w) {
+  constexpr size_t kTop = 10;
+  uint64_t total = 0;
+  std::vector<std::pair<std::string, uint32_t>> sorted(w.unrecognized.begin(), w.unrecognized.end());
+  for (const auto& kv : sorted) total += kv.second;
+  std::stable_sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+  std::string out = "unrecognized instructions: " + std::to_string(total);
+  if (total > 0) {
+    out += " (top: ";
+    for (size_t i = 0; i < sorted.size() && i < kTop; ++i)
+      out += (i ? ", " : "") + sorted[i].first + " " + std::to_string(sorted[i].second);
+    out += ")";
+  }
+  if (w.float16_pack > 0) out += ", float16_4 packs: " + std::to_string(w.float16_pack);
+  return out;
+}
+
 namespace {
 
 constexpr size_t kQuotedErrors = 5;
@@ -220,11 +259,18 @@ class RecompileStage : public Stage {
     };
     fs::remove(inv.log_file, ec);  // one run per log
     LR_TRY(run_tool(inv));
+    // Warnings never fail the stage; the summary goes to the log and is the final progress message.
+    std::string summary;
+    if (auto log_text = read_text(inv.log_file)) {
+      summary = format_recomp_warnings(count_recomp_warnings(log_text.value()));
+      std::ofstream(inv.log_file, std::ios::binary | std::ios::app) << summary << "\n";
+    }
     if (error_count > 0) return recomp_errors(error_count, errors, inv.log_file);
     for (const auto& out : outputs(ctx))
       if (!fs::exists(out, ec))
         return Error{ErrorCode::ToolFailed, "XenonRecomp did not produce " + out.string(),
                      "see " + inv.log_file.string()};
+    if (!summary.empty()) ctx.sink.on_progress({StageId::Recompile, 1.0f, summary});
     return {};
   }
 };

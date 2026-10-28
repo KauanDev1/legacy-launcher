@@ -1,0 +1,131 @@
+From e3d818ac323ce2831a9838173bce94404468fac4 Mon Sep 17 00:00:00 2001
+From: Kauan Turcato Storto <159664484+KauanDev1@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 19:54:00 -0400
+Subject: [PATCH 05/10] feat: add the remaining load/store-with-update forms,
+ lhbrx and lvehx
+
+lbzux, lhzux, lhau, lwzux, ldux, lfdu, lfdux, stbux, sthux, stdux and
+stfdu compute EA, access memory and then write EA back to rA, like the
+forms added before. lhbrx is lwbrx for halfwords. lvehx shares the lvx
+path: it loads the aligned quadword, which leaves the addressed element
+in place (the other elements are undefined on the hardware).
+
+Based on hedge-dev/XenonRecomp PR #60 by Mystixor (MIT); lfdu/lfdux
+load into the FPR (the PR wrote the GPR).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ XenonRecomp/recompiler.cpp | 79 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 79 insertions(+)
+
+diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
+index 5dc7e5a..1482dc3 100644
+--- a/XenonRecomp/recompiler.cpp
++++ b/XenonRecomp/recompiler.cpp
+@@ -1166,6 +1166,7 @@ bool Recompiler::Recompile(
+         println("\t{}.s64 = {};", r(insn.operands[0]), int32_t(insn.operands[1] << 16));
+         break;
+ 
++    case PPC_INST_LVEHX:
+     case PPC_INST_LVEWX:
+     case PPC_INST_LVEWX128:
+     case PPC_INST_LVX:
+@@ -1241,6 +1242,13 @@ bool Recompiler::Recompile(
+         println("{}.u32));", r(insn.operands[2]));
+         break;
+ 
++    case PPC_INST_LHBRX:
++        print("\t{}.u64 = __builtin_bswap16(PPC_LOAD_U16(", r(insn.operands[0]));
++        if (insn.operands[1] != 0)
++            print("{}.u32 + ", r(insn.operands[1]));
++        println("{}.u32));", r(insn.operands[2]));
++        break;
++
+     case PPC_INST_LWSYNC:
+         // no op
+         break;
+@@ -1274,6 +1282,51 @@ bool Recompiler::Recompile(
+         println("\t{}.u32 = {};", r(insn.operands[2]), ea());
+         break;
+ 
++    // Load with update, indexed (rD, rA, rB) and D-form (rD, d, rA): EA = rA + rB / rA + d, then rA = EA.
++    case PPC_INST_LBZUX:
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.u64 = PPC_LOAD_U8({});", r(insn.operands[0]), ea());
++        println("\t{}.u32 = {};", r(insn.operands[1]), ea());
++        break;
++
++    case PPC_INST_LHZUX:
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.u64 = PPC_LOAD_U16({});", r(insn.operands[0]), ea());
++        println("\t{}.u32 = {};", r(insn.operands[1]), ea());
++        break;
++
++    case PPC_INST_LHAU:
++        println("\t{} = {} + {}.u32;", ea(), int32_t(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.s64 = int16_t(PPC_LOAD_U16({}));", r(insn.operands[0]), ea());
++        println("\t{}.u32 = {};", r(insn.operands[2]), ea());
++        break;
++
++    case PPC_INST_LWZUX:
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.u64 = PPC_LOAD_U32({});", r(insn.operands[0]), ea());
++        println("\t{}.u32 = {};", r(insn.operands[1]), ea());
++        break;
++
++    case PPC_INST_LDUX:
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.u64 = PPC_LOAD_U64({});", r(insn.operands[0]), ea());
++        println("\t{}.u32 = {};", r(insn.operands[1]), ea());
++        break;
++
++    case PPC_INST_LFDU:
++        printSetFlushMode(false);
++        println("\t{} = {} + {}.u32;", ea(), int32_t(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.u64 = PPC_LOAD_U64({});", f(insn.operands[0]), ea());
++        println("\t{}.u32 = {};", r(insn.operands[2]), ea());
++        break;
++
++    case PPC_INST_LFDUX:
++        printSetFlushMode(false);
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.u64 = PPC_LOAD_U64({});", f(insn.operands[0]), ea());
++        println("\t{}.u32 = {};", r(insn.operands[1]), ea());
++        break;
++
+     case PPC_INST_LWZU:
+         println("\t{} = {} + {}.u32;", ea(), int32_t(insn.operands[1]), r(insn.operands[2]));
+         println("\t{}.u64 = PPC_LOAD_U32({});", r(insn.operands[0]), ea());
+@@ -1748,6 +1801,32 @@ bool Recompiler::Recompile(
+         println("\t{}.u32 = {};", r(insn.operands[2]), ea());
+         break;
+ 
++    // Store with update, indexed (rS, rA, rB) and D-form (frS, d, rA): EA = rA + rB / rA + d, then rA = EA.
++    case PPC_INST_STBUX:
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("{}{}, {}.u8);", mmioStore() ? "\tPPC_MM_STORE_U8(" : "\tPPC_STORE_U8(", ea(), r(insn.operands[0]));
++        println("\t{}.u32 = {};", r(insn.operands[1]), ea());
++        break;
++
++    case PPC_INST_STHUX:
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("{}{}, {}.u16);", mmioStore() ? "\tPPC_MM_STORE_U16(" : "\tPPC_STORE_U16(", ea(), r(insn.operands[0]));
++        println("\t{}.u32 = {};", r(insn.operands[1]), ea());
++        break;
++
++    case PPC_INST_STDUX:
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("{}{}, {}.u64);", mmioStore() ? "\tPPC_MM_STORE_U64(" : "\tPPC_STORE_U64(", ea(), r(insn.operands[0]));
++        println("\t{}.u32 = {};", r(insn.operands[1]), ea());
++        break;
++
++    case PPC_INST_STFDU:
++        printSetFlushMode(false);
++        println("\t{} = {} + {}.u32;", ea(), int32_t(insn.operands[1]), r(insn.operands[2]));
++        println("{}{}, {}.u64);", mmioStore() ? "\tPPC_MM_STORE_U64(" : "\tPPC_STORE_U64(", ea(), f(insn.operands[0]));
++        println("\t{}.u32 = {};", r(insn.operands[2]), ea());
++        break;
++
+     case PPC_INST_STWU:
+         println("\t{} = {} + {}.u32;", ea(), int32_t(insn.operands[1]), r(insn.operands[2]));
+         println("\tPPC_STORE_U32({}, {}.u32);", ea(), r(insn.operands[0]));

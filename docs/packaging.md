@@ -42,7 +42,11 @@ do Ninja), `sha256sum`, `readelf`, `openssl` (opcional, confere a assinatura min
 desenvolvimento dos backends do SDL2 que se quer embutir (X11 e extensões, Wayland com `wayland-scanner`,
 libdecor, PipeWire, PulseAudio, ALSA, D-Bus, IBus, udev, DRM/GBM). O SDL2 desliga sozinho o backend cujo
 header não encontra; o resumo fica em `cache/build/sdl2.log`. FUSE não é necessário (o `appimagetool` roda
-com `APPIMAGE_EXTRACT_AND_RUN=1`).
+com `APPIMAGE_EXTRACT_AND_RUN=1`). O binário `git` é obrigatório na máquina que gera o AppImage (ou que compila
+de um checkout): para o arquivo-fonte e no configure do LegacyRecomp, que aplica os patches de
+`thirdparty/patches/xenonrecomp/` com `git apply` (ADR 0004, M7); o script precisa rodar num checkout git com os
+submódulos. O AppImage instalado não precisa de `git` (o aceite do M2 rodou numa máquina sem ele). A versão padrão
+do `build.sh` continua `0.1.0-m1`: numa release, defina `LR_VERSION` (o aceite do M2 usou `0.2.0-m2`).
 
 O que o `build.sh` faz:
 
@@ -61,12 +65,16 @@ O que o `build.sh` faz:
    Também roda o tripwire de GPL (ADR 0002): `legacyrecomp` e `legacyrecomp-gui` não podem ter o símbolo
    `decode_insn_ppc` nem uma mensagem do `ppc-dis.c` do binutils (o zig não deixa `.symtab`, então a busca
    pela mensagem é a que vale; ela precisa aparecer no `XenonAnalyse` e no `XenonRecomp`, senão o marcador
-   ficou velho), e a `libdisasm.a` não pode estar em `runtime/lib/`.
+   ficou velho), e a `libdisasm.a` não pode estar em `runtime/lib/`. O `tools/legacyrecomp-vkprobe` (a sonda
+   Vulkan do `doctor`) passa pelas mesmas conferências: o `libvulkan.so.1` é carregado pelo volk em tempo de
+   execução (`dlopen`), nunca ligado.
 5. Escreve `THIRD-PARTY-LICENSES` (`packaging/appimage/licenses.sh`) em `usr/share/doc/legacyrecomp/` e na
    raiz do AppDir, mais `AppRun`, `.desktop` e ícone, e chama o `appimagetool` com o runtime fixado.
 6. Gera o arquivo-fonte: `git archive` do `HEAD` mais `git submodule foreach --recursive git archive`,
    concatenados sob o prefixo `LegacyRecomp-<versão>/`. Os `.tar.gz` que o GitHub gera para as tags não
-   trazem os submódulos.
+   trazem os submódulos. O arquivo leva o XenonRecomp do upstream (`ddd128b`) e, separados, os patches de
+   `thirdparty/patches/xenonrecomp/` que o configure aplica: é o fonte correspondente do `XenonAnalyse` e do
+   `XenonRecomp` embutidos.
 7. Gera `LegacyRecomp-<versão>-runtime-sources.tar.gz`, o fonte correspondente do runtime do AppImage: o
    fonte do type2-runtime na tag fixada (com os scripts de build e o patch que ele aplica na libfuse) e o
    tarball da libfuse 3.15.0 que esses scripts compilam (mesma versão e mesmo SHA-256), mais um `README`.
@@ -86,6 +94,19 @@ O que o `build.sh` faz:
 
 O binário oficial do Ninja não serve: ele depende da `libstdc++.so.6` do sistema. Compilado com o zig, ele só
 depende da glibc.
+
+### Compilador de shaders: nenhum para os shaders do jogo
+
+O AppImage não leva compilador de shaders e o `doctor` não exige um: não há compilador para os shaders do jogo, só o
+`glslangValidator`, que compila o nosso GLSL na compilação do launcher (fora do AppImage). O DXC saiu do projeto com o plano B (ADR 0005, M8):
+o runtime traduz o microcódigo do jogo para SPIR-V com código próprio, e os shaders internos do renderizador são
+compilados pelo `glslangValidator` do sistema na compilação do launcher (o `build.sh` confere a ferramenta antes de qualquer
+download, e sem ela recusa com `sudo pacman -S --needed glslang`; grava o caminho e o `glslangValidator --version`
+no início de `cache/build/legacyrecomp.log`). A versão é registrada, não fixada (o pacote do Arch não pode ser
+fixado na imagem sem um espelho de arquivo): a usada no desenvolvimento foi a 16.6.0 (pacote `glslang`
+1:1.4.363.0-1). Outra versão só pode mudar o SPIR-V dos nossos GLSL, que os testes validam
+(`every built-in shader passes spirv-val`). O release oficial do DXC exigia glibc 2.34 a 2.38 e `libstdc++.so.6`, incompatível com o piso
+2.31 do AppImage; essa medição (2026-10-19) está no histórico do git, em `docs/packaging.md`.
 
 ## Layout do toolchain embutido
 
@@ -115,7 +136,7 @@ cache deixa de bater); depois de uma instalação completa ela fica em cache e i
 ## Por que tudo é compilado com o zig
 
 O jogo é compilado pelo zig na máquina do usuário, com a libc++ do zig. As bibliotecas do runtime que ele
-liga (`liblr_runtime_core.a`, `libXenonUtils.a`) precisam usar a mesma biblioteca C++, então também são
+liga (`liblr_runtime_core.a`, `liblr_vulkan.a`, `libXenonUtils.a`) precisam usar a mesma biblioteca C++, então também são
 compiladas com o zig. O mais simples foi compilar o projeto inteiro assim, o que traz uma vantagem: os
 launchers ligam a libc++ estaticamente e miram a glibc 2.31, em vez de depender da `libstdc++` e da glibc da
 máquina que gerou o AppImage.
@@ -173,6 +194,23 @@ Executado em 2026-10-14 na máquina de desenvolvimento (Manjaro, glibc 2.44, 12 
   avisa; isso só afeta o cache das etapas `analyse`/`recompile`. Extraído dentro de outro repositório git (como
   neste teste, em `work/`), o `git rev-parse` acha o repositório de fora e registra o commit dele.
 - `THIRD-PARTY-LICENSES` está na raiz do AppImage e em `usr/share/doc/legacyrecomp/` (156 KB).
+
+## Aceite do M2 (Task 29)
+
+Executado em 2026-10-18 no contêiner (Docker Desktop no Windows 11, 12 GB, 6 jobs), critério 5 da spec do M2.
+
+- `build.sh` dentro da imagem de desenvolvimento (`tools/dev/Dockerfile`, sem nenhum pacote a mais: os
+  backends X11/Wayland do SDL2 ficam de fora por falta de headers, o que não importa para o teste sem interface),
+  num clone do repositório com os submódulos, `LR_VERSION=0.2.0-m2`: 315 s com os downloads do zero. AppImage de
+  83,7 MB; arquivo-fonte de 9,0 MB.
+- Teste num contêiner `archlinux:latest` puro, sem `clang`, `cc`, `c++`, `gcc`, `cmake`, `ninja`, `make`,
+  `pkg-config` nem `git` (só o `ld`/`ar` do binutils da imagem base), com
+  `env -i HOME=/home PATH=/usr/bin:/bin XDG_CACHE_HOME=<pasta nova> APPIMAGE_EXTRACT_AND_RUN=1` (sem FUSE no
+  contêiner) e pasta de dados nova num volume em disco.
+- `install --iso <ISO> --root <pasta>`: código 0 em 529 s, as sete etapas; o `CMakeCache.txt` do jogo aponta para
+  o `c++` do toolchain embutido (`/tmp/appimage_extracted_*/usr/share/legacyrecomp/toolchain/bin/c++`).
+- `run --root <pasta> -- --headless`: código 3 em 1 s, com `Unimplemented import: VdInitializeEngines` na thread 1,
+  igual ao build do sistema (a linha de chegada do M2).
 
 ## Limitações
 

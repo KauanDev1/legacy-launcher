@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdlib>
+#include <fstream>
 #include <map>
+#include <optional>
+#include <string>
 
 #include "pipeline/doctor.h"
 #include "pipeline/stages/stages.h"
@@ -35,6 +39,13 @@ struct FakeProbe : DoctorProbe {
   bool pkg_config_exists(std::string_view) override { return sdl2; }
   bool avx = true;
   bool cpu_supports_avx() override { return avx; }
+  std::optional<Error> vulkan_problem;  // nullopt: a working device named "Fake GPU"
+  fs::path vulkan_resources;
+  Result<std::string> vulkan_device(const fs::path& resources) override {
+    vulkan_resources = resources;
+    if (vulkan_problem) return *vulkan_problem;
+    return std::string("Fake GPU");
+  }
 };
 
 }  // namespace
@@ -70,6 +81,14 @@ TEST_CASE("doctor rejects old clang and cmake", "[unit]") {
   r = run_doctor(p, "/tmp");
   REQUIRE_FALSE(r);
   CHECK(r.error().message.find("3.25") != std::string::npos);
+}
+
+TEST_CASE("doctor does not require dxc", "[unit]") {
+  FakeProbe p;
+  REQUIRE(p.tools.count("dxc") == 0);  // plan B: nothing compiles shaders at install time (ADR 0005 M8)
+  auto r = run_doctor(p, "/tmp");
+  REQUIRE(r);
+  CHECK(r.value().warnings.empty());
 }
 
 TEST_CASE("doctor requires ninja and sdl2", "[unit]") {
@@ -139,3 +158,71 @@ TEST_CASE("doctor stage fingerprint is stable so a finished install stays cached
   CHECK(a.value() == b.value());
   CHECK(stage->outputs(ctx).empty());
 }
+
+TEST_CASE("doctor reports Vulkan status", "[unit]") {
+  FakeProbe p;
+  auto ok = run_doctor(p, "/tmp", "/opt/lr/share/legacyrecomp");
+  REQUIRE(ok);
+  CHECK(ok.value().vulkan_device == "Fake GPU");
+  CHECK(ok.value().warnings.empty());
+  CHECK(p.vulkan_resources == fs::path("/opt/lr/share/legacyrecomp"));
+
+  // Not fatal (the install works without a GPU), but the warning names the missing piece and its hint.
+  p.vulkan_problem = Error{ErrorCode::ToolMissing, "Vulkan device lacks textureCompressionBC", "update the driver"};
+  auto missing = run_doctor(p, "/tmp");
+  REQUIRE(missing);
+  CHECK(missing.value().vulkan_device.empty());
+  REQUIRE(missing.value().warnings.size() == 1);
+  CHECK(missing.value().warnings[0] ==
+        "no usable Vulkan device: Vulkan device lacks textureCompressionBC (update the driver); the game will not "
+        "start until this is fixed");
+}
+
+#ifdef LR_RESOURCES_DIR
+namespace {
+// Sets an environment variable for the scope and restores the previous value.
+class ScopedEnv {
+ public:
+  ScopedEnv(const char* name, const std::string& value) : name_(name) {
+    if (const char* old = std::getenv(name)) old_ = old;
+    ::setenv(name, value.c_str(), 1);
+  }
+  ~ScopedEnv() {
+    if (old_) ::setenv(name_, old_->c_str(), 1);
+    else ::unsetenv(name_);
+  }
+
+ private:
+  const char* name_;
+  std::optional<std::string> old_;
+};
+}  // namespace
+
+// The real probe: legacyrecomp-vkprobe staged in share/legacyrecomp/tools, run in its own process.
+TEST_CASE("doctor's Vulkan probe finds the device or names what is missing", "[unit][vulkan]") {
+  SystemDoctorProbe probe;
+  auto none = probe.vulkan_device("/nonexistent_lr_resources");
+  REQUIRE_FALSE(none);
+  CHECK(none.error().message.find("Vulkan probe not found") != std::string::npos);
+
+  auto device = probe.vulkan_device(LR_RESOURCES_DIR);
+  if (!device && device.error().message.find("no Vulkan driver") != std::string::npos)
+    SKIP("no Vulkan ICD installed: " << device.error().message);
+  INFO((device ? std::string() : device.error().message));
+  REQUIRE(device);
+  CHECK_FALSE(device.value().empty());
+
+  // Every driver masked: the probe still answers, naming the missing piece.
+  const fs::path empty = fs::temp_directory_path() / "lr_doctor_empty_icd.json";
+  { std::ofstream(empty).flush(); }
+  {
+    ScopedEnv icd("VK_ICD_FILENAMES", empty.string());
+    ScopedEnv icd2("VK_DRIVER_FILES", empty.string());
+    auto masked = probe.vulkan_device(LR_RESOURCES_DIR);
+    REQUIRE_FALSE(masked);
+    CHECK(masked.error().message.find("no Vulkan driver") != std::string::npos);
+    CHECK_FALSE(masked.error().hint.empty());
+  }
+  fs::remove(empty);
+}
+#endif

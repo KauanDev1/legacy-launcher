@@ -7,7 +7,7 @@
 # Compiler, ninja and SDL2 come from lr::pipeline::resolve_toolchain: the system clang++ and SDL2, or, in the
 # AppImage, <resources>/toolchain (zig c++ targeting glibc 2.31 and a static SDL2, see docs/packaging.md).
 # Inputs: LR_GENERATED holds ppc_config.h, ppc_context.h (copied there by XenonRecomp), ppc_recomp_shared.h,
-# ppc_recomp.*.cpp, ppc_func_mapping.cpp and import_stubs.cpp (written by the build stage).
+# ppc_recomp.*.cpp, ppc_func_mapping.cpp and import_stubs.cpp (the import thunks, written by the build stage).
 cmake_minimum_required(VERSION 3.25)
 project(LegacyRecompGame LANGUAGES CXX)
 
@@ -51,6 +51,8 @@ target_include_directories(legacyrecomp-game PRIVATE "${LR_GENERATED}" "${_rt}/i
 #  -ffp-model=strict        UnleashedRecomp's setting for the generated code: no FMA contraction, and the compiler
 #                           respects the FP environment the code changes (rounding mode / flush-to-zero via MXCSR).
 #  -fexceptions             default, kept explicit: lr::kernel::UnimplementedImport unwinds through generated frames.
+#  -include runtime/indirect_call.h  forced before the generated headers: replaces PPC_CALL_INDIRECT_FUNC with a
+#                           checked call that reports a guest address without a function (exit 4).
 #  -march=sandybridge       x86-64 baseline UnleashedRecomp targets; lets simde map ppc_context.h's VMX helpers to
 #                           real SSE4.1/AVX instructions instead of scalar fallbacks. REQUIREMENT: the host CPU
 #                           must support AVX (2011+); the doctor stage refuses CPUs without it, and the runtime's
@@ -58,17 +60,23 @@ target_include_directories(legacyrecomp-game PRIVATE "${LR_GENERATED}" "${_rt}/i
 #  -Wno-*                   XenonRecomp output trips these by design; the template never uses -Werror.
 target_compile_options(legacyrecomp-game PRIVATE
   -O2 -fno-strict-aliasing -ffp-model=strict -fexceptions
+  -include runtime/indirect_call.h
   $<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=sandybridge>
   -Wno-switch -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-label
   -Wno-null-arithmetic -Wno-null-conversion -Wno-tautological-undefined-compare -Wno-void-pointer-to-int-cast
   -Wno-int-to-void-pointer-cast -Wno-invalid-offsetof -Wno-c++23-extensions)
 
-# --whole-archive: every strong LR_KERNEL_EXPORT in the runtime must win over the weak stubs in import_stubs.cpp,
+# --whole-archive: keeps every kernel object file of the runtime, so its LR_KERNEL / LR_KERNEL_STUB registration
+# statics run and the import thunks in import_stubs.cpp find them by name,
 # even when nothing else references its object file. libdisasm.a (GPL-2.0-or-later binutils disassembler) is
 # deliberately not linked: the game never references it (ADR 0002, tripwire test no_gpl_disassembler_in_binaries).
+# liblr_vulkan.a (the Vulkan backend with volk, VMA and the built-in shaders; ruling R-stage) is a plain archive:
+# main.cpp references VkBackend, and its lr_common needs are in liblr_runtime_core.a. volk loads the system
+# libvulkan.so.1 at run time (dlopen, hence CMAKE_DL_LIBS); no Vulkan library is linked.
 target_link_libraries(legacyrecomp-game PRIVATE
   "-Wl,--whole-archive" "${_rt}/lib/liblr_runtime_core.a" "-Wl,--no-whole-archive"
+  "${_rt}/lib/liblr_vulkan.a"
   "${_rt}/lib/libXenonUtils.a"
-  SDL2::SDL2 Threads::Threads)
+  SDL2::SDL2 Threads::Threads ${CMAKE_DL_LIBS})
 set_target_properties(legacyrecomp-game PROPERTIES LINK_DEPENDS
-  "${_rt}/lib/liblr_runtime_core.a;${_rt}/lib/libXenonUtils.a")
+  "${_rt}/lib/liblr_runtime_core.a;${_rt}/lib/liblr_vulkan.a;${_rt}/lib/libXenonUtils.a")

@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: MIT
+// EDRAM resolve from a depth/stencil single-sampled host render target (see resolve_common.glsl).
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#define LR_RESOLVE_DEPTH 1
+#define LR_RESOLVE_MS 0
+#include "resolve_common.glsl"

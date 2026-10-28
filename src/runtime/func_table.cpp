@@ -7,8 +7,9 @@
 
 namespace lr::runtime {
 
-Result<void> install_function_table(const GuestMemory& mem, uint64_t table_offset, uint32_t code_base, uint32_t code_size,
-                                    std::span<const FuncMapping> mappings) {
+Result<std::vector<uint32_t>> install_function_table(const GuestMemory& mem, uint64_t table_offset, uint32_t code_base,
+                                                     uint32_t code_size, std::span<const FuncMapping> mappings) {
+  std::vector<uint32_t> duplicates;
   const uint64_t code_end = static_cast<uint64_t>(code_base) + code_size;
   for (const FuncMapping& m : mappings) {
     char addr[16];
@@ -24,9 +25,14 @@ Result<void> install_function_table(const GuestMemory& mem, uint64_t table_offse
         mem.size() - table_offset - delta < sizeof(void*)) {
       return Error{ErrorCode::InvalidFormat, where + " maps to a table slot outside guest memory", ""};
     }
-    std::memcpy(mem.base() + table_offset + delta, &m.host, sizeof(void*));
+    void* slot = nullptr;
+    std::memcpy(&slot, mem.base() + table_offset + delta, sizeof(void*));
+    if (slot == nullptr)
+      std::memcpy(mem.base() + table_offset + delta, &m.host, sizeof(void*));
+    else
+      duplicates.push_back(m.guest);
   }
-  return {};
+  return duplicates;
 }
 
 }  // namespace lr::runtime

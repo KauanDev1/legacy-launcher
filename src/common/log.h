@@ -10,8 +10,8 @@ enum class Level { Info, Warn, Error };
 
 using Sink = std::function<void(Level, std::string_view)>;
 
-// Replaces the sink; an empty function restores the default (stderr "[LEVEL] msg").
-void set_sink(Sink sink);
+// Replaces the sink and returns the previous one; an empty function restores the default (stderr "[LEVEL] msg").
+Sink set_sink(Sink sink);
 
 void info(std::string_view msg);
 void warn(std::string_view msg);

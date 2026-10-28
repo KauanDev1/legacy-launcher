@@ -1,8 +1,11 @@
 # Cobertura das importações do kernel
 
-Estado das 459 importações (`xboxkrnl.exe` e `xam.xex`) que a imagem TU1 do Minecraft usa: se o runtime já
-tem implementação (`implemented`) ou não (`missing`; chamar uma delas aborta o jogo com saída 3). Apenas
-nomes de importação, nada do jogo.
+Estado das 459 importações (`xboxkrnl.exe` e `xam.xex`) que a imagem TU1 do Minecraft usa. Três estados:
+`implemented` (implementação de verdade, `LR_KERNEL`), `stub` (devolve uma constante, `LR_KERNEL_STUB`, com
+um comentário dizendo por que basta) e `missing` (nada registrado; chamar uma delas aborta o jogo com saída
+3). A tabela lista as importações de função (`function`, as que ganham thunk) e as de variável (`variable`,
+listadas por `--coverage --image <xex>` desde a Task 14 do M2; ver `docs/formats/xex2.md` e
+`docs/reverse-engineering/kernel-imports.md`). Apenas nomes de importação, nada do jogo.
 
 ## Como regenerar
 
@@ -14,469 +17,490 @@ do jogo, que conhece as importações do código gerado:
 ```
 
 Troque `<root>` pela pasta de dados (padrão `~/.local/share/legacyrecomp`). Substitua a tabela abaixo pela
-saída do comando e mantenha este cabeçalho. Gerado a partir do commit do M1 (nenhuma implementada: o M2
-começa por aqui; a primeira chamada do jogo é `NtAllocateVirtualMemory`).
+saída do comando e mantenha este cabeçalho. Gerado na Task 28 do M2 (2026-10-18), a partir do binário do jogo
+construído no commit que fecha o M2: a execução sem interface gráfica (`legacyrecomp run -- --headless`) para com
+saída 3 em `VdInitializeEngines`, a primeira importação de vídeo que cria a GPU (a linha de chegada do M2). A ordem
+real das chamadas até ali está em `docs/reverse-engineering/kernel-imports.md`. Regerado na Task 29 (2026-10-18), com
+as mesmas linhas da tabela e a contagem final separada em funções e variáveis. Regerado na Task 12 do M3 (2026-10-22),
+do binário que roda o jogo sobre a GPU emulada (NullBackend) por mais de 700 swaps, até uma falha de recompilação
+(chamada indireta para `0x8235B828`, um switch sem guarda; ver `docs/reverse-engineering/kernel-imports.md`).
 
-| Import | Status |
-|---|---|
-| DbgBreakPoint | missing |
-| DbgPrint | missing |
-| EtxProducerLog | missing |
-| EtxProducerRegister | missing |
-| EtxProducerUnregister | missing |
-| ExAllocatePool | missing |
-| ExAllocatePoolTypeWithTag | missing |
-| ExCreateThread | missing |
-| ExFreePool | missing |
-| ExGetXConfigSetting | missing |
-| ExRegisterTitleTerminateNotification | missing |
-| ExTerminateThread | missing |
-| FscGetCacheElementCount | missing |
-| FscSetCacheElementCount | missing |
-| HalReturnToFirmware | missing |
-| KeAcquireSpinLockAtRaisedIrql | missing |
-| KeBugCheck | missing |
-| KeBugCheckEx | missing |
-| KeDelayExecutionThread | missing |
-| KeEnableFpuExceptions | missing |
-| KeEnterCriticalRegion | missing |
-| KeGetCurrentProcessType | missing |
-| KeInitializeDpc | missing |
-| KeInitializeMutant | missing |
-| KeInsertQueueDpc | missing |
-| KeLeaveCriticalRegion | missing |
-| KeLockL2 | missing |
-| KeQueryBasePriorityThread | missing |
-| KeQueryPerformanceFrequency | missing |
-| KeQuerySystemTime | missing |
-| KeReleaseMutant | missing |
-| KeReleaseSpinLockFromRaisedIrql | missing |
-| KeResetEvent | missing |
-| KeRestoreFloatingPointState | missing |
-| KeResumeThread | missing |
-| KeSaveFloatingPointState | missing |
-| KeSetAffinityThread | missing |
-| KeSetBasePriorityThread | missing |
-| KeSetCurrentProcessType | missing |
-| KeSetDisableBoostThread | missing |
-| KeSetEvent | missing |
-| KeTlsAlloc | missing |
-| KeTlsFree | missing |
-| KeTlsGetValue | missing |
-| KeTlsSetValue | missing |
-| KeUnlockL2 | missing |
-| KeWaitForMultipleObjects | missing |
-| KeWaitForSingleObject | missing |
-| KfAcquireSpinLock | missing |
-| KfReleaseSpinLock | missing |
-| KiApcNormalRoutineNop | missing |
-| LDICreateDecompression | missing |
-| LDIDecompress | missing |
-| LDIDestroyDecompression | missing |
-| LDIResetDecompression | missing |
-| MmAllocatePhysicalMemoryEx | missing |
-| MmFreePhysicalMemory | missing |
-| MmGetPhysicalAddress | missing |
-| MmMapIoSpace | missing |
-| MmQueryAddressProtect | missing |
-| MmQueryAllocationSize | missing |
-| MmQueryStatistics | missing |
-| MmSetAddressProtect | missing |
-| NetDll_WSACancelOverlappedIO | missing |
-| NetDll_WSACleanup | missing |
-| NetDll_WSACloseEvent | missing |
-| NetDll_WSACreateEvent | missing |
-| NetDll_WSAEventSelect | missing |
-| NetDll_WSAGetLastError | missing |
-| NetDll_WSAGetOverlappedResult | missing |
-| NetDll_WSARecv | missing |
-| NetDll_WSARecvFrom | missing |
-| NetDll_WSAResetEvent | missing |
-| NetDll_WSASend | missing |
-| NetDll_WSASendTo | missing |
-| NetDll_WSASetEvent | missing |
-| NetDll_WSASetLastError | missing |
-| NetDll_WSAStartup | missing |
-| NetDll_WSAWaitForMultipleEvents | missing |
-| NetDll_XHttpCloseHandle | missing |
-| NetDll_XHttpConnect | missing |
-| NetDll_XHttpCrackUrl | missing |
-| NetDll_XHttpCrackUrlW | missing |
-| NetDll_XHttpCreateUrl | missing |
-| NetDll_XHttpCreateUrlW | missing |
-| NetDll_XHttpDoWork | missing |
-| NetDll_XHttpOpen | missing |
-| NetDll_XHttpOpenRequest | missing |
-| NetDll_XHttpOpenRequestUsingMemory | missing |
-| NetDll_XHttpQueryAuthSchemes | missing |
-| NetDll_XHttpQueryHeaders | missing |
-| NetDll_XHttpQueryOption | missing |
-| NetDll_XHttpReadData | missing |
-| NetDll_XHttpReceiveResponse | missing |
-| NetDll_XHttpSendRequest | missing |
-| NetDll_XHttpSetCredentials | missing |
-| NetDll_XHttpSetOption | missing |
-| NetDll_XHttpSetStatusCallback | missing |
-| NetDll_XHttpShutdown | missing |
-| NetDll_XHttpStartup | missing |
-| NetDll_XHttpWriteData | missing |
-| NetDll_XNetCleanup | missing |
-| NetDll_XNetConnect | missing |
-| NetDll_XNetCreateKey | missing |
-| NetDll_XNetDnsLookup | missing |
-| NetDll_XNetDnsRelease | missing |
-| NetDll_XNetDnsReverseLookup | missing |
-| NetDll_XNetDnsReverseRelease | missing |
-| NetDll_XNetGetBroadcastVersionStatus | missing |
-| NetDll_XNetGetConnectStatus | missing |
-| NetDll_XNetGetDebugXnAddr | missing |
-| NetDll_XNetGetEthernetLinkStatus | missing |
-| NetDll_XNetGetOpt | missing |
-| NetDll_XNetGetSystemLinkPort | missing |
-| NetDll_XNetGetTitleXnAddr | missing |
-| NetDll_XNetGetXnAddrPlatform | missing |
-| NetDll_XNetInAddrToServer | missing |
-| NetDll_XNetInAddrToString | missing |
-| NetDll_XNetInAddrToXnAddr | missing |
-| NetDll_XNetQosGetListenStats | missing |
-| NetDll_XNetQosListen | missing |
-| NetDll_XNetQosLookup | missing |
-| NetDll_XNetQosRelease | missing |
-| NetDll_XNetQosServiceLookup | missing |
-| NetDll_XNetRandom | missing |
-| NetDll_XNetRegisterKey | missing |
-| NetDll_XNetReplaceKey | missing |
-| NetDll_XNetServerToInAddr | missing |
-| NetDll_XNetSetOpt | missing |
-| NetDll_XNetSetSystemLinkPort | missing |
-| NetDll_XNetStartup | missing |
-| NetDll_XNetTsAddrToInAddr | missing |
-| NetDll_XNetUnregisterInAddr | missing |
-| NetDll_XNetUnregisterKey | missing |
-| NetDll_XNetXnAddrToInAddr | missing |
-| NetDll_XNetXnAddrToMachineId | missing |
-| NetDll_XnpCapture | missing |
-| NetDll_XnpConfig | missing |
-| NetDll_XnpConfigUPnP | missing |
-| NetDll_XnpEthernetInterceptRecv | missing |
-| NetDll_XnpEthernetInterceptSetCallbacks | missing |
-| NetDll_XnpEthernetInterceptXmit | missing |
-| NetDll_XnpGetActiveSocketList | missing |
-| NetDll_XnpGetConfigStatus | missing |
-| NetDll_XnpGetVlanXboxName | missing |
-| NetDll_XnpLoadConfigParams | missing |
-| NetDll_XnpLoadMachineAccount | missing |
-| NetDll_XnpLogonClearQEvent | missing |
-| NetDll_XnpLogonGetQFlags | missing |
-| NetDll_XnpLogonGetQVals | missing |
-| NetDll_XnpLogonGetStatus | missing |
-| NetDll_XnpLogonSetPState | missing |
-| NetDll_XnpLogonSetQEvent | missing |
-| NetDll_XnpLogonSetQFlags | missing |
-| NetDll_XnpLogonSetQVals | missing |
-| NetDll_XnpNoteSystemTime | missing |
-| NetDll_XnpRegisterKeyForCallerType | missing |
-| NetDll_XnpSaveConfigParams | missing |
-| NetDll_XnpSaveMachineAccount | missing |
-| NetDll_XnpSetVlanXboxName | missing |
-| NetDll_XnpUnregisterKeyForCallerType | missing |
-| NetDll___WSAFDIsSet | missing |
-| NetDll_accept | missing |
-| NetDll_bind | missing |
-| NetDll_closesocket | missing |
-| NetDll_connect | missing |
-| NetDll_getpeername | missing |
-| NetDll_getsockname | missing |
-| NetDll_getsockopt | missing |
-| NetDll_inet_addr | missing |
-| NetDll_ioctlsocket | missing |
-| NetDll_listen | missing |
-| NetDll_recv | missing |
-| NetDll_recvfrom | missing |
-| NetDll_select | missing |
-| NetDll_send | missing |
-| NetDll_sendto | missing |
-| NetDll_setsockopt | missing |
-| NetDll_shutdown | missing |
-| NetDll_socket | missing |
-| NtAllocateVirtualMemory | missing |
-| NtCancelTimer | missing |
-| NtClearEvent | missing |
-| NtClose | missing |
-| NtCreateEvent | missing |
-| NtCreateFile | missing |
-| NtCreateSemaphore | missing |
-| NtCreateTimer | missing |
-| NtDeviceIoControlFile | missing |
-| NtDuplicateObject | missing |
-| NtFlushBuffersFile | missing |
-| NtFreeVirtualMemory | missing |
-| NtOpenFile | missing |
-| NtProtectVirtualMemory | missing |
-| NtPulseEvent | missing |
-| NtQueryDirectoryFile | missing |
-| NtQueryFullAttributesFile | missing |
-| NtQueryInformationFile | missing |
-| NtQueryVirtualMemory | missing |
-| NtQueryVolumeInformationFile | missing |
-| NtQueueApcThread | missing |
-| NtReadFile | missing |
-| NtReadFileScatter | missing |
-| NtReleaseSemaphore | missing |
-| NtResumeThread | missing |
-| NtSetEvent | missing |
-| NtSetInformationFile | missing |
-| NtSetTimerEx | missing |
-| NtSignalAndWaitForSingleObjectEx | missing |
-| NtSuspendThread | missing |
-| NtWaitForMultipleObjectsEx | missing |
-| NtWaitForSingleObjectEx | missing |
-| NtWriteFile | missing |
-| NtWriteFileGather | missing |
-| NtYieldExecution | missing |
-| ObCreateObject | missing |
-| ObCreateSymbolicLink | missing |
-| ObDeleteSymbolicLink | missing |
-| ObDereferenceObject | missing |
-| ObLookupThreadByThreadId | missing |
-| ObOpenObjectByName | missing |
-| ObOpenObjectByPointer | missing |
-| ObReferenceObjectByHandle | missing |
-| PsCamDeviceRequest | missing |
-| RtlCaptureContext | missing |
-| RtlCompareMemory | missing |
-| RtlCompareMemoryUlong | missing |
-| RtlEnterCriticalSection | missing |
-| RtlFillMemoryUlong | missing |
-| RtlFreeAnsiString | missing |
-| RtlImageXexHeaderField | missing |
-| RtlInitAnsiString | missing |
-| RtlInitUnicodeString | missing |
-| RtlInitializeCriticalSection | missing |
-| RtlInitializeCriticalSectionAndSpinCount | missing |
-| RtlLeaveCriticalSection | missing |
-| RtlMultiByteToUnicodeN | missing |
-| RtlNtStatusToDosError | missing |
-| RtlRaiseException | missing |
-| RtlTimeFieldsToTime | missing |
-| RtlTimeToTimeFields | missing |
-| RtlTryEnterCriticalSection | missing |
-| RtlUnicodeStringToAnsiString | missing |
-| RtlUnicodeToMultiByteN | missing |
-| RtlUnwind | missing |
-| VdCallGraphicsNotificationRoutines | missing |
-| VdEnableDisableClockGating | missing |
-| VdEnableRingBufferRPtrWriteBack | missing |
-| VdGetCurrentDisplayGamma | missing |
-| VdGetCurrentDisplayInformation | missing |
-| VdGetSystemCommandBuffer | missing |
-| VdInitializeEngines | missing |
-| VdInitializeRingBuffer | missing |
-| VdInitializeScalerCommandBuffer | missing |
-| VdIsHSIOTrainingSucceeded | missing |
-| VdPersistDisplay | missing |
-| VdQuerySystemCommandBuffer | missing |
-| VdQueryVideoFlags | missing |
-| VdQueryVideoMode | missing |
-| VdRetrainEDRAM | missing |
-| VdRetrainEDRAMWorker | missing |
-| VdSetDisplayMode | missing |
-| VdSetDisplayModeOverride | missing |
-| VdSetGraphicsInterruptCallback | missing |
-| VdSetSystemCommandBuffer | missing |
-| VdSetSystemCommandBufferGpuIdentifierAddress | missing |
-| VdShutdownEngines | missing |
-| VdSwap | missing |
-| XAudioEnableDucker | missing |
-| XAudioGetDuckerAttackTime | missing |
-| XAudioGetDuckerHoldTime | missing |
-| XAudioGetDuckerLevel | missing |
-| XAudioGetDuckerReleaseTime | missing |
-| XAudioGetDuckerThreshold | missing |
-| XAudioGetSpeakerConfig | missing |
-| XAudioGetVoiceCategoryVolume | missing |
-| XAudioRegisterRenderDriverClient | missing |
-| XAudioSubmitRenderDriverFrame | missing |
-| XAudioUnregisterRenderDriverClient | missing |
-| XGetAVPack | missing |
-| XGetGameRegion | missing |
-| XGetLanguage | missing |
-| XGetVideoCapabilities | missing |
-| XGetVideoMode | missing |
-| XMACreateContext | missing |
-| XMAReleaseContext | missing |
-| XMsgCancelIORequest | missing |
-| XMsgCompleteIORequest | missing |
-| XMsgInProcessCall | missing |
-| XMsgStartIORequest | missing |
-| XMsgSystemProcessCall | missing |
-| XNetLogonGetMachineID | missing |
-| XNetLogonGetTitleID | missing |
-| XNotifyGetNext | missing |
-| XNotifyPositionUI | missing |
-| XamAlloc | missing |
-| XamAllocEx | missing |
-| XamAvatarGenerateMipMaps | missing |
-| XamAvatarGetAssets | missing |
-| XamAvatarGetAssetsResultSize | missing |
-| XamAvatarGetManifestLocalUser | missing |
-| XamAvatarGetManifestsByXuid | missing |
-| XamAvatarGetMetadataRandom | missing |
-| XamAvatarGetMetadataSignedOutProfile | missing |
-| XamAvatarGetMetadataSignedOutProfileCount | missing |
-| XamAvatarInitialize | missing |
-| XamAvatarLoadAnimation | missing |
-| XamAvatarManifestGetBodyType | missing |
-| XamAvatarSetCustomAsset | missing |
-| XamAvatarShutdown | missing |
-| XamBackgroundDownloadGetMode | missing |
-| XamBackgroundDownloadSetMode | missing |
-| XamCacheCloseFile | missing |
-| XamCacheOpenFile | missing |
-| XamCacheReset | missing |
-| XamContentClose | missing |
-| XamContentCreateDeviceEnumerator | missing |
-| XamContentCreateEnumerator | missing |
-| XamContentCreateEx | missing |
-| XamContentDelete | missing |
-| XamContentFlush | missing |
-| XamContentGetCreator | missing |
-| XamContentGetDeviceData | missing |
-| XamContentGetDeviceName | missing |
-| XamContentGetDeviceState | missing |
-| XamContentGetLicenseMask | missing |
-| XamContentGetThumbnail | missing |
-| XamContentInstall | missing |
-| XamContentLaunchImage | missing |
-| XamContentOpenFile | missing |
-| XamContentResolve | missing |
-| XamContentSetThumbnail | missing |
-| XamCreateEnumeratorHandle | missing |
-| XamEnumerate | missing |
-| XamFree | missing |
-| XamFreeToken | missing |
-| XamGetActiveDashAppInfo | missing |
-| XamGetAppliesTo | missing |
-| XamGetCurrentTitleId | missing |
-| XamGetExecutionId | missing |
-| XamGetOverlappedResult | missing |
-| XamGetPrivateEnumStructureFromHandle | missing |
-| XamGetSystemVersion | missing |
-| XamGetToken | missing |
-| XamInputGetCapabilities | missing |
-| XamInputGetKeystrokeEx | missing |
-| XamInputGetState | missing |
-| XamInputSetState | missing |
-| XamIsUIActive | missing |
-| XamLoaderGetLaunchData | missing |
-| XamLoaderGetLaunchDataSize | missing |
-| XamLoaderLaunchTitle | missing |
-| XamLoaderSetLaunchData | missing |
-| XamLoaderTerminateTitle | missing |
-| XamNotifyCreateListener | missing |
-| XamNuiCameraElevationGetAngle | missing |
-| XamNuiCameraElevationSetAngle | missing |
-| XamNuiCameraElevationStopMovement | missing |
-| XamNuiCameraRememberFloor | missing |
-| XamNuiCameraTiltGetStatus | missing |
-| XamNuiCameraTiltReportStatus | missing |
-| XamNuiCameraTiltSetCallback | missing |
-| XamNuiGetDeviceStatus | missing |
-| XamNuiIdentityGetSessionId | missing |
-| XamParseGamerTileKey | missing |
-| XamProfileCreateEnumerator | missing |
-| XamProfileEnumerate | missing |
-| XamQueryLiveHiveA | missing |
-| XamReadBiometricData | missing |
-| XamReadString | missing |
-| XamReadTileToTexture | missing |
-| XamSessionCreateHandle | missing |
-| XamSessionRefObjByHandle | missing |
-| XamShowAchievementsUI | missing |
-| XamShowCustomMessageComposeUI | missing |
-| XamShowCustomPlayerListUI | missing |
-| XamShowDeviceSelectorUI | missing |
-| XamShowDirtyDiscErrorUI | missing |
-| XamShowFriendRequestUI | missing |
-| XamShowFriendsUI | missing |
-| XamShowGameInviteUI | missing |
-| XamShowGameVoiceChannelUI | missing |
-| XamShowGamerCardUIForXUID | missing |
-| XamShowGoldUpgradeUI | missing |
-| XamShowKeyboardUI | missing |
-| XamShowMarketplaceDownloadItemsUI | missing |
-| XamShowMarketplaceUI | missing |
-| XamShowMessageBoxUI | missing |
-| XamShowMessageBoxUIEx | missing |
-| XamShowMessageComposeUI | missing |
-| XamShowMessagesUI | missing |
-| XamShowPlayerReviewUI | missing |
-| XamShowPlayersUI | missing |
-| XamShowQuickChatUI | missing |
-| XamShowSigninUI | missing |
-| XamShowSigninUIp | missing |
-| XamShowVoiceMailUI | missing |
-| XamShowWordRegisterUI | missing |
-| XamTaskSchedule | missing |
-| XamUserAreUsersFriends | missing |
-| XamUserCheckPrivilege | missing |
-| XamUserCreateAchievementEnumerator | missing |
-| XamUserCreateStatsEnumerator | missing |
-| XamUserGetDeviceContext | missing |
-| XamUserGetIndexFromXUID | missing |
-| XamUserGetMembershipTierFromXUID | missing |
-| XamUserGetName | missing |
-| XamUserGetOnlineCountryFromXUID | missing |
-| XamUserGetSigninInfo | missing |
-| XamUserGetSigninState | missing |
-| XamUserGetXUID | missing |
-| XamUserNuiEnableBiometric | missing |
-| XamUserNuiGetEnrollmentIndex | missing |
-| XamUserNuiGetUserIndex | missing |
-| XamUserReadProfileSettings | missing |
-| XamUserWriteProfileSettings | missing |
-| XamVoiceClose | missing |
-| XamVoiceCreate | missing |
-| XamVoiceHeadsetPresent | missing |
-| XamVoiceIsActiveProcess | missing |
-| XamVoiceSubmitPacket | missing |
-| XamWriteBiometricData | missing |
-| XamWriteGamerTile | missing |
-| XamXStudioRequest | missing |
-| XamXlfsInitializeUploadQueue | missing |
-| XamXlfsMountUploadQueueInstance | missing |
-| XamXlfsUninitializeUploadQueue | missing |
-| XamXlfsUnmountUploadQueueInstance | missing |
-| XampXAuthGetTitleBuffer | missing |
-| XampXAuthShutdown | missing |
-| XampXAuthStartup | missing |
-| XeCryptBnQwBeSigVerify | missing |
-| XeCryptRandom | missing |
-| XeCryptRotSumSha | missing |
-| XeCryptSha | missing |
-| XeCryptSha256Final | missing |
-| XeCryptSha256Init | missing |
-| XeCryptSha256Update | missing |
-| XeCryptShaFinal | missing |
-| XeCryptShaInit | missing |
-| XeCryptShaUpdate | missing |
-| XeKeysGetConsoleID | missing |
-| XeKeysGetKey | missing |
-| XexCheckExecutablePrivilege | missing |
-| XexGetModuleHandle | missing |
-| XexGetModuleSection | missing |
-| XexGetProcedureAddress | missing |
-| XexLoadImage | missing |
-| XexUnloadImage | missing |
-| XexUnloadImageAndExitThread | missing |
-| __C_specific_handler | missing |
-| _snprintf | missing |
-| _snwprintf | missing |
-| _vscwprintf | missing |
-| _vsnprintf | missing |
-| sprintf | missing |
-| swprintf | missing |
-| vsprintf | missing |
-| vswprintf | missing |
+| Import | Kind | Status |
+|---|---|---|
+| DbgBreakPoint | function | implemented |
+| DbgPrint | function | implemented |
+| EtxProducerLog | function | stub |
+| EtxProducerRegister | function | stub |
+| EtxProducerUnregister | function | stub |
+| ExAllocatePool | function | implemented |
+| ExAllocatePoolTypeWithTag | function | implemented |
+| ExCreateThread | function | implemented |
+| ExFreePool | function | implemented |
+| ExGetXConfigSetting | function | implemented |
+| ExRegisterTitleTerminateNotification | function | implemented |
+| ExTerminateThread | function | implemented |
+| FscGetCacheElementCount | function | stub |
+| FscSetCacheElementCount | function | stub |
+| HalReturnToFirmware | function | implemented |
+| KeAcquireSpinLockAtRaisedIrql | function | implemented |
+| KeBugCheck | function | implemented |
+| KeBugCheckEx | function | implemented |
+| KeDelayExecutionThread | function | implemented |
+| KeEnableFpuExceptions | function | stub |
+| KeEnterCriticalRegion | function | implemented |
+| KeGetCurrentProcessType | function | implemented |
+| KeInitializeDpc | function | implemented |
+| KeInitializeMutant | function | implemented |
+| KeInsertQueueDpc | function | implemented |
+| KeLeaveCriticalRegion | function | implemented |
+| KeLockL2 | function | stub |
+| KeQueryBasePriorityThread | function | implemented |
+| KeQueryPerformanceFrequency | function | implemented |
+| KeQuerySystemTime | function | implemented |
+| KeReleaseMutant | function | implemented |
+| KeReleaseSpinLockFromRaisedIrql | function | implemented |
+| KeResetEvent | function | implemented |
+| KeRestoreFloatingPointState | function | stub |
+| KeResumeThread | function | implemented |
+| KeSaveFloatingPointState | function | stub |
+| KeSetAffinityThread | function | implemented |
+| KeSetBasePriorityThread | function | implemented |
+| KeSetCurrentProcessType | function | implemented |
+| KeSetDisableBoostThread | function | stub |
+| KeSetEvent | function | implemented |
+| KeTlsAlloc | function | implemented |
+| KeTlsFree | function | implemented |
+| KeTlsGetValue | function | implemented |
+| KeTlsSetValue | function | implemented |
+| KeUnlockL2 | function | stub |
+| KeWaitForMultipleObjects | function | implemented |
+| KeWaitForSingleObject | function | implemented |
+| KfAcquireSpinLock | function | implemented |
+| KfReleaseSpinLock | function | implemented |
+| KiApcNormalRoutineNop | function | implemented |
+| LDICreateDecompression | function | implemented |
+| LDIDecompress | function | implemented |
+| LDIDestroyDecompression | function | implemented |
+| LDIResetDecompression | function | implemented |
+| MmAllocatePhysicalMemoryEx | function | implemented |
+| MmFreePhysicalMemory | function | implemented |
+| MmGetPhysicalAddress | function | implemented |
+| MmMapIoSpace | function | implemented |
+| MmQueryAddressProtect | function | implemented |
+| MmQueryAllocationSize | function | implemented |
+| MmQueryStatistics | function | implemented |
+| MmSetAddressProtect | function | implemented |
+| NetDll_WSACancelOverlappedIO | function | missing |
+| NetDll_WSACleanup | function | missing |
+| NetDll_WSACloseEvent | function | missing |
+| NetDll_WSACreateEvent | function | missing |
+| NetDll_WSAEventSelect | function | missing |
+| NetDll_WSAGetLastError | function | missing |
+| NetDll_WSAGetOverlappedResult | function | missing |
+| NetDll_WSARecv | function | missing |
+| NetDll_WSARecvFrom | function | missing |
+| NetDll_WSAResetEvent | function | missing |
+| NetDll_WSASend | function | missing |
+| NetDll_WSASendTo | function | missing |
+| NetDll_WSASetEvent | function | missing |
+| NetDll_WSASetLastError | function | missing |
+| NetDll_WSAStartup | function | stub |
+| NetDll_WSAWaitForMultipleEvents | function | missing |
+| NetDll_XHttpCloseHandle | function | missing |
+| NetDll_XHttpConnect | function | missing |
+| NetDll_XHttpCrackUrl | function | missing |
+| NetDll_XHttpCrackUrlW | function | missing |
+| NetDll_XHttpCreateUrl | function | missing |
+| NetDll_XHttpCreateUrlW | function | missing |
+| NetDll_XHttpDoWork | function | missing |
+| NetDll_XHttpOpen | function | missing |
+| NetDll_XHttpOpenRequest | function | missing |
+| NetDll_XHttpOpenRequestUsingMemory | function | missing |
+| NetDll_XHttpQueryAuthSchemes | function | missing |
+| NetDll_XHttpQueryHeaders | function | missing |
+| NetDll_XHttpQueryOption | function | missing |
+| NetDll_XHttpReadData | function | missing |
+| NetDll_XHttpReceiveResponse | function | missing |
+| NetDll_XHttpSendRequest | function | missing |
+| NetDll_XHttpSetCredentials | function | missing |
+| NetDll_XHttpSetOption | function | missing |
+| NetDll_XHttpSetStatusCallback | function | missing |
+| NetDll_XHttpShutdown | function | missing |
+| NetDll_XHttpStartup | function | missing |
+| NetDll_XHttpWriteData | function | missing |
+| NetDll_XNetCleanup | function | missing |
+| NetDll_XNetConnect | function | missing |
+| NetDll_XNetCreateKey | function | missing |
+| NetDll_XNetDnsLookup | function | missing |
+| NetDll_XNetDnsRelease | function | missing |
+| NetDll_XNetDnsReverseLookup | function | missing |
+| NetDll_XNetDnsReverseRelease | function | missing |
+| NetDll_XNetGetBroadcastVersionStatus | function | missing |
+| NetDll_XNetGetConnectStatus | function | missing |
+| NetDll_XNetGetDebugXnAddr | function | stub |
+| NetDll_XNetGetEthernetLinkStatus | function | stub |
+| NetDll_XNetGetOpt | function | missing |
+| NetDll_XNetGetSystemLinkPort | function | missing |
+| NetDll_XNetGetTitleXnAddr | function | stub |
+| NetDll_XNetGetXnAddrPlatform | function | missing |
+| NetDll_XNetInAddrToServer | function | missing |
+| NetDll_XNetInAddrToString | function | missing |
+| NetDll_XNetInAddrToXnAddr | function | missing |
+| NetDll_XNetQosGetListenStats | function | missing |
+| NetDll_XNetQosListen | function | missing |
+| NetDll_XNetQosLookup | function | missing |
+| NetDll_XNetQosRelease | function | missing |
+| NetDll_XNetQosServiceLookup | function | missing |
+| NetDll_XNetRandom | function | missing |
+| NetDll_XNetRegisterKey | function | missing |
+| NetDll_XNetReplaceKey | function | missing |
+| NetDll_XNetServerToInAddr | function | missing |
+| NetDll_XNetSetOpt | function | missing |
+| NetDll_XNetSetSystemLinkPort | function | missing |
+| NetDll_XNetStartup | function | stub |
+| NetDll_XNetTsAddrToInAddr | function | missing |
+| NetDll_XNetUnregisterInAddr | function | missing |
+| NetDll_XNetUnregisterKey | function | missing |
+| NetDll_XNetXnAddrToInAddr | function | missing |
+| NetDll_XNetXnAddrToMachineId | function | missing |
+| NetDll_XnpCapture | function | missing |
+| NetDll_XnpConfig | function | missing |
+| NetDll_XnpConfigUPnP | function | missing |
+| NetDll_XnpEthernetInterceptRecv | function | missing |
+| NetDll_XnpEthernetInterceptSetCallbacks | function | missing |
+| NetDll_XnpEthernetInterceptXmit | function | missing |
+| NetDll_XnpGetActiveSocketList | function | missing |
+| NetDll_XnpGetConfigStatus | function | missing |
+| NetDll_XnpGetVlanXboxName | function | missing |
+| NetDll_XnpLoadConfigParams | function | missing |
+| NetDll_XnpLoadMachineAccount | function | missing |
+| NetDll_XnpLogonClearQEvent | function | missing |
+| NetDll_XnpLogonGetQFlags | function | missing |
+| NetDll_XnpLogonGetQVals | function | missing |
+| NetDll_XnpLogonGetStatus | function | missing |
+| NetDll_XnpLogonSetPState | function | missing |
+| NetDll_XnpLogonSetQEvent | function | missing |
+| NetDll_XnpLogonSetQFlags | function | missing |
+| NetDll_XnpLogonSetQVals | function | missing |
+| NetDll_XnpNoteSystemTime | function | missing |
+| NetDll_XnpRegisterKeyForCallerType | function | missing |
+| NetDll_XnpSaveConfigParams | function | missing |
+| NetDll_XnpSaveMachineAccount | function | missing |
+| NetDll_XnpSetVlanXboxName | function | missing |
+| NetDll_XnpUnregisterKeyForCallerType | function | missing |
+| NetDll___WSAFDIsSet | function | missing |
+| NetDll_accept | function | missing |
+| NetDll_bind | function | missing |
+| NetDll_closesocket | function | missing |
+| NetDll_connect | function | missing |
+| NetDll_getpeername | function | missing |
+| NetDll_getsockname | function | missing |
+| NetDll_getsockopt | function | missing |
+| NetDll_inet_addr | function | missing |
+| NetDll_ioctlsocket | function | missing |
+| NetDll_listen | function | missing |
+| NetDll_recv | function | missing |
+| NetDll_recvfrom | function | missing |
+| NetDll_select | function | missing |
+| NetDll_send | function | missing |
+| NetDll_sendto | function | missing |
+| NetDll_setsockopt | function | missing |
+| NetDll_shutdown | function | missing |
+| NetDll_socket | function | missing |
+| NtAllocateVirtualMemory | function | implemented |
+| NtCancelTimer | function | implemented |
+| NtClearEvent | function | implemented |
+| NtClose | function | implemented |
+| NtCreateEvent | function | implemented |
+| NtCreateFile | function | implemented |
+| NtCreateSemaphore | function | implemented |
+| NtCreateTimer | function | implemented |
+| NtDeviceIoControlFile | function | stub |
+| NtDuplicateObject | function | implemented |
+| NtFlushBuffersFile | function | missing |
+| NtFreeVirtualMemory | function | implemented |
+| NtOpenFile | function | implemented |
+| NtProtectVirtualMemory | function | implemented |
+| NtPulseEvent | function | implemented |
+| NtQueryDirectoryFile | function | implemented |
+| NtQueryFullAttributesFile | function | implemented |
+| NtQueryInformationFile | function | implemented |
+| NtQueryVirtualMemory | function | implemented |
+| NtQueryVolumeInformationFile | function | implemented |
+| NtQueueApcThread | function | implemented |
+| NtReadFile | function | implemented |
+| NtReadFileScatter | function | implemented |
+| NtReleaseSemaphore | function | implemented |
+| NtResumeThread | function | implemented |
+| NtSetEvent | function | implemented |
+| NtSetInformationFile | function | implemented |
+| NtSetTimerEx | function | implemented |
+| NtSignalAndWaitForSingleObjectEx | function | implemented |
+| NtSuspendThread | function | implemented |
+| NtWaitForMultipleObjectsEx | function | implemented |
+| NtWaitForSingleObjectEx | function | implemented |
+| NtWriteFile | function | implemented |
+| NtWriteFileGather | function | missing |
+| NtYieldExecution | function | implemented |
+| ObCreateObject | function | stub |
+| ObCreateSymbolicLink | function | implemented |
+| ObDeleteSymbolicLink | function | implemented |
+| ObDereferenceObject | function | implemented |
+| ObLookupThreadByThreadId | function | implemented |
+| ObOpenObjectByName | function | stub |
+| ObOpenObjectByPointer | function | implemented |
+| ObReferenceObjectByHandle | function | implemented |
+| PsCamDeviceRequest | function | missing |
+| RtlCaptureContext | function | implemented |
+| RtlCompareMemory | function | implemented |
+| RtlCompareMemoryUlong | function | implemented |
+| RtlEnterCriticalSection | function | implemented |
+| RtlFillMemoryUlong | function | implemented |
+| RtlFreeAnsiString | function | implemented |
+| RtlImageXexHeaderField | function | implemented |
+| RtlInitAnsiString | function | implemented |
+| RtlInitUnicodeString | function | implemented |
+| RtlInitializeCriticalSection | function | implemented |
+| RtlInitializeCriticalSectionAndSpinCount | function | implemented |
+| RtlLeaveCriticalSection | function | implemented |
+| RtlMultiByteToUnicodeN | function | implemented |
+| RtlNtStatusToDosError | function | implemented |
+| RtlRaiseException | function | implemented |
+| RtlTimeFieldsToTime | function | implemented |
+| RtlTimeToTimeFields | function | implemented |
+| RtlTryEnterCriticalSection | function | implemented |
+| RtlUnicodeStringToAnsiString | function | implemented |
+| RtlUnicodeToMultiByteN | function | implemented |
+| RtlUnwind | function | implemented |
+| VdCallGraphicsNotificationRoutines | function | stub |
+| VdEnableDisableClockGating | function | stub |
+| VdEnableRingBufferRPtrWriteBack | function | implemented |
+| VdGetCurrentDisplayGamma | function | stub |
+| VdGetCurrentDisplayInformation | function | stub |
+| VdGetSystemCommandBuffer | function | stub |
+| VdInitializeEngines | function | implemented |
+| VdInitializeRingBuffer | function | implemented |
+| VdInitializeScalerCommandBuffer | function | stub |
+| VdIsHSIOTrainingSucceeded | function | stub |
+| VdPersistDisplay | function | stub |
+| VdQuerySystemCommandBuffer | function | stub |
+| VdQueryVideoFlags | function | stub |
+| VdQueryVideoMode | function | stub |
+| VdRetrainEDRAM | function | stub |
+| VdRetrainEDRAMWorker | function | stub |
+| VdSetDisplayMode | function | stub |
+| VdSetDisplayModeOverride | function | stub |
+| VdSetGraphicsInterruptCallback | function | implemented |
+| VdSetSystemCommandBuffer | function | stub |
+| VdSetSystemCommandBufferGpuIdentifierAddress | function | stub |
+| VdShutdownEngines | function | stub |
+| VdSwap | function | implemented |
+| XAudioEnableDucker | function | missing |
+| XAudioGetDuckerAttackTime | function | missing |
+| XAudioGetDuckerHoldTime | function | missing |
+| XAudioGetDuckerLevel | function | missing |
+| XAudioGetDuckerReleaseTime | function | missing |
+| XAudioGetDuckerThreshold | function | missing |
+| XAudioGetSpeakerConfig | function | stub |
+| XAudioGetVoiceCategoryVolume | function | stub |
+| XAudioRegisterRenderDriverClient | function | stub |
+| XAudioSubmitRenderDriverFrame | function | stub |
+| XAudioUnregisterRenderDriverClient | function | stub |
+| XGetAVPack | function | stub |
+| XGetGameRegion | function | implemented |
+| XGetLanguage | function | implemented |
+| XGetVideoCapabilities | function | stub |
+| XGetVideoMode | function | stub |
+| XMACreateContext | function | stub |
+| XMAReleaseContext | function | stub |
+| XMsgCancelIORequest | function | missing |
+| XMsgCompleteIORequest | function | missing |
+| XMsgInProcessCall | function | implemented |
+| XMsgStartIORequest | function | implemented |
+| XMsgSystemProcessCall | function | implemented |
+| XNetLogonGetMachineID | function | missing |
+| XNetLogonGetTitleID | function | missing |
+| XNotifyGetNext | function | implemented |
+| XNotifyPositionUI | function | stub |
+| XamAlloc | function | implemented |
+| XamAllocEx | function | implemented |
+| XamAvatarGenerateMipMaps | function | missing |
+| XamAvatarGetAssets | function | missing |
+| XamAvatarGetAssetsResultSize | function | missing |
+| XamAvatarGetManifestLocalUser | function | missing |
+| XamAvatarGetManifestsByXuid | function | missing |
+| XamAvatarGetMetadataRandom | function | missing |
+| XamAvatarGetMetadataSignedOutProfile | function | missing |
+| XamAvatarGetMetadataSignedOutProfileCount | function | missing |
+| XamAvatarInitialize | function | missing |
+| XamAvatarLoadAnimation | function | missing |
+| XamAvatarManifestGetBodyType | function | missing |
+| XamAvatarSetCustomAsset | function | missing |
+| XamAvatarShutdown | function | missing |
+| XamBackgroundDownloadGetMode | function | stub |
+| XamBackgroundDownloadSetMode | function | stub |
+| XamCacheCloseFile | function | missing |
+| XamCacheOpenFile | function | missing |
+| XamCacheReset | function | missing |
+| XamContentClose | function | missing |
+| XamContentCreateDeviceEnumerator | function | implemented |
+| XamContentCreateEnumerator | function | implemented |
+| XamContentCreateEx | function | missing |
+| XamContentDelete | function | missing |
+| XamContentFlush | function | missing |
+| XamContentGetCreator | function | missing |
+| XamContentGetDeviceData | function | implemented |
+| XamContentGetDeviceName | function | missing |
+| XamContentGetDeviceState | function | implemented |
+| XamContentGetLicenseMask | function | implemented |
+| XamContentGetThumbnail | function | missing |
+| XamContentInstall | function | missing |
+| XamContentLaunchImage | function | missing |
+| XamContentOpenFile | function | missing |
+| XamContentResolve | function | missing |
+| XamContentSetThumbnail | function | missing |
+| XamCreateEnumeratorHandle | function | implemented |
+| XamEnumerate | function | implemented |
+| XamFree | function | implemented |
+| XamFreeToken | function | missing |
+| XamGetActiveDashAppInfo | function | missing |
+| XamGetAppliesTo | function | missing |
+| XamGetCurrentTitleId | function | implemented |
+| XamGetExecutionId | function | implemented |
+| XamGetOverlappedResult | function | implemented |
+| XamGetPrivateEnumStructureFromHandle | function | implemented |
+| XamGetSystemVersion | function | implemented |
+| XamGetToken | function | missing |
+| XamInputGetCapabilities | function | stub |
+| XamInputGetKeystrokeEx | function | stub |
+| XamInputGetState | function | stub |
+| XamInputSetState | function | stub |
+| XamIsUIActive | function | stub |
+| XamLoaderGetLaunchData | function | implemented |
+| XamLoaderGetLaunchDataSize | function | implemented |
+| XamLoaderLaunchTitle | function | implemented |
+| XamLoaderSetLaunchData | function | missing |
+| XamLoaderTerminateTitle | function | implemented |
+| XamNotifyCreateListener | function | implemented |
+| XamNuiCameraElevationGetAngle | function | missing |
+| XamNuiCameraElevationSetAngle | function | missing |
+| XamNuiCameraElevationStopMovement | function | missing |
+| XamNuiCameraRememberFloor | function | missing |
+| XamNuiCameraTiltGetStatus | function | missing |
+| XamNuiCameraTiltReportStatus | function | missing |
+| XamNuiCameraTiltSetCallback | function | missing |
+| XamNuiGetDeviceStatus | function | stub |
+| XamNuiIdentityGetSessionId | function | missing |
+| XamParseGamerTileKey | function | missing |
+| XamProfileCreateEnumerator | function | missing |
+| XamProfileEnumerate | function | missing |
+| XamQueryLiveHiveA | function | missing |
+| XamReadBiometricData | function | missing |
+| XamReadString | function | missing |
+| XamReadTileToTexture | function | missing |
+| XamSessionCreateHandle | function | missing |
+| XamSessionRefObjByHandle | function | missing |
+| XamShowAchievementsUI | function | missing |
+| XamShowCustomMessageComposeUI | function | missing |
+| XamShowCustomPlayerListUI | function | missing |
+| XamShowDeviceSelectorUI | function | missing |
+| XamShowDirtyDiscErrorUI | function | implemented |
+| XamShowFriendRequestUI | function | missing |
+| XamShowFriendsUI | function | missing |
+| XamShowGameInviteUI | function | missing |
+| XamShowGameVoiceChannelUI | function | missing |
+| XamShowGamerCardUIForXUID | function | missing |
+| XamShowGoldUpgradeUI | function | missing |
+| XamShowKeyboardUI | function | missing |
+| XamShowMarketplaceDownloadItemsUI | function | missing |
+| XamShowMarketplaceUI | function | missing |
+| XamShowMessageBoxUI | function | implemented |
+| XamShowMessageBoxUIEx | function | missing |
+| XamShowMessageComposeUI | function | missing |
+| XamShowMessagesUI | function | missing |
+| XamShowPlayerReviewUI | function | missing |
+| XamShowPlayersUI | function | missing |
+| XamShowQuickChatUI | function | missing |
+| XamShowSigninUI | function | missing |
+| XamShowSigninUIp | function | missing |
+| XamShowVoiceMailUI | function | missing |
+| XamShowWordRegisterUI | function | missing |
+| XamTaskSchedule | function | implemented |
+| XamUserAreUsersFriends | function | missing |
+| XamUserCheckPrivilege | function | implemented |
+| XamUserCreateAchievementEnumerator | function | implemented |
+| XamUserCreateStatsEnumerator | function | missing |
+| XamUserGetDeviceContext | function | implemented |
+| XamUserGetIndexFromXUID | function | missing |
+| XamUserGetMembershipTierFromXUID | function | missing |
+| XamUserGetName | function | implemented |
+| XamUserGetOnlineCountryFromXUID | function | missing |
+| XamUserGetSigninInfo | function | implemented |
+| XamUserGetSigninState | function | implemented |
+| XamUserGetXUID | function | implemented |
+| XamUserNuiEnableBiometric | function | missing |
+| XamUserNuiGetEnrollmentIndex | function | missing |
+| XamUserNuiGetUserIndex | function | missing |
+| XamUserReadProfileSettings | function | implemented |
+| XamUserWriteProfileSettings | function | missing |
+| XamVoiceClose | function | missing |
+| XamVoiceCreate | function | missing |
+| XamVoiceHeadsetPresent | function | stub |
+| XamVoiceIsActiveProcess | function | stub |
+| XamVoiceSubmitPacket | function | missing |
+| XamWriteBiometricData | function | missing |
+| XamWriteGamerTile | function | missing |
+| XamXStudioRequest | function | missing |
+| XamXlfsInitializeUploadQueue | function | missing |
+| XamXlfsMountUploadQueueInstance | function | missing |
+| XamXlfsUninitializeUploadQueue | function | missing |
+| XamXlfsUnmountUploadQueueInstance | function | missing |
+| XampXAuthGetTitleBuffer | function | missing |
+| XampXAuthShutdown | function | missing |
+| XampXAuthStartup | function | missing |
+| XeCryptBnQwBeSigVerify | function | missing |
+| XeCryptRandom | function | implemented |
+| XeCryptRotSumSha | function | missing |
+| XeCryptSha | function | implemented |
+| XeCryptSha256Final | function | implemented |
+| XeCryptSha256Init | function | implemented |
+| XeCryptSha256Update | function | implemented |
+| XeCryptShaFinal | function | implemented |
+| XeCryptShaInit | function | implemented |
+| XeCryptShaUpdate | function | implemented |
+| XeKeysGetConsoleID | function | missing |
+| XeKeysGetKey | function | missing |
+| XexCheckExecutablePrivilege | function | implemented |
+| XexGetModuleHandle | function | implemented |
+| XexGetModuleSection | function | implemented |
+| XexGetProcedureAddress | function | implemented |
+| XexLoadImage | function | implemented |
+| XexUnloadImage | function | implemented |
+| XexUnloadImageAndExitThread | function | missing |
+| __C_specific_handler | function | implemented |
+| _snprintf | function | implemented |
+| _snwprintf | function | implemented |
+| _vscwprintf | function | implemented |
+| _vsnprintf | function | implemented |
+| sprintf | function | implemented |
+| swprintf | function | implemented |
+| vsprintf | function | implemented |
+| vswprintf | function | implemented |
+| VdHSIOCalibrationLock | variable | implemented |
+| VdGpuClockInMHz | variable | implemented |
+| KeCertMonitorData | variable | implemented |
+| VdGlobalXamDevice | variable | implemented |
+| VdGlobalDevice | variable | implemented |
+| XboxHardwareInfo | variable | implemented |
+| XexExecutableModuleHandle | variable | implemented |
+| ExLoadedCommandLine | variable | implemented |
+| XboxKrnlVersion | variable | implemented |
+| ExTimerObjectType | variable | implemented |
+| ExSemaphoreObjectType | variable | implemented |
+| ExEventObjectType | variable | implemented |
+| KeTimeStampBundle | variable | implemented |
+| KeDebugMonitorData | variable | implemented |
+| ExThreadObjectType | variable | implemented |
 
-Implemented: 0 / 459
+Functions: implemented 176, stub 58, missing 225 / 459
+Variables: implemented 15, stub 0, missing 0 / 15

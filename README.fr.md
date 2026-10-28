@@ -39,14 +39,14 @@ Le jeu n'est pas encore jouable. Rien ne s'affiche à l'écran.
 | Étape | Contenu | État |
 |---|---|---|
 | M1 | Pipeline du disque à l'exécutable natif, squelette du runtime | Terminé |
-| M2 | Émulation du noyau : mémoire, threads, fichiers, synchronisation | Prochaine étape |
-| M3 | Graphismes : rendu Vulkan, shaders traduits avec XenosRecomp | Prévu |
+| M2 | Émulation du noyau : mémoire, threads, fichiers, synchronisation | Terminé |
+| M3 | Graphismes : rendu Vulkan, shaders traduits à l'exécution | Prochaine étape |
 | M4 | Audio, manettes, sauvegardes | Prévu |
 | M5 | Jouable : menu principal et mondes | Prévu |
 
-Avec M1 terminé, le launcher transforme votre disque en `legacyrecomp-game`, et `legacyrecomp run` lance le point d'entrée recompilé. Le code du jeu s'exécute jusqu'à son premier appel au noyau de la Xbox que le runtime ne fournit pas encore, `NtAllocateVirtualMemory`, puis s'arrête avec le code 3 et un rapport qui nomme cet appel. Le jeu importe 459 fonctions système de xboxkrnl (le noyau) et de XAM, et aucune n'est implémentée pour l'instant. C'est le travail de M2.
+Le launcher transforme votre disque en `legacyrecomp-game`, et `legacyrecomp run` lance le jeu recompilé. Avec M2 terminé, le runtime émule les parties du noyau de la Xbox dont le jeu a besoin pour démarrer : mémoire, threads, fichiers, synchronisation, minuteries et les services XAM qu'il demande au démarrage. Le jeu exécute désormais son démarrage jusqu'à son premier appel graphique, `VdInitializeEngines`, qui créerait le GPU, puis s'arrête avec le code 3 et un rapport qui nomme cet appel. Sur les 459 fonctions système que le jeu importe de xboxkrnl (le noyau) et de XAM, 163 sont implémentées et 29 sont des stubs ; les fonctions graphiques sont le travail de M3. Avant d'atteindre le GPU, le vrai jeu n'utilise toutefois que 27 de ces imports, sur un seul thread : l'essentiel du noyau de M2 (threads, attentes, fichiers, minuteries, décompression LZX, etc.) n'est donc pour l'instant exercé que par des tests unitaires et un faux jeu de test.
 
-Un obstacle est déjà connu pour la suite : la version épinglée de XenonRecomp ne gère pas certaines instructions PowerPC utilisées par le jeu (`bdzf`, `stfsu`, `lfsu`, `vsel128` et d'autres), ce qui se traduit par 3 279 avertissements pendant la recompilation.
+Les instructions PowerPC que la version épinglée de XenonRecomp ne gérait pas (`bdzf`, `stfsu`, `lfsu`, `vsel128` et d'autres) sont désormais couvertes par des correctifs conservés dans ce dépôt (`thirdparty/patches/xenonrecomp/`), et la recompilation se termine avec 0 avertissement.
 
 ## Fonctionnement
 
@@ -166,7 +166,7 @@ Vous devez posséder Minecraft: Xbox 360 Edition et réaliser vous-même l'image
 
 ## Remerciements
 
-- [hedge-dev](https://github.com/hedge-dev), pour XenonRecomp et XenosRecomp, ainsi que pour UnleashedRecomp, qui nous sert de référence sur l'organisation d'un jeu recompilé.
+- [hedge-dev](https://github.com/hedge-dev), pour XenonRecomp, ainsi que pour UnleashedRecomp, qui nous sert de référence sur l'organisation d'un jeu recompilé.
 - L'équipe de [Xenia](https://github.com/xenia-project/xenia), dont l'émulateur est la meilleure documentation publique sur le fonctionnement interne de la Xbox 360.
 - Le wiki [free60](https://free60.org), pour ses notes sur les formats de fichiers de la console.
 - [Dear ImGui](https://github.com/ocornut/imgui), [SDL](https://www.libsdl.org), [Catch2](https://github.com/catchorg/Catch2) et [toml++](https://github.com/marzer/tomlplusplus).

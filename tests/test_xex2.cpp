@@ -95,3 +95,44 @@ TEST_CASE("xex2 rejects corrupt import table", "[unit]") {
   REQUIRE_FALSE(r.ok());
   CHECK(r.error().code == ErrorCode::OutOfRange);
 }
+
+TEST_CASE("xex2 parses import records, tls and stack size", "[unit]") {
+  auto bytes = Xex2Builder()
+                   .import_library("xboxkrnl.exe", {0x82002000, 0x82001010, 0x82002004})
+                   .import_library("xam.xex", {0x82002008})
+                   .tls(64, 0x82003000, 0x20, 0x10)
+                   .stack_size(0x80000)
+                   .build();
+  auto r = parse_xex2(bytes);
+  REQUIRE(r.ok());
+  const Xex2File& x = r.value();
+  CHECK(x.import_libraries == std::vector<std::string>{"xboxkrnl.exe", "xam.xex"});
+  REQUIRE(x.imports.size() == 2);
+  CHECK(x.imports[0].name == "xboxkrnl.exe");
+  CHECK(x.imports[0].records == std::vector<uint32_t>{0x82002000, 0x82001010, 0x82002004});
+  CHECK(x.imports[1].name == "xam.xex");
+  CHECK(x.imports[1].records == std::vector<uint32_t>{0x82002008});
+  REQUIRE(x.tls.has_value());
+  CHECK(x.tls->slot_count == 64u);
+  CHECK(x.tls->raw_data_address == 0x82003000u);
+  CHECK(x.tls->data_size == 0x20u);
+  CHECK(x.tls->raw_data_size == 0x10u);
+  CHECK(x.default_stack_size == 0x80000u);
+
+  auto plain = parse_xex2(Xex2Builder().build());
+  REQUIRE(plain.ok());
+  CHECK(plain.value().imports.empty());
+  CHECK_FALSE(plain.value().tls.has_value());
+  CHECK_FALSE(plain.value().default_stack_size.has_value());
+}
+
+TEST_CASE("xex2 rejects an import library whose records run past the block", "[unit]") {
+  auto bytes = Xex2Builder().import_library("xboxkrnl.exe", {1, 2}).build();
+  // The library's record count sits 0x26 bytes into the library, after the 12-byte header and the
+  // 16-byte string table; claim far more records than the block holds.
+  const size_t blk = 0x18 + 8;
+  bytes[blk + 12 + 16 + 0x26] = std::byte{0x7F};
+  auto r = parse_xex2(bytes);
+  REQUIRE_FALSE(r.ok());
+  CHECK(r.error().code == ErrorCode::OutOfRange);
+}

@@ -30,7 +30,7 @@ Essa tradução acontece no seu computador. O launcher lê a imagem do seu próp
 
 ## Código aberto
 
-O LegacyRecomp é software livre, sob a licença MIT. Contribuições são bem-vindas, de relatos de bugs e anotações de engenharia reversa a código. O [AGENTS.md](AGENTS.md) traz os comandos de build e as regras do projeto, e a pasta [docs/](docs/) tem as notas de design, as notas sobre formatos de arquivo e os registros de decisão (em português).
+O LegacyRecomp é software livre, sob a licença MIT. Contribuições são bem-vindas, de relatos de bugs e anotações de engenharia reversa a código. O [AGENTS.md](AGENTS.md) traz os comandos de build e as regras do projeto (no Windows ou macOS, o [docs/development.md](docs/development.md) explica o container Docker de desenvolvimento), e a pasta [docs/](docs/) tem as notas de design, as notas sobre formatos de arquivo e os registros de decisão (em português).
 
 ## Estado atual
 
@@ -39,14 +39,14 @@ O jogo ainda não dá para jogar. Nada aparece na tela.
 | Marco | Escopo | Situação |
 |---|---|---|
 | M1 | Pipeline do disco até o executável nativo, esqueleto do runtime | Concluído |
-| M2 | Emulação do kernel: memória, threads, arquivos, sincronização | Próximo |
-| M3 | Gráficos: renderizador Vulkan, shaders traduzidos com o XenosRecomp | Planejado |
+| M2 | Emulação do kernel: memória, threads, arquivos, sincronização | Concluído |
+| M3 | Gráficos: renderizador Vulkan, shaders traduzidos em tempo de execução | Próximo |
 | M4 | Áudio, controles, saves | Planejado |
 | M5 | Jogável: menu principal e mundos | Planejado |
 
-Com o M1 pronto, o launcher transforma o seu disco no `legacyrecomp-game`, e o `legacyrecomp run` inicia o ponto de entrada recompilado. O código do jogo roda até a primeira chamada ao kernel do Xbox que o runtime ainda não oferece, `NtAllocateVirtualMemory`, e aí termina com código 3 e um relatório que aponta essa chamada. O jogo importa 459 funções de sistema do xboxkrnl (o kernel) e do XAM, e nenhuma delas está implementada ainda. Esse é o trabalho do M2.
+O launcher transforma o seu disco no `legacyrecomp-game`, e o `legacyrecomp run` inicia o jogo recompilado. Com o M2 pronto, o runtime emula as partes do kernel do Xbox de que o jogo precisa para iniciar: memória, threads, arquivos, sincronização, timers e os serviços do XAM que ele pede no boot. Agora o jogo roda a sua inicialização até a primeira chamada gráfica, `VdInitializeEngines`, que criaria a GPU, e aí termina com código 3 e um relatório que aponta essa chamada. Das 459 funções de sistema que o jogo importa do xboxkrnl (o kernel) e do XAM, 163 estão implementadas e 29 são stubs; as gráficas são o trabalho do M3. Mas, antes de chegar à GPU, o jogo real usa só 27 dessas importações, numa única thread, então a maior parte do kernel do M2 (threads, esperas, arquivos, timers, descompressão LZX e mais) até agora só foi exercitada por testes de unidade e por um jogo falso de teste.
 
-Um obstáculo já conhecido para os próximos marcos: a versão fixada do XenonRecomp não trata algumas instruções PowerPC que o jogo usa (`bdzf`, `stfsu`, `lfsu`, `vsel128` e outras), o que aparece como 3.279 avisos durante a recompilação.
+As instruções PowerPC que a versão fixada do XenonRecomp não tratava (`bdzf`, `stfsu`, `lfsu`, `vsel128` e outras) agora são cobertas por patches guardados neste repositório (`thirdparty/patches/xenonrecomp/`), e a recompilação termina com 0 avisos.
 
 ## Como funciona
 
@@ -166,7 +166,7 @@ Você precisa ter o Minecraft: Xbox 360 Edition e gerar a imagem do disco por co
 
 ## Créditos
 
-- [hedge-dev](https://github.com/hedge-dev), pelo XenonRecomp e pelo XenosRecomp, e pelo UnleashedRecomp, que usamos como referência de como um jogo recompilado se organiza.
+- [hedge-dev](https://github.com/hedge-dev), pelo XenonRecomp e pelo UnleashedRecomp, que usamos como referência de como um jogo recompilado se organiza.
 - A equipe do [Xenia](https://github.com/xenia-project/xenia), cujo emulador é a melhor documentação pública do funcionamento interno do Xbox 360.
 - A wiki [free60](https://free60.org), pelas anotações sobre os formatos de arquivo do console.
 - [Dear ImGui](https://github.com/ocornut/imgui), [SDL](https://www.libsdl.org), [Catch2](https://github.com/catchorg/Catch2) e [toml++](https://github.com/marzer/tomlplusplus).

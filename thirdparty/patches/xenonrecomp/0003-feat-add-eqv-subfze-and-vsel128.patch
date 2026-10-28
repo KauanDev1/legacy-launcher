@@ -1,0 +1,58 @@
+From 8d92b932a71fb59699581b45fb640a6051d0299a Mon Sep 17 00:00:00 2001
+From: Kauan Turcato Storto <159664484+KauanDev1@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 21:03:41 -0400
+Subject: [PATCH 03/10] feat: add eqv, subfze and vsel128
+
+eqv/eqv. computes ~(rS ^ rB) and subfze/subfze. computes ~rA + CA with
+the 32-bit carry out, both with the usual cr0 compare for the Rc form.
+vsel128 shares the vsel lowering: the VMX128 mask register is the
+destination (VS128 is VD128).
+
+Based on hedge-dev/XenonRecomp PR #60 by Mystixor (MIT).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ XenonRecomp/recompiler.cpp | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
+index d48299c..3d28f89 100644
+--- a/XenonRecomp/recompiler.cpp
++++ b/XenonRecomp/recompiler.cpp
+@@ -1765,6 +1765,15 @@ bool Recompiler::Recompile(
+             println("\t{}.compare<int32_t>({}.s32, 0, {});", cr(0), r(insn.operands[0]), xer());
+         break;
+ 
++    case PPC_INST_SUBFZE:
++        // rD = ~rA + CA; CA is the 32-bit carry out. Computed before rD is written, as rD may alias rA.
++        println("\t{}.u8 = (~{}.u32 + {}.ca) < {}.ca;", temp(), r(insn.operands[1]), xer(), xer());
++        println("\t{}.u64 = ~{}.u64 + {}.ca;", r(insn.operands[0]), r(insn.operands[1]), xer());
++        println("\t{}.ca = {}.u8;", xer(), temp());
++        if (strchr(insn.opcode->name, '.'))
++            println("\t{}.compare<int32_t>({}.s32, 0, {});", cr(0), r(insn.operands[0]), xer());
++        break;
++
+     case PPC_INST_SUBFIC:
+         println("\t{}.ca = {}.u32 <= {};", xer(), r(insn.operands[1]), insn.operands[2]);
+         println("\t{}.s64 = {} - {}.s64;", r(insn.operands[0]), int32_t(insn.operands[2]), r(insn.operands[1]));
+@@ -2147,6 +2156,7 @@ bool Recompiler::Recompile(
+         println("\tsimde_mm_store_ps({}.f32, simde_mm_div_ps(simde_mm_set1_ps(1), simde_mm_sqrt_ps(simde_mm_load_ps({}.f32))));", v(insn.operands[0]), v(insn.operands[1]));
+         break;
+ 
++    case PPC_INST_VSEL128:
+     case PPC_INST_VSEL:
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_or_si128(simde_mm_andnot_si128(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)), simde_mm_and_si128(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8))));", v(insn.operands[0]), v(insn.operands[3]), v(insn.operands[1]), v(insn.operands[3]), v(insn.operands[2]));
+         break;
+@@ -2309,6 +2319,12 @@ bool Recompiler::Recompile(
+ 
+         break;
+ 
++    case PPC_INST_EQV:
++        println("\t{}.u64 = ~({}.u64 ^ {}.u64);", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
++        if (strchr(insn.opcode->name, '.'))
++            println("\t{}.compare<int32_t>({}.s32, 0, {});", cr(0), r(insn.operands[0]), xer());
++        break;
++
+     case PPC_INST_XOR:
+         println("\t{}.u64 = {}.u64 ^ {}.u64;", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
+         if (strchr(insn.opcode->name, '.'))

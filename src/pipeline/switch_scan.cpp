@@ -25,6 +25,9 @@ uint32_t xo(uint32_t i) { return (i >> 1) & 0x3FF; }
 int32_t simm(uint32_t i) { return static_cast<int16_t>(i & 0xFFFF); }
 uint32_t uimm(uint32_t i) { return i & 0xFFFF; }
 
+// Relative branch targets in code: target -> source.
+using Targets = std::multimap<uint32_t, uint32_t>;
+
 bool is_branch(uint32_t i) {
   return op(i) == 16 || op(i) == 18 || (op(i) == 19 && (xo(i) == 16 || xo(i) == 528));
 }
@@ -116,10 +119,17 @@ uint32_t mask32(uint32_t mb, uint32_t me) {
   return m;
 }
 
+// An indexed load (lwzx/lbzx/lhzx) seen by evaluate(): its effective address and size.
+struct IndexedLoad {
+  uint32_t addr = 0;
+  uint32_t size = 0;
+};
+
 // Evaluates the straight-line instructions in `window` with r[index] = value. Returns CTR, or nullopt
-// if anything is unsupported, unknown, or overwrites the index register.
+// if anything is unsupported, unknown, or overwrites the index register. `last_load` (optional) receives
+// the last indexed load whose address was known.
 std::optional<uint32_t> evaluate(const Memory& mem, std::span<const uint32_t> window, uint32_t index,
-                                 uint32_t aliases, uint32_t value) {
+                                 uint32_t aliases, uint32_t value, std::optional<IndexedLoad>* last_load = nullptr) {
   std::array<std::optional<uint32_t>, 32> r{};
   r[index] = value;
   for (uint32_t n = 0; n < 32; ++n)
@@ -191,6 +201,7 @@ std::optional<uint32_t> evaluate(const Memory& mem, std::span<const uint32_t> wi
           case 23: case 87: case 279: {  // lwzx / lbzx / lhzx
             uint32_t size = xo(i) == 23 ? 4 : xo(i) == 87 ? 1 : 2;
             auto addr = bin(get0(ra(i)), get(rb(i)), [](uint32_t a, uint32_t b) { return a + b; });
+            if (last_load && addr) *last_load = IndexedLoad{*addr, size};
             if (!set(rd(i), load(addr, size))) return std::nullopt;
             break;
           }
@@ -212,8 +223,9 @@ std::optional<uint32_t> evaluate(const Memory& mem, std::span<const uint32_t> wi
 }
 
 struct Guard {
-  uint32_t window_start = 0;   // first address evaluated (after cmplwi)
-  uint32_t branch_addr = 0;    // the bgt / bgtlr
+  uint32_t window_start = 0;   // first address evaluated (block start, or after the last write of the index)
+  uint32_t branch_addr = 0;    // the bgt / bgtlr (or the ble of an inverted guard)
+  uint32_t skip_addr = 0;      // inverted guard: the `b default` the ble jumps over (0 = none)
   uint32_t index = 0;
   uint32_t aliases = 0;        // bit n: rN holds a copy of the index (mr before the cmplwi)
   uint32_t max = 0;
@@ -244,12 +256,79 @@ uint32_t find_aliases(const Memory& mem, uint32_t cmp_addr, uint32_t index) {
   return aliases;
 }
 
-enum class GuardStatus { None, Incomplete, Found };
+// The compiler hoists table addresses (`lis`/`addi`) and index scaling (`rlwinm rI, rIdx, 1, 0, 30`)
+// above the bound check, so evaluation starts at the earliest straight-line instruction before the
+// cmplwi at `cmp_addr` that keeps the index intact: the walk stops at a branch, an unknown
+// instruction, or one that writes the index or one of its `mr` copies (so a copy is never read before
+// the `mr` that makes it one). It never crosses a branch target (`targets`): code reached from
+// another path (tail merge, cross-jumping) may have set the registers differently, so a target is
+// at most the window start. Never goes below `range_start`. Returns the first address to evaluate.
+uint32_t hoist_start(const Memory& mem, uint32_t cmp_addr, uint32_t index, uint32_t aliases,
+                     const Targets& targets, uint32_t range_start) {
+  const uint32_t keep = (1u << index) | aliases;
+  uint32_t start = cmp_addr;
+  if (targets.contains(cmp_addr)) return start;
+  for (int k = 1; k <= kMaxWindow; ++k) {
+    const uint32_t a = cmp_addr - 4u * static_cast<uint32_t>(k);
+    if (a < range_start || a > cmp_addr) break;
+    auto w = mem.read(a, 4);
+    if (!w || is_branch(*w)) break;
+    const auto written = gpr_written(*w);
+    if (!written || (*written & keep)) break;
+    start = a;
+    if (targets.contains(a)) break;
+  }
+  return start;
+}
+
+// Target of a relative b/bc (with or without link), or nullopt for any other instruction.
+std::optional<uint32_t> relative_target(uint32_t i, uint32_t at) {
+  if ((op(i) != 18 && op(i) != 16) || (i & 2)) return std::nullopt;
+  int32_t disp;
+  if (op(i) == 18) {
+    disp = static_cast<int32_t>(i & 0x03FFFFFC);
+    if (disp & 0x02000000) disp -= 0x04000000;
+  } else {
+    disp = static_cast<int16_t>(i & 0xFFFC);
+  }
+  return at + static_cast<uint32_t>(disp);
+}
+
+// BO with both "ignore CTR" and "ignore condition" bits: always taken.
+bool always(uint32_t i) { return (rd(i) & 0x14) == 0x14; }
+
+// Unconditional, non-linking control transfer: execution never continues at the next word.
+bool is_unconditional(uint32_t i) {
+  if (i & 1) return false;
+  if (op(i) == 18) return true;
+  if (op(i) == 16) return always(i);
+  if (op(i) == 19 && (xo(i) == 16 || xo(i) == 528)) return always(i);
+  return false;
+}
+
+// Every relative b/bc (with or without link) in `code`: target -> source.
+Targets branch_targets(const Memory& mem, std::span<const std::pair<uint32_t, uint32_t>> code) {
+  Targets out;
+  for (auto [start, size] : code) {
+    for (uint32_t a = (start + 3) & ~3u; a + 4 <= start + size; a += 4) {
+      auto w = mem.read(a, 4);
+      if (!w) break;
+      if (auto t = relative_target(*w, a)) out.emplace(*t, a);
+    }
+  }
+  return out;
+}
+
+enum class GuardStatus { None, Incomplete, Joined, Found };
 
 // Looks backwards from the bctr at `addr` for "cmplwi crN, rI, max ... bgt crN" with only
-// straight-line code in between. None: the code before the bctr is not a bounded switch
-// (e.g. a virtual call). Incomplete: a bgt-style guard without a recognisable compare.
-std::optional<Guard> find_guard(const Memory& mem, uint32_t addr, GuardStatus& status) {
+// straight-line code in between, or the inverted form "cmplwi crN, rI, max ... ble crN, +8;
+// b default" whose table block (right after the `b`) must be entered only from that ble.
+// None: the code before the bctr is not a bounded switch (e.g. a virtual call).
+// Incomplete: a bgt-style guard without a recognisable compare, or an inverted guard whose
+// block is also reached from elsewhere.
+std::optional<Guard> find_guard(const Memory& mem, uint32_t addr, GuardStatus& status,
+                                const Targets& targets, uint32_t range_start) {
   status = GuardStatus::None;
   for (int k = 1; k <= kMaxWindow; ++k) {
     auto w = mem.read(addr - 4u * static_cast<uint32_t>(k), 4);
@@ -257,28 +336,56 @@ std::optional<Guard> find_guard(const Memory& mem, uint32_t addr, GuardStatus& s
     uint32_t i = *w;
     if (!is_branch(i)) continue;
 
-    const uint32_t baddr = addr - 4u * static_cast<uint32_t>(k);
-    const uint32_t bo = rd(i), bi = ra(i);
-    const bool cond_true = (bo & 0x1C) == 0x0C;  // branch if CR bit set, CTR ignored
-    if (!cond_true || (bi & 3) != 1 || (i & 1)) return std::nullopt;  // must be bgt / bgtlr, no link
+    uint32_t baddr = addr - 4u * static_cast<uint32_t>(k);
     Guard g;
-    g.branch_addr = baddr;
-    if (op(i) == 16) {
-      if (i & 2) return std::nullopt;  // absolute
-      g.default_label = baddr + static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(i & 0xFFFC)));
-    } else if (!(op(i) == 19 && xo(i) == 16)) {
-      return std::nullopt;  // bgtctr: not a bound check
+    if (op(i) == 18 && !(i & 3)) {  // b: the default jump of an inverted guard?
+      const uint32_t b_addr = baddr;
+      auto p = mem.read(b_addr - 4, 4);
+      if (!p || op(*p) != 16 || (*p & 3) || (rd(*p) & 0x1C) != 0x04 || (ra(*p) & 3) != 1 ||
+          relative_target(*p, b_addr - 4) != b_addr + 4)
+        return std::nullopt;  // must be `ble crN, +8` (branch if gt clear, CTR ignored, no link)
+      status = GuardStatus::Incomplete;
+      // The table block starts at b_addr + 4: the ble must be its only way in, and nothing else may
+      // land between it and the bctr.
+      for (auto it = targets.lower_bound(b_addr + 4); it != targets.end() && it->first <= addr; ++it)
+        if (it->first != b_addr + 4 || it->second != b_addr - 4) {
+          status = GuardStatus::Joined;
+          return std::nullopt;
+        }
+      g.skip_addr = b_addr;
+      g.default_label = *relative_target(i, b_addr);
+      i = *p;
+      baddr = b_addr - 4;
+    } else {
+      const uint32_t bo = rd(i), bi = ra(i);
+      const bool cond_true = (bo & 0x1C) == 0x0C;  // branch if CR bit set, CTR ignored
+      if (!cond_true || (bi & 3) != 1 || (i & 1)) return std::nullopt;  // must be bgt / bgtlr, no link
+      if (op(i) == 16) {
+        if (i & 2) return std::nullopt;  // absolute
+        g.default_label = baddr + static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(i & 0xFFFC)));
+      } else if (!(op(i) == 19 && xo(i) == 16)) {
+        return std::nullopt;  // bgtctr: not a bound check
+      }
+      status = GuardStatus::Incomplete;
     }
-    status = GuardStatus::Incomplete;
-    const uint32_t crf = bi >> 2;
+    g.branch_addr = baddr;
+    const uint32_t crf = ra(i) >> 2;
     for (int j = 1; j <= kMaxCmpDistance; ++j) {
       auto c = mem.read(baddr - 4u * static_cast<uint32_t>(j), 4);
       if (!c || is_branch(*c)) return std::nullopt;
       if (op(*c) == 10 && ((*c >> 23) & 7) == crf && ((*c >> 21) & 1) == 0) {  // cmplwi crf, rI, max
         g.index = ra(*c);
         g.max = uimm(*c);
-        g.window_start = baddr - 4u * static_cast<uint32_t>(j) + 4;
-        g.aliases = find_aliases(mem, g.window_start - 4, g.index);
+        const uint32_t cmp_addr = baddr - 4u * static_cast<uint32_t>(j);
+        // Another path joining after the compare (before the guard branch, or for bgt between it and
+        // the bctr) would bring an unchecked index: no guard. (The inverted form checked its block above.)
+        const uint32_t join_end = g.skip_addr ? baddr : addr;
+        if (auto it = targets.upper_bound(cmp_addr); it != targets.end() && it->first <= join_end) {
+          status = GuardStatus::Joined;
+          return std::nullopt;
+        }
+        g.aliases = find_aliases(mem, cmp_addr, g.index);
+        g.window_start = hoist_start(mem, cmp_addr, g.index, g.aliases, targets, range_start);
         status = GuardStatus::Found;
         return g;
       }
@@ -347,12 +454,79 @@ std::optional<SwitchTable> masked_table(const Memory& mem, uint32_t addr, uint32
   return std::nullopt;
 }
 
+// Unguarded switch whose table sits right after the bctr (the compiler dropped the bound check, e.g. a switch on
+// an enum). The table then ends where code resumes: at the first case label or branch target after the bctr. The
+// index is the only register for which the block's straight-line code (the longest suffix that works) computes CTR
+// through an indexed load whose address moves with the index; the table must start at bctr + 4 (or after < 4 zero
+// bytes). Entries are read while they lie before that end; a zero-padding entry (or any entry whose label is not a
+// 4-aligned address in the code range past the entries read so far) ends the table early. Only < 4 zero bytes may
+// remain between the last entry and the end, so every byte up to the first case is accounted for.
+std::optional<SwitchTable> inline_table(const Memory& mem, uint32_t addr, uint32_t start, uint32_t size,
+                                        const Targets& targets) {
+  std::vector<uint32_t> block;
+  uint32_t first = addr;
+  for (int k = 1; k <= kMaxWindow; ++k) {
+    const uint32_t a = addr - 4u * static_cast<uint32_t>(k);
+    auto w = mem.read(a, 4);
+    if (!w || is_branch(*w) || a < start) break;
+    first = a;
+  }
+  for (uint32_t a = first; a < addr; a += 4) block.push_back(*mem.read(a, 4));
+
+  std::optional<uint32_t> index;
+  uint32_t table = 0, entry = 0;
+  std::span<const uint32_t> window;
+  for (size_t s = 0; s < block.size() && !index; ++s) {
+    std::span<const uint32_t> w(block.data() + s, block.size() - s);
+    bool ambiguous = false;
+    for (uint32_t r = 0; r < 32; ++r) {
+      std::optional<IndexedLoad> l0, l1;
+      if (!evaluate(mem, w, r, 0, 0, &l0) || !evaluate(mem, w, r, 0, 1, &l1) || !l0 || !l1) continue;
+      if (l1->addr - l0->addr != l0->size || l1->size != l0->size) continue;
+      if (index) ambiguous = true;
+      index = r;
+      table = l0->addr;
+      entry = l0->size;
+    }
+    if (ambiguous) return std::nullopt;
+    if (index) window = w;
+  }
+  if (!index) return std::nullopt;
+  if (table < addr + 4 || table >= addr + 8) return std::nullopt;
+  for (uint32_t a = addr + 4; a < table; ++a)
+    if (mem.read(a, 1) != 0u) return std::nullopt;
+
+  const uint64_t code_end = uint64_t{start} + size;
+  uint64_t end = code_end;
+  if (auto it = targets.upper_bound(addr); it != targets.end()) end = std::min<uint64_t>(end, it->first);
+  SwitchTable t;
+  t.base = addr;
+  t.r = *index;
+  for (uint32_t v = 0; v < kMaxCases && uint64_t{table} + uint64_t{v + 1} * entry <= end; ++v) {
+    const uint32_t entry_end = table + (v + 1) * entry;
+    auto target = evaluate(mem, window, *index, 0, v);
+    if (!target || (*target & 3) || *target < start || *target >= code_end ||
+        (*target > addr && *target < entry_end))
+      break;
+    if (*target > addr) end = std::min<uint64_t>(end, *target);
+    if (entry_end > end) break;  // this entry overlaps code another label proves
+    t.labels.push_back(*target);
+  }
+  if (t.labels.empty()) return std::nullopt;
+  const uint32_t table_end = table + static_cast<uint32_t>(t.labels.size()) * entry;
+  if (end < table_end || end - table_end >= 4) return std::nullopt;
+  for (uint32_t a = table_end; a < end; ++a)
+    if (mem.read(a, 1) != 0u) return std::nullopt;
+  return t;
+}
+
 }  // namespace
 
 SwitchScan scan_switch_tables(std::span<const uint8_t> image, uint32_t image_base,
                               std::span<const std::pair<uint32_t, uint32_t>> code) {
   SwitchScan out;
   const Memory mem(image, image_base);
+  const Targets targets = branch_targets(mem, code);
   for (auto [start, size] : code) {
     for (uint32_t addr = (start + 3) & ~3u; addr + 4 <= start + size; addr += 4) {
       auto w = mem.read(addr, 4);
@@ -360,10 +534,17 @@ SwitchScan scan_switch_tables(std::span<const uint8_t> image, uint32_t image_bas
       if (*w != kBctr) continue;
 
       GuardStatus status;
-      auto guard = find_guard(mem, addr, status);
+      auto guard = find_guard(mem, addr, status, targets, start);
       if (!guard) {
         if (auto t = masked_table(mem, addr, start, size)) {
           out.tables.push_back(std::move(*t));
+        } else if (status == GuardStatus::None && has_indexed_load(mem, addr) && has_lis(mem, addr)) {
+          if (auto it = inline_table(mem, addr, start, size, targets))
+            out.tables.push_back(std::move(*it));
+          else
+            out.unbounded.push_back(addr);
+        } else if (status == GuardStatus::Joined && has_indexed_load(mem, addr)) {
+          out.joined.push_back(addr);
         } else if (status == GuardStatus::Incomplete && has_indexed_load(mem, addr)) {
           out.unresolved.push_back(addr);
         } else if (has_indexed_load(mem, addr) && has_lis(mem, addr)) {
@@ -377,7 +558,7 @@ SwitchScan scan_switch_tables(std::span<const uint8_t> image, uint32_t image_bas
       }
       std::vector<uint32_t> window;
       for (uint32_t a = guard->window_start; a < addr; a += 4)
-        if (a != guard->branch_addr) window.push_back(*mem.read(a, 4));
+        if (a != guard->branch_addr && a != guard->skip_addr) window.push_back(*mem.read(a, 4));
 
       SwitchTable t;
       t.base = addr;
@@ -441,7 +622,12 @@ SwitchFit fit_switch_functions(std::span<const uint8_t> image, uint32_t image_ba
   }
 
   SwitchFit out;
-  std::vector<std::pair<SwitchTable, FunctionRange>> leaf;  // tables waiting for range validation
+  struct Leaf {
+    SwitchTable table;
+    FunctionRange range;
+    std::optional<FunctionRange> before;  // the bl-target function right before it that jumps into it
+  };
+  std::vector<Leaf> leaf;  // tables waiting for range validation
   for (auto& t : tables) {
     const uint32_t lo = *std::min_element(t.labels.begin(), t.labels.end());
     const uint32_t hi = *std::max_element(t.labels.begin(), t.labels.end());
@@ -466,20 +652,77 @@ SwitchFit fit_switch_functions(std::span<const uint8_t> image, uint32_t image_ba
     if (bl_below != bl_targets.begin() && *std::prev(bl_below) >= start) start = *std::prev(bl_below);
     uint32_t end = gap_hi;
     if (auto bl_above = bl_targets.upper_bound(hi); bl_above != bl_targets.end() && *bl_above < end) end = *bl_above;
+    // Padding separates functions: a zero word whose last non-zero predecessor is an unconditional
+    // branch, with no forward branch from the code before it reaching past it. The first one after
+    // the last case ends the function; the last one below the table moves the start up, unless code
+    // after it branches back to before it (then it is not a boundary). What lies beyond is another
+    // (pointer-only) function, not code of this one.
+    {
+      uint32_t reach = 0;  // furthest forward non-link branch target seen so far
+      std::optional<uint32_t> last;  // last non-zero word
+      std::vector<uint32_t> below;  // boundary candidates below the table
+      for (uint32_t a = gap_lo; a < end; a += 4) {
+        auto w = mem.read(a, 4);
+        if (!w) break;
+        if (*w != 0) {
+          if (auto tg = relative_target(*w, a); tg && !(*w & 1) && *tg > a) reach = std::max(reach, *tg);
+          last = *w;
+          continue;
+        }
+        if (!last || !is_unconditional(*last) || reach > a) continue;
+        if (a < t.base) {
+          if (a >= start) below.push_back(a);
+        } else if (a > std::max(hi, t.base)) {
+          end = a;
+          break;
+        }
+      }
+      for (auto p = below.rbegin(); p != below.rend(); ++p) {
+        bool back = false;  // a branch from [p + 4, end) to [start, p]
+        for (uint32_t a = *p + 4; a < end && !back; a += 4) {
+          auto w = mem.read(a, 4);
+          if (!w) break;
+          auto tg = relative_target(*w, a);
+          back = tg && !(*w & 1) && *tg >= start && *tg <= *p;
+        }
+        if (!back) {
+          start = *p + 4;
+          break;
+        }
+      }
+      while (start < t.base && mem.read(start, 4).value_or(1) == 0) start += 4;
+    }
     while (end > hi + 4 && mem.read(end - 4, 4).value_or(1) == 0) end -= 4;  // trailing padding
     if (lo < start || hi >= end || t.base < start) {
       out.dropped.push_back(t.base);
       continue;
     }
-    leaf.emplace_back(std::move(t), FunctionRange{start, end - start, false});
+    // XenonRecomp analyses each bl target itself and follows a forward `b` (a tail jump) into the next function:
+    // the bl-target function right below the range would swallow its start, switch included. Bound it explicitly
+    // when it ends with an unconditional branch just before the range and branches forward into the range.
+    std::optional<FunctionRange> before;
+    if (auto it = bl_targets.lower_bound(start); it != bl_targets.begin() && *std::prev(it) >= gap_lo) {
+      const uint32_t p = *std::prev(it);
+      bool clean = p < start && is_unconditional(mem.read(start - 4, 4).value_or(0));
+      bool jumps_in = false;
+      for (uint32_t a = p; clean && a < start; a += 4) {
+        const uint32_t w = mem.read(a, 4).value_or(0);
+        clean = w != 0;
+        if (auto tg = relative_target(w, a); tg && !(w & 1) && *tg >= start && *tg < end) jumps_in = true;
+      }
+      if (clean && jumps_in) before = FunctionRange{p, start - p, false};
+    }
+    leaf.push_back({std::move(t), FunctionRange{start, end - start, false}, before});
   }
 
   // Validate each distinct derived range: it must not overlap another derived range or a
   // hand-written one, and nothing outside it may call or branch into its middle (that would mean
   // it swallowed another function or a shared tail).
   std::vector<FunctionRange> ranges;
-  for (const auto& [t, f] : leaf)
-    if (std::find(ranges.begin(), ranges.end(), f) == ranges.end()) ranges.push_back(f);
+  for (const auto& l : leaf) {
+    if (std::find(ranges.begin(), ranges.end(), l.range) == ranges.end()) ranges.push_back(l.range);
+    if (l.before && std::find(ranges.begin(), ranges.end(), *l.before) == ranges.end()) ranges.push_back(*l.before);
+  }
   auto overlaps = [](const FunctionRange& a, const FunctionRange& b) {
     return uint64_t{a.start} < uint64_t{b.start} + b.size && uint64_t{b.start} < uint64_t{a.start} + a.size;
   };
@@ -493,19 +736,303 @@ SwitchFit fit_switch_functions(std::span<const uint8_t> image, uint32_t image_ba
       const auto [src, call] = it->second;
       ok = !call && src >= f.start && src < end;
     }
-    if (ok)
-      out.functions.push_back(f);
-    else
-      bad.push_back(f);
+    if (!ok) bad.push_back(f);
   }
-  for (auto& [t, f] : leaf) {
-    if (std::find(bad.begin(), bad.end(), f) != bad.end())
-      out.dropped.push_back(t.base);
-    else
-      out.tables.push_back(std::move(t));
+  // A table is kept only if its range and the range bounding the function before it are both good; only the ranges
+  // of kept tables are emitted.
+  auto emit = [&](const FunctionRange& f) {
+    if (std::find(out.functions.begin(), out.functions.end(), f) == out.functions.end()) out.functions.push_back(f);
+  };
+  for (auto& l : leaf) {
+    auto is_bad = [&](const FunctionRange& f) { return std::find(bad.begin(), bad.end(), f) != bad.end(); };
+    if (is_bad(l.range) || (l.before && is_bad(*l.before))) {
+      out.dropped.push_back(l.table.base);
+      continue;
+    }
+    emit(l.range);
+    if (l.before) emit(*l.before);
+    out.tables.push_back(std::move(l.table));
   }
+  std::sort(out.functions.begin(), out.functions.end(),
+            [](const FunctionRange& a, const FunctionRange& b) { return a.start < b.start; });
   out.dropped_functions = std::move(bad);
   return out;
+}
+
+namespace {
+
+// Unsigned upper bound of one register at an instruction, plus which CR fields hold
+// `cmplwi crN, reg, imm` results for the register's current value.
+struct BoundState {
+  enum Kind : uint8_t { Unreached, Known, Unknown };
+  Kind kind = Unreached;
+  uint32_t max = 0;
+  std::array<int32_t, 8> cr{-1, -1, -1, -1, -1, -1, -1, -1};
+
+  void forget() {  // the register (or what the CR facts describe) may have changed
+    kind = Unknown;
+    cr.fill(-1);
+  }
+  // Merges `o` in; true if this state changed.
+  bool merge(const BoundState& o) {
+    if (o.kind == Unreached) return false;
+    if (kind == Unreached) {
+      *this = o;
+      return true;
+    }
+    BoundState n = *this;
+    if (n.kind == Known && o.kind == Known)
+      n.max = std::max(n.max, o.max);
+    else
+      n.kind = Unknown;
+    if (n.kind == Unknown) n.max = 0;
+    for (size_t k = 0; k < 8; ++k)
+      if (n.cr[k] != o.cr[k]) n.cr[k] = -1;
+    const bool changed = n.kind != kind || n.max != max || n.cr != cr;
+    *this = n;
+    return changed;
+  }
+  // The register is <= the compared immediate (the guard's "in range" edge for CR bit `bi`).
+  BoundState refined(uint32_t bi) const {
+    BoundState s = *this;
+    const int32_t m = cr[bi >> 2];
+    if (m < 0) return s;
+    if (s.kind == Known)
+      s.max = std::min(s.max, static_cast<uint32_t>(m));
+    else
+      s.max = static_cast<uint32_t>(m);
+    s.kind = Known;
+    return s;
+  }
+};
+
+// True if the instruction cannot write any CR field (compares are handled separately).
+bool cr_untouched(uint32_t i) {
+  switch (op(i)) {
+    case 7: case 8: case 12: case 14: case 15: case 24: case 25: case 26: case 27:
+    case 58: case 62:
+      return true;
+    case 20: case 21: case 23: case 30:
+      return !(i & 1);
+    case 31:
+      return !(i & 1) && xo(i) != 144 && xo(i) != 512;  // mtcrf, mcrxr
+    default:
+      return op(i) >= 32 && op(i) <= 55;  // integer/FP loads and stores
+  }
+}
+
+bool is_call(uint32_t i) {
+  return (i & 1) && (op(i) == 18 || op(i) == 16 || (op(i) == 19 && (xo(i) == 16 || xo(i) == 528)));
+}
+
+bool has_indexed_load_or_lis(const Memory& mem, uint32_t addr) {
+  for (int k = 1; k <= kMaxWindow; ++k) {
+    auto w = mem.read(addr - 4u * static_cast<uint32_t>(k), 4);
+    if (!w || is_branch(*w)) return false;
+    if (op(*w) == 31 && (xo(*w) == 23 || xo(*w) == 87 || xo(*w) == 279)) return true;
+    if (op(*w) == 15 && ra(*w) == 0) return true;
+  }
+  return false;
+}
+
+struct FunctionFlow {
+  const Memory& mem;
+  uint32_t start, end;                                  // [start, end)
+  const std::map<uint32_t, std::vector<uint32_t>>& tables;  // bctr address -> labels
+  const std::set<uint32_t>& entries;                    // interior addresses reachable from outside
+
+  // In-state of every instruction for register `reg`, or nullopt if the function's control flow
+  // cannot be followed. `site`/`site_labels`: the jump being resolved and its assumed targets.
+  std::optional<std::vector<BoundState>> run(uint32_t reg, uint32_t site, std::span<const uint32_t> site_labels) const {
+    const size_t n = (end - start) / 4;
+    std::vector<BoundState> in(n);
+    std::vector<uint32_t> work;
+    auto push = [&](uint32_t a, const BoundState& s) {
+      if (a < start || a >= end || (a & 3)) return;
+      if (in[(a - start) / 4].merge(s)) work.push_back(a);
+    };
+    BoundState unknown;
+    unknown.forget();
+    push(start, unknown);
+    for (uint32_t e : entries) push(e, unknown);
+
+    while (!work.empty()) {
+      const uint32_t a = work.back();
+      work.pop_back();
+      const uint32_t i = mem.read(a, 4).value_or(0);
+      BoundState s = in[(a - start) / 4];
+      if (is_call(i)) {  // the callee may change anything
+        s.forget();
+        push(a + 4, s);
+        continue;
+      }
+      if (op(i) == 18) {
+        if (i & 2) return std::nullopt;  // absolute branch
+        push(*relative_target(i, a), s);   // outside the function: tail call, no edge
+        continue;
+      }
+      const uint32_t bo = rd(i), bi = ra(i);
+      const bool gt = (bi & 3) == 1;
+      const bool if_set = (bo & 0x1C) == 0x0C, if_clear = (bo & 0x1C) == 0x04;
+      if (op(i) == 16) {
+        if (i & 2) return std::nullopt;
+        push(*relative_target(i, a), gt && if_clear ? s.refined(bi) : s);
+        if (!always(i)) push(a + 4, gt && if_set ? s.refined(bi) : s);
+        continue;
+      }
+      if (op(i) == 19 && xo(i) == 16) {  // bclr: return, or fall through
+        if (!always(i)) push(a + 4, gt && if_set ? s.refined(bi) : s);
+        continue;
+      }
+      if (op(i) == 19 && xo(i) == 528) {  // bcctr
+        if (!always(i)) return std::nullopt;
+        if (a == site) {
+          for (uint32_t l : site_labels) push(l, s);
+        } else if (auto t = tables.find(a); t != tables.end()) {
+          for (uint32_t l : t->second) push(l, s);
+        } else if (has_indexed_load_or_lis(mem, a)) {
+          return std::nullopt;  // unresolved jump: its targets could be anywhere in the function
+        }  // else: tail call through a pointer
+        continue;
+      }
+      // Straight-line instruction.
+      if (op(i) == 10 && !((i >> 21) & 1)) {
+        s.cr[(i >> 23) & 7] = ra(i) == reg ? static_cast<int32_t>(uimm(i)) : -1;
+      } else if (op(i) == 10 || op(i) == 11 || (op(i) == 31 && (xo(i) == 0 || xo(i) == 32))) {
+        s.cr[(i >> 23) & 7] = -1;
+      } else if (!cr_untouched(i)) {
+        s.cr.fill(-1);
+      }
+      auto w = op(i) == 31 && xo(i) == 467 ? std::optional<uint32_t>(0u) : gpr_written(i);  // mtspr: no GPR
+      if (!w || (*w & (1u << reg))) s.forget();
+      push(a + 4, s);
+    }
+    return in;
+  }
+};
+
+}  // namespace
+
+std::vector<SwitchTable> resolve_dominated_switches(std::span<const uint8_t> image, uint32_t image_base,
+                                                    std::span<const std::pair<uint32_t, uint32_t>> code,
+                                                    std::span<const FunctionRange> pdata,
+                                                    std::span<const SwitchTable> known,
+                                                    std::span<const uint32_t> sites,
+                                                    std::span<const uint32_t> extra_entries) {
+  const Memory mem(image, image_base);
+  std::vector<SwitchTable> out;
+  if (sites.empty()) return out;
+
+  // Every relative branch: target -> (source, link). Known tables keyed by their bctr (a
+  // XenonAnalyse table's base is a few instructions before it).
+  std::multimap<uint32_t, std::pair<uint32_t, bool>> branches;
+  for (auto [s, size] : code)
+    for (uint32_t a = (s + 3) & ~3u; a + 4 <= s + size; a += 4) {
+      auto w = mem.read(a, 4);
+      if (!w) break;
+      if (auto t = relative_target(*w, a)) branches.emplace(*t, std::make_pair(a, (*w & 1) != 0));
+    }
+  std::map<uint32_t, std::vector<uint32_t>> tables;
+  for (const auto& t : known)
+    for (int k = 0; k < kMaxWindow; ++k) {
+      const uint32_t a = t.base + 4u * static_cast<uint32_t>(k);
+      if (mem.read(a, 4) == kBctr) {
+        tables[a] = t.labels;
+        break;
+      }
+    }
+
+  for (uint32_t site : sites) {
+    auto f = std::upper_bound(pdata.begin(), pdata.end(), site,
+                              [](uint32_t a, const FunctionRange& r) { return a < r.start; });
+    if (f == pdata.begin()) continue;
+    --f;
+    if (site >= f->start + f->size) continue;
+    const uint32_t start = f->start, end = f->start + f->size;
+
+    // Interior entries: branches from outside, any call, labels of tables outside the function or of
+    // dropped tables.
+    std::set<uint32_t> entries;
+    for (uint32_t e : extra_entries)
+      if (e > start && e < end) entries.insert(e);
+    for (auto it = branches.upper_bound(start); it != branches.end() && it->first < end; ++it) {
+      const auto [src, link] = it->second;
+      if (link || src < start || src >= end) entries.insert(it->first);
+    }
+    std::set<uint32_t> labels;  // labels of known tables (block starts for the window)
+    for (const auto& [at, ls] : tables)
+      for (uint32_t l : ls) {
+        labels.insert(l);
+        if ((at < start || at >= end) && l > start && l < end) entries.insert(l);
+      }
+
+    // The site's straight-line block: back to a branch (exclusive) or a block start (inclusive).
+    uint32_t wstart = site;
+    for (int k = 1; k <= kMaxWindow; ++k) {
+      const uint32_t a = site - 4u * static_cast<uint32_t>(k);
+      if (a < start) break;
+      auto w = mem.read(a, 4);
+      if (!w || is_branch(*w)) break;
+      wstart = a;
+      if (a == start || branches.contains(a) || labels.contains(a)) break;
+    }
+    std::vector<uint32_t> window;
+    for (uint32_t a = wstart; a < site; a += 4) window.push_back(*mem.read(a, 4));
+
+    // The index: the only register that makes the jump target computable.
+    std::optional<uint32_t> index;
+    bool ambiguous = false;
+    for (uint32_t r = 0; r < 32; ++r)
+      if (evaluate(mem, window, r, 0, 0)) {
+        ambiguous = ambiguous || index.has_value();
+        index = r;
+      }
+    if (!index || ambiguous) continue;
+
+    const FunctionFlow flow{mem, start, end, tables, entries};
+    auto first = flow.run(*index, site, {});
+    if (!first) continue;
+    const BoundState& at = (*first)[(site - start) / 4];
+    if (at.kind != BoundState::Known || at.max >= kMaxCases) continue;
+
+    SwitchTable t;
+    t.base = site;
+    t.r = *index;
+    bool ok = true;
+    for (uint32_t v = 0; v <= at.max && ok; ++v) {
+      auto target = evaluate(mem, window, *index, 0, v);
+      ok = target && (*target & 3) == 0 && *target >= start && *target < end;
+      if (ok) t.labels.push_back(*target);
+    }
+    if (!ok) continue;
+    // The bound must survive the new table's own edges (a case may change the index and loop back).
+    auto second = flow.run(*index, site, t.labels);
+    if (!second) continue;
+    const BoundState& again = (*second)[(site - start) / 4];
+    if (again.kind != BoundState::Known || again.max > at.max) continue;
+    out.push_back(std::move(t));
+  }
+  return out;
+}
+
+size_t count_relative_tables(std::span<const uint8_t> image, uint32_t image_base, std::span<const SwitchTable> tables) {
+  const Memory mem(image, image_base);
+  size_t n = 0;
+  for (const auto& t : tables) {
+    uint32_t bctr = 0;
+    for (int k = 0; k < kMaxWindow && !bctr; ++k)
+      if (mem.read(t.base + 4u * static_cast<uint32_t>(k), 4) == kBctr) bctr = t.base + 4u * static_cast<uint32_t>(k);
+    if (!bctr) continue;
+    for (int k = 1; k <= kMaxWindow; ++k) {
+      auto w = mem.read(bctr - 4u * static_cast<uint32_t>(k), 4);
+      if (!w || is_unconditional(*w)) break;
+      if (op(*w) == 31 && (xo(*w) == 87 || xo(*w) == 279)) {
+        ++n;
+        break;
+      }
+    }
+  }
+  return n;
 }
 
 std::string format_switch_tables(std::span<const SwitchTable> tables) {

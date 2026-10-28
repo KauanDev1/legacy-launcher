@@ -29,7 +29,6 @@ Result<Toolchain> resolve_toolchain(const std::filesystem::path& resources);
 
 bool has_bundled_toolchain(const std::filesystem::path& resources);
 
-// Package manager commands that install the system toolchain (pacman, apt, dnf).
 std::string_view system_toolchain_hint();
 
 }  // namespace lr::pipeline
