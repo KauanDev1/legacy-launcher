@@ -249,6 +249,6 @@ contagens. Nada disso vai para o `recomp.toml`.
 | `0x82925168` | conversão por cópia direta | chama `memcpy` (`0x828AEBB0`); vigia: 874 escritas não nulas na textura de 128×128 |
 | `0x82925430` → `0x82929C58` | conversão por ponto flutuante | perfil de `0x82929C58`: 55 ops de ponto flutuante; vigia: 8192 escritas, todas zero, na outra textura |
 | `0x828AEBB0` | `memcpy` da CRT | 1 550 chamadas; perfil: `ld`/`std`, `dcbt`/`dcbtst` |
-| `0x826529A0` ← `0x82205DC8` | o jogo libera a textura carregada | vigia: `host free` das duas alocações |
+| `0x826529A0` ← `0x82205DC8` | o jogo lê a textura carregada **pela vista `0xC0`** (ela foi alocada e preenchida pela `0xE0`) e depois a libera | vigia `:rw`: 24 576 e 64 630 leituras na vista `0xC0`, nenhuma na `0xE0`; `host free` das duas alocações. Motivo do espelhamento das vistas (ADR 0005 M14) |
 | `0x826522B0` ← `0x822EB800` ← `0x822EB770` | o jogo cria a textura `k_8` final nas mesmas páginas e a preenche | vigia: alocações `0xFEC74000+0x8000` e `0xFD1E7000+0xB000`, depois 8192 e 24 320 escritas, todas zero |
 | `0x82446808` → `0x82439308` | aloca a região de 2 MiB em `0xBFDF0000` (buffer de comandos do D3D) | vigia: `host zero`; o vertex shader `CB7E…` chega por `IM_LOAD_IMMEDIATE` dentro dela |

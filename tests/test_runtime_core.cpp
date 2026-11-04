@@ -75,6 +75,41 @@ TEST_CASE("GuestMemory::reserve rejects zero size", "[unit]") {
   CHECK_FALSE(GuestMemory::reserve(0).ok());
 }
 
+TEST_CASE("the physical views alias one physical memory", "[unit]") {
+  // Task 22: the game fills a texture through the 0xE0 view and reads it back through 0xC0 (0x826529A0).
+  auto r = GuestMemory::reserve(0x1'0000'0000ull);
+  REQUIRE(r.ok());
+  GuestMemory mem = std::move(r.value());
+  // Phys p is at 0xA0000000 + p, 0xC0000000 + p and 0xE0000000 + p - 0x1000.
+  const uint32_t phys = 0x1EC6D000;
+  *mem.translate<uint32_t>(0xE0000000u + phys - 0x1000 + 8) = 0x11223344;
+  CHECK(*mem.translate<uint32_t>(0xC0000000u + phys + 8) == 0x11223344);
+  CHECK(*mem.translate<uint32_t>(0xA0000000u + phys + 8) == 0x11223344);
+  *mem.translate<uint32_t>(0xA0000000u + phys + 0x10) = 0x55667788;
+  CHECK(*mem.translate<uint32_t>(0xE0000000u + phys - 0x1000 + 0x10) == 0x55667788);
+  // Physical 0..0xFFF is reachable through 0xA0 and 0xC0 only.
+  *mem.translate<uint32_t>(0xA0000000u) = 9;
+  CHECK(*mem.translate<uint32_t>(0xC0000000u) == 9);
+  // Zeroing through one view (whole pages and partial edges) zeroes every view.
+  *mem.translate<uint32_t>(0xC0000000u + phys + 0x2000) = 1;  // a second page
+  REQUIRE(mem.zero(0xE0000000u + phys - 0x1000, 0x3000).ok());
+  CHECK(*mem.translate<uint32_t>(0xC0000000u + phys + 8) == 0);
+  CHECK(*mem.translate<uint32_t>(0xA0000000u + phys + 0x10) == 0);
+  CHECK(*mem.translate<uint32_t>(0xA0000000u + phys + 0x2000) == 0);
+  *mem.translate<uint32_t>(0xC0000000u + phys + 8) = 3;  // writable again after the zeroing
+  CHECK(*mem.translate<uint32_t>(0xE0000000u + phys - 0x1000 + 8) == 3);
+  // Memory below the views does not alias.
+  *mem.translate<uint32_t>(0x1EC6D000) = 5;
+  CHECK(*mem.translate<uint32_t>(0x9EC6D000) == 0);
+}
+
+TEST_CASE("a reservation smaller than the guest space has no physical views", "[unit]") {
+  auto r = GuestMemory::reserve(0x1000'0000ull);
+  REQUIRE(r.ok());
+  *r.value().translate<uint32_t>(0x100) = 1;
+  CHECK(*r.value().translate<uint32_t>(0x100) == 1);
+}
+
 #include <sys/mman.h>
 
 #include <csignal>

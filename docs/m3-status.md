@@ -17,15 +17,17 @@ três causas independentes:
 
 | | Problema | Situação |
 |---|---|---|
-| a | As duas texturas de fonte (`k_8`, 190×170 e 128×128) ficam zeradas na memória do convidado; nenhuma cópia de EDRAM nem shader com memexport escreve nelas | em investigação: o jogo **escreve** nelas, mas só zeros (ver "Problema a" abaixo) |
+| a | As duas texturas de fonte (`k_8`, 190×170 e 128×128) ficam zeradas na memória do convidado; nenhuma cópia de EDRAM nem shader com memexport escreve nelas | **causa achada**: faltava o espelhamento entre as vistas físicas; corrigido com `memfd` (ADR 0005 M14). Conferência na ISO em andamento (ver "Problema a") |
 | b | O vertex shader `CB7E755E3A72E353` (as duas faixas de triângulos) chega quase todo zerado | em investigação: vem por `IM_LOAD_IMMEDIATE` de dentro do buffer de comandos (ver "Problema b") |
 | c | O vertex shader `E91536F60A69ABF3` (logo e botões) gera coordenadas de textura erradas com entradas corretas (dados de vértice e constantes c10/c11 conferidos) | próximo passo |
 
 O que já foi descartado:
 - a hipótese de `dcbz`/`dcbz128` zerando a linha errada (a semântica do Xenon está fixada por teste, `67f20e8`);
 - a hipótese de que ninguém escreve nas texturas de fonte (a vigia mostra o jogo escrevendo nelas, só que zeros);
+- "aliasing entre as vistas físicas" estava na lista de descartados por engano: a conferência anterior olhava só
+  o conteúdo final de B, não o caminho de leitura da textura carregada;
 - retângulo de resolve, chaves de render target, visibilidade dos descritores, tamanho e deslocamento do fetch de
-  vértice, aliasing entre as vistas físicas, arquivos faltando e importações falhando.
+  vértice, arquivos faltando e importações falhando.
 
 Ferramentas novas para a investigação (código nosso, commitado):
 - `tools/frame_stats.py`: estatísticas do quadro (cores distintas, luminância média, fração de bordas) sem abrir a
@@ -49,8 +51,14 @@ mesmas em toda rodada), até o swap 300. Linha do tempo, igual para as duas:
 3. o jogo cria a textura B (`0x826522B0` ← `0x822EB800`), que recebe as mesmas páginas (alocação de cima para baixo),
    e a preenche inteira: 8192 e 24 320 escritas, **todas zero**. É B que a GPU amostra.
 
-Ou seja, ninguém deixa de escrever: a conversão A → B produz zeros. O próximo passo é ver quem lê A antes da
-liberação (`:rw`).
+Com `:rw` na própria vista `0xE0` de A, ninguém lê A entre o preenchimento e a liberação. Com `:rw` nas vistas
+`0xA0` e `0xC0` das mesmas páginas físicas, aparece o leitor: `0x826529A0` (a mesma função que depois libera A) lê
+A inteira **pela vista `0xC0`** (24 576 e 64 630 leituras), e nada pela `0xA0`. O jogo preenche pela `0xE0` e lê pela
+`0xC0`; no console as vistas são a mesma memória, mas o runtime não espelhava as vistas (decisão do M2, com o `memfd`
+previsto como contingência), então a leitura via zeros e a conversão gravava zeros em B.
+
+**Causa raiz e correção:** `GuestMemory::reserve` passou a mapear um `memfd` de 512 MiB nas três vistas (ADR 0005
+M14, teste `the physical views alias one physical memory`).
 
 ### Problema b: vertex shader `CB7E…`
 

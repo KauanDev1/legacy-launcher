@@ -315,3 +315,18 @@ Formato: o quê, por quê, custo se estiver errada.
   VS) e calcula o quarto canto com os atributos já transformados, como o Xenia; os outros itens são lacunas do plano.
 - Custo se errado: um dispositivo sem `geometryShader` não desenha retângulos (o lavapipe e as GPUs de desktop têm);
   se o jogo depender de `PA_SC_AA_MASK` ou dos filtros por instrução, a imagem difere até que sejam feitos.
+
+### M14. Espelhamento das vistas físicas com memfd (Tarefa 22)
+- O quê: a reserva de 4 GiB do convidado (`GuestMemory::reserve`) mapeia um único armazenamento físico de 512 MiB (um
+  `memfd`) nas três vistas, como no console: o endereço físico `p` fica em `0xA0000000 + p`, `0xC0000000 + p` e
+  `0xE0000000 + p - 0x1000` (a vista `0xE0` começa no físico `0x1000`, como no Xenia). Zerar páginas inteiras de uma
+  vista abre um buraco no `memfd` (`fallocate` com `PUNCH_HOLE`), que vale para todas as vistas e funciona com
+  qualquer proteção. O `PhysicalHeap` continua entregando cada alocação numa vista só; só a memória por trás passou a
+  ser compartilhada.
+- Por quê: a spec do M2 deixou o espelhamento de fora e previu o `memfd` como contingência "quando acontecer"; a spec
+  do M3 repete isso. Aconteceu: o jogo preenche a textura carregada pela vista `0xE0` e o código que a converte
+  (`0x826529A0`) lê a mesma memória pela vista `0xC0` (vigia `--watch-guest ...:rw`: 24 576 e 64 630 leituras na vista
+  `0xC0`, nenhuma na `0xE0`). Sem espelhamento essas leituras viam zeros, e as texturas de fonte saíam zeradas.
+- Custo se errado: a memória física passa a ser compartilhada entre processos filhos depois de um `fork` (os testes
+  que fazem `fork` não escrevem nas vistas físicas); `MmQueryAllocationSize`/`MmQueryAddressProtect` por uma vista que
+  não é a da alocação continuam respondendo 0, como antes.
