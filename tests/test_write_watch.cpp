@@ -27,6 +27,14 @@ TEST_CASE("parse_watch_spec reads <addr>:<len> in hex or decimal", "[unit]") {
   CHECK(b.value().addr == 4096u);
   CHECK(b.value().len == 16u);
   CHECK(parse_watch_spec("0xFFFFFFF0:0x10").ok());  // ends exactly at 2^32
+  CHECK_FALSE(b.value().reads);
+  auto c = parse_watch_spec("0x2000:0x10:rw");
+  REQUIRE(c.ok());
+  CHECK(c.value().addr == 0x2000u);
+  CHECK(c.value().len == 0x10u);
+  CHECK(c.value().reads);
+  CHECK_FALSE(parse_watch_spec("0x2000:0x10:r").ok());
+  CHECK_FALSE(parse_watch_spec("0x2000:rw").ok());
   for (const char* bad : {"", "0x10", ":4", "0x10:", "0x10:0", "0xFFFFFFFF:2", "zz:1", "0x10:-1", "0x:4", "1:2:3"})
     CHECK_FALSE(parse_watch_spec(bad).ok());
 }
@@ -137,4 +145,40 @@ TEST_CASE("the write watch logs writes into a watched range and lets them throug
         std::string::npos);
   CHECK(out.find("[watch]   site 0 writes=4 nonzero_stores=3 fn 0x82001000\n") != std::string::npos);
   CHECK(out.find("[watch] summary range 1 0x00012FF0+0x20 writes=") != std::string::npos);
+}
+
+namespace {
+
+[[gnu::noinline]] uint32_t guest_load(const uint8_t* p) { return *reinterpret_cast<const volatile uint32_t*>(p); }
+
+}  // namespace
+
+TEST_CASE("a :rw watch also logs reads and lets them through (forked child)", "[unit]") {
+  auto r = GuestMemory::reserve(0x100000);
+  REQUIRE(r.ok());
+  GuestMemory& mem = r.value();
+  const auto [status, out] = run_forked([&]() -> int {
+    if (!install_fault_handlers(mem).ok()) return 90;
+    uint8_t* const b = mem.base();
+    b[0x20010] = 0x5A;  // before the watch: data to read back
+    const WatchRange ranges[] = {{0x20000, 0x100, true}, {0x30000, 0x100, false}};
+    HostCodeMap code({{reinterpret_cast<uintptr_t>(&guest_load), 0x82002000}});
+    if (!install_write_watch(mem, ranges, std::move(code)).ok()) return 91;
+    if (guest_load(b + 0x20010) != 0x5A) return 92;  // read through the watch
+    if (guest_load(b + 0x20010) != 0x5A) return 93;  // same site: counted, not logged again
+    if (guest_load(b + 0x30000) != 0) return 94;     // a write-only watch: reads never fault
+    guest_store(b + 0x20020, 7);                      // writes still work in a :rw range
+    if (guest_load(b + 0x20020) != 7) return 95;
+    if (write_watch_count(0) != 1) return 96;  // reads are not writes
+    write_watch_report();
+    return 0;
+  });
+  INFO(out);
+  CHECK(status == 0);
+  CHECK(out.find("[watch] read 0x00020010 range 0 n=1 tid=") != std::string::npos);
+  CHECK(out.find(" fn 0x82002000 pc=0x") != std::string::npos);
+  CHECK(out.find("[watch] read 0x00030000") == std::string::npos);
+  CHECK(out.find("[watch] summary range 0 0x00020000+0x100 writes=1 reads=3 nonzero_stores=1 nonzero_bytes=2\n") !=
+        std::string::npos);
+  CHECK(out.find("[watch]   site 0 reads=3 nonzero_stores=0 fn 0x82002000\n") != std::string::npos);
 }

@@ -236,3 +236,19 @@ da ferramenta sobre a imagem carregada (Tarefa 7); revisão no Ghidra não feita
 
 Com os patches, a recompilação termina sem nenhuma linha de aviso além do contador (`unrecognized
 instructions: 0`).
+
+## Texturas de fonte e carregamento de imagens (M3, Tarefa 22)
+
+Achados com a vigia de escrita (`--watch-guest`, `docs/development.md`) e `tools/func_profile.py`; só endereços e
+contagens. Nada disso vai para o `recomp.toml`.
+
+| Endereço | Papel provável | Evidência |
+|---|---|---|
+| `0x828F08D8` | carregador de imagem estilo D3DX: aloca a textura (via `0x82424F08` → `MmAllocatePhysicalMemoryEx`) e converte o formato | vigia: alocações `0xFD1B2000+0x40000` e `0xFEC6C000+0x10000`; perfil: 502 instruções, chama `0x828EB3F0` → `0x82927E08` |
+| `0x82927E08` | despacho da conversão de formato | perfil: 106 instruções, 13 chamadas diferentes (uma por formato) |
+| `0x82925168` | conversão por cópia direta | chama `memcpy` (`0x828AEBB0`); vigia: 874 escritas não nulas na textura de 128×128 |
+| `0x82925430` → `0x82929C58` | conversão por ponto flutuante | perfil de `0x82929C58`: 55 ops de ponto flutuante; vigia: 8192 escritas, todas zero, na outra textura |
+| `0x828AEBB0` | `memcpy` da CRT | 1 550 chamadas; perfil: `ld`/`std`, `dcbt`/`dcbtst` |
+| `0x826529A0` ← `0x82205DC8` | o jogo libera a textura carregada | vigia: `host free` das duas alocações |
+| `0x826522B0` ← `0x822EB800` ← `0x822EB770` | o jogo cria a textura `k_8` final nas mesmas páginas e a preenche | vigia: alocações `0xFEC74000+0x8000` e `0xFD1E7000+0xB000`, depois 8192 e 24 320 escritas, todas zero |
+| `0x82446808` → `0x82439308` | aloca a região de 2 MiB em `0xBFDF0000` (buffer de comandos do D3D) | vigia: `host zero`; o vertex shader `CB7E…` chega por `IM_LOAD_IMMEDIATE` dentro dela |

@@ -17,20 +17,47 @@ três causas independentes:
 
 | | Problema | Situação |
 |---|---|---|
-| a | As duas texturas de fonte (`k_8`, 190×170 e 128×128) ficam zeradas na memória do convidado; nenhuma cópia de EDRAM nem shader com memexport escreve nelas | em investigação |
-| b | O vertex shader `CB7E755E3A72E353` (as duas faixas de triângulos) chega quase todo zerado | em investigação |
+| a | As duas texturas de fonte (`k_8`, 190×170 e 128×128) ficam zeradas na memória do convidado; nenhuma cópia de EDRAM nem shader com memexport escreve nelas | em investigação: o jogo **escreve** nelas, mas só zeros (ver "Problema a" abaixo) |
+| b | O vertex shader `CB7E755E3A72E353` (as duas faixas de triângulos) chega quase todo zerado | em investigação: vem por `IM_LOAD_IMMEDIATE` de dentro do buffer de comandos (ver "Problema b") |
 | c | O vertex shader `E91536F60A69ABF3` (logo e botões) gera coordenadas de textura erradas com entradas corretas (dados de vértice e constantes c10/c11 conferidos) | próximo passo |
 
 O que já foi descartado:
 - a hipótese de `dcbz`/`dcbz128` zerando a linha errada (a semântica do Xenon está fixada por teste, `67f20e8`);
+- a hipótese de que ninguém escreve nas texturas de fonte (a vigia mostra o jogo escrevendo nelas, só que zeros);
 - retângulo de resolve, chaves de render target, visibilidade dos descritores, tamanho e deslocamento do fetch de
   vértice, aliasing entre as vistas físicas, arquivos faltando e importações falhando.
 
 Ferramentas novas para a investigação (código nosso, commitado):
 - `tools/frame_stats.py`: estatísticas do quadro (cores distintas, luminância média, fração de bordas) sem abrir a
   imagem;
-- vigia de escrita no convidado (`src/runtime/write_watch.*`): mostra quem escreve num intervalo de memória,
-  separando escritas de zero das de dados e registrando alocações e liberações físicas.
+- vigia de escrita no convidado (`src/runtime/write_watch.*`, `--watch-guest <end>:<tam>[:rw]`): mostra quem escreve
+  (e, com `:rw`, quem lê) num intervalo de memória, separando escritas de zero das de dados e registrando alocações e
+  liberações físicas; o resumo sai no relatório de saída;
+- `shader load ... at=0x...` no trace da GPU: o endereço convidado de cada microcódigo;
+- `tools/func_profile.py`: perfil de uma função do convidado por classe de instrução (cargas, escritas, cache, ponto
+  flutuante, desvios, alvos de `bl`), sem imprimir o código.
+
+### Problema a: texturas de fonte (achados da vigia)
+
+Rodadas com `--watch-guest` nas vistas E0 das duas texturas (`0xFD1E7000+0x8000` e `0xFEC74000+0x4000`, as
+mesmas em toda rodada), até o swap 300. Linha do tempo, igual para as duas:
+1. o carregador de imagens `0x828F08D8` (estilo D3DX: aloca, despacha a conversão de formato em `0x82927E08`) aloca
+   uma textura A (`0xFD1B2000+0x40000` e `0xFEC6C000+0x10000`) e a preenche: a de 128×128 por cópia direta
+   (`0x82925168` → `memcpy` `0x828AEBB0`, 874 escritas não nulas na janela vigiada); a outra pelo caminho de ponto
+   flutuante `0x82925430` → `0x82929C58` (8192 escritas, todas zero na janela);
+2. o código do jogo libera A (`0x826529A0` ← `0x82205DC8`);
+3. o jogo cria a textura B (`0x826522B0` ← `0x822EB800`), que recebe as mesmas páginas (alocação de cima para baixo),
+   e a preenche inteira: 8192 e 24 320 escritas, **todas zero**. É B que a GPU amostra.
+
+Ou seja, ninguém deixa de escrever: a conversão A → B produz zeros. O próximo passo é ver quem lê A antes da
+liberação (`:rw`).
+
+### Problema b: vertex shader `CB7E…`
+
+O trace da GPU mostra que ele chega por `IM_LOAD_IMMEDIATE` (48 dwords, 45 de microcódigo), dentro de uma região de
+2 MiB em `0xBFDF0000` alocada por `0x82446808` → `0x82439308` (o buffer de comandos do D3D), logo depois de um
+`INVALIDATE_STATE`. O endereço muda a cada rodada (`0xBFFC9334`, `0xBFE854B4`), o hash não: o conteúdo é sempre o
+mesmo. Os 45 dwords cabem exatamente em 30 instruções de controle, sem nenhuma ALU nem fetch.
 
 ## Tarefas
 

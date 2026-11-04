@@ -12,8 +12,9 @@
 #include "common/result.h"
 #include "runtime/guest_memory.h"
 
-// Guest write watch (`--watch-guest <addr>:<len>`, a diagnostic): finds who writes a guest buffer, or shows that
-// nothing does. The 4 KiB host pages covering each watched range are made read-only. A write into one of them faults;
+// Guest write watch (`--watch-guest <addr>:<len>[:rw]`, a diagnostic): finds who writes a guest buffer, or shows
+// that nothing does; with ":rw" also who reads it (the pages are then inaccessible, and a read is let through the
+// same way as a write). The 4 KiB host pages covering each watched range are made read-only. A write into one of them faults;
 // the SIGSEGV handler (runtime/fault.h) asks write_watch_handle_segv first. For a watched page it counts the write
 // when it lands inside a watched range and logs it, makes the page writable, and sets the trap flag so the faulting
 // instruction runs once (single step); the SIGTRAP that follows makes the page read-only again. Any other fault stays
@@ -36,9 +37,11 @@ namespace lr::runtime {
 struct WatchRange {
   uint32_t addr = 0;
   uint32_t len = 0;
+  bool reads = false;  // ":rw": reads are logged too (the pages become inaccessible instead of read-only)
 };
 
-// "<addr>:<len>", each hex with 0x or decimal digits; len > 0 and the range must end at or below 2^32.
+// "<addr>:<len>[:rw]", each number hex with 0x or decimal digits; len > 0 and the range must end at or below 2^32.
+// With ":rw" the range's pages are PROT_NONE and reads are logged as well ("[watch] read ...").
 Result<WatchRange> parse_watch_spec(std::string_view spec);
 
 // Recompiled host code -> guest function. Entries are (host entry, guest entry); host code between one entry and
@@ -84,7 +87,8 @@ void write_watch_note_host_event(uint32_t addr, uint32_t len, const char* what);
 // writer of zeros shows nonzero_stores=0. For the exit report (main.cpp); no-op when nothing is watched.
 void write_watch_report();
 
-// Number of writes counted so far into watched range `index` (faults and host writes); 0 for an unknown index.
+// Number of writes counted so far into watched range `index` (faults and host writes, not reads); 0 for an unknown
+// index.
 uint64_t write_watch_count(size_t index);
 
 }  // namespace lr::runtime
