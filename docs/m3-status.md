@@ -9,16 +9,19 @@ de cada tarefa.
 Branch: `feat/m3` (não publicada). Todas as tarefas passaram por revisão independente antes de serem dadas como
 concluídas.
 
-## Onde estamos (2026-10-28)
+## Onde estamos (2026-11-04)
 
 O jogo real roda sem janela até 600 quadros. Os 11 shaders que ele carrega traduzem todos, e a camada de validação
-do Vulkan não acusa erro. **A imagem final ainda sai com uma cor só.** A Tarefa 22 (chegar à tela de título) investiga
-três causas independentes:
+do Vulkan não acusa erro. **A imagem final ainda está longe da tela de título**: com o espelhamento das vistas físicas
+(`563485e`), o quadro passou de 1 cor para 4 (`frame_stats` em N=300: `colors=4 mean_luminance=0.5913
+edge_fraction=0.0073`; em N=600: `colors=4 mean_luminance=0.5913 edge_fraction=0.0070`; antes, `colors=1
+mean_luminance=0.6697 edge_fraction=0.0000`). Os limites da Tarefa 22 são ≥ 64 cores e ≥ 2% de bordas. A Tarefa 22
+(chegar à tela de título) investigou três causas; a e b tinham a mesma raiz:
 
 | | Problema | Situação |
 |---|---|---|
-| a | As duas texturas de fonte (`k_8`, 190×170 e 128×128) ficam zeradas na memória do convidado; nenhuma cópia de EDRAM nem shader com memexport escreve nelas | **causa achada**: faltava o espelhamento entre as vistas físicas; corrigido com `memfd` (ADR 0005 M14). Conferência na ISO em andamento (ver "Problema a") |
-| b | O vertex shader `CB7E755E3A72E353` (as duas faixas de triângulos) chega quase todo zerado | em investigação: vem por `IM_LOAD_IMMEDIATE` de dentro do buffer de comandos (ver "Problema b") |
+| a | As duas texturas de fonte (`k_8`, 190×170 e 128×128) ficam zeradas na memória do convidado; nenhuma cópia de EDRAM nem shader com memexport escreve nelas | **resolvido** (`563485e`): faltava o espelhamento entre as vistas físicas (ADR 0005 M14). Na ISO, as texturas agora têm dados (2019 e 2773 bytes não nulos na janela vigiada, antes 0) |
+| b | O vertex shader `CB7E755E3A72E353` (as duas faixas de triângulos) chega quase todo zerado | **resolvido** pela mesma correção (`563485e`): o `CB7E…` some e o jogo carrega no lugar o `BF9066893FA79ADD` (também 45 dwords, agora com `vfetch`, `tfetch` e exportação de posição; contagens da desmontagem, sem lê-la) |
 | c | O vertex shader `E91536F60A69ABF3` (logo e botões) gera coordenadas de textura erradas com entradas corretas (dados de vértice e constantes c10/c11 conferidos) | próximo passo |
 
 O que já foi descartado:
@@ -66,6 +69,10 @@ O trace da GPU mostra que ele chega por `IM_LOAD_IMMEDIATE` (48 dwords, 45 de mi
 2 MiB em `0xBFDF0000` alocada por `0x82446808` → `0x82439308` (o buffer de comandos do D3D), logo depois de um
 `INVALIDATE_STATE`. O endereço muda a cada rodada (`0xBFFC9334`, `0xBFE854B4`), o hash não: o conteúdo é sempre o
 mesmo. Os 45 dwords cabem exatamente em 30 instruções de controle, sem nenhuma ALU nem fetch.
+
+Com o espelhamento das vistas físicas, o jogo passa a carregar `BF9066893FA79ADD` no mesmo lugar (mesmo tamanho), um
+shader de verdade: a cópia do microcódigo para o buffer de comandos lia a origem por outra vista, como no problema a.
+A causa comum que o controlador supôs existia, mas não era o `dcbz`: era a falta de espelhamento.
 
 ## Tarefas
 
