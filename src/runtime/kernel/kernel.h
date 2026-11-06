@@ -6,6 +6,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -135,6 +136,17 @@ class Kernel {
   // Kernel variable name -> guest address of its block (filled by resolve_variable_imports).
   std::map<std::string, uint32_t, std::less<>>& variable_blocks() { return variable_blocks_; }
 
+  // XMA decoder contexts handed out by XMACreateContext (runtime/kernel/exports/audio.cpp). take_xma_context
+  // removes `context` and returns true only when it was handed out and not taken since. Thread-safe.
+  void add_xma_context(uint32_t context) {
+    std::lock_guard lock(xma_mutex_);
+    xma_contexts_.insert(context);
+  }
+  bool take_xma_context(uint32_t context) {
+    std::lock_guard lock(xma_mutex_);
+    return xma_contexts_.erase(context) != 0;
+  }
+
  private:
   void on_commit(uint32_t addr, uint32_t size, bool committed, bool zero);
 
@@ -148,6 +160,8 @@ class Kernel {
   std::map<std::pair<std::string, uint16_t>, uint32_t> import_thunks_;
   std::mutex modules_mutex_;
   std::map<std::string, uint32_t, std::less<>> system_modules_;
+  std::mutex xma_mutex_;
+  std::set<uint32_t> xma_contexts_;
   runtime::PageHeap heap4k_;
   runtime::PageHeap heap64k_;
   runtime::PhysicalHeap physical_;

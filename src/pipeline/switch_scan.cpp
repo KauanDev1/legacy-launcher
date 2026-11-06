@@ -456,13 +456,17 @@ std::optional<SwitchTable> masked_table(const Memory& mem, uint32_t addr, uint32
 
 // Unguarded switch whose table sits right after the bctr (the compiler dropped the bound check, e.g. a switch on
 // an enum). The table then ends where code resumes: at the first case label or branch target after the bctr. The
-// index is the only register for which the block's straight-line code (the longest suffix that works) computes CTR
-// through an indexed load whose address moves with the index; the table must start at bctr + 4 (or after < 4 zero
-// bytes). Entries are read while they lie before that end; a zero-padding entry (or any entry whose label is not a
+// index is the only register for which the block's straight-line code (the longest suffix that works, never
+// crossing a branch target: a target is at most the window start) computes CTR through an indexed load whose
+// address moves with the index; the table must start at bctr + 4 (or after < 4 zero bytes). A branch target counts
+// as the end only if some branch to it comes from outside [bctr + 4, target): branch_targets also decodes the
+// table's own data words, and a data word that reads as a forward b/bc would otherwise cut the table short. Entries
+// are read while they lie before that end; a zero-padding entry (or any entry whose label is not a
 // 4-aligned address in the code range past the entries read so far) ends the table early. Only < 4 zero bytes may
 // remain between the last entry and the end, so every byte up to the first case is accounted for.
 std::optional<SwitchTable> inline_table(const Memory& mem, uint32_t addr, uint32_t start, uint32_t size,
                                         const Targets& targets) {
+  if (targets.contains(addr)) return std::nullopt;  // another path reaches the bctr with its own CTR
   std::vector<uint32_t> block;
   uint32_t first = addr;
   for (int k = 1; k <= kMaxWindow; ++k) {
@@ -470,6 +474,7 @@ std::optional<SwitchTable> inline_table(const Memory& mem, uint32_t addr, uint32
     auto w = mem.read(a, 4);
     if (!w || is_branch(*w) || a < start) break;
     first = a;
+    if (targets.contains(a)) break;  // other paths enter here: nothing above it is known
   }
   for (uint32_t a = first; a < addr; a += 4) block.push_back(*mem.read(a, 4));
 
@@ -498,7 +503,8 @@ std::optional<SwitchTable> inline_table(const Memory& mem, uint32_t addr, uint32
 
   const uint64_t code_end = uint64_t{start} + size;
   uint64_t end = code_end;
-  if (auto it = targets.upper_bound(addr); it != targets.end()) end = std::min<uint64_t>(end, it->first);
+  for (auto it = targets.upper_bound(addr); it != targets.end() && it->first < end; ++it)
+    if (it->second < addr + 4 || it->second >= it->first) end = it->first;  // not a forward branch from the table
   SwitchTable t;
   t.base = addr;
   t.r = *index;
@@ -705,10 +711,17 @@ SwitchFit fit_switch_functions(std::span<const uint8_t> image, uint32_t image_ba
       const uint32_t p = *std::prev(it);
       bool clean = p < start && is_unconditional(mem.read(start - 4, 4).value_or(0));
       bool jumps_in = false;
+      uint32_t reach = 0;  // furthest forward non-link branch target inside [p, start) so far
       for (uint32_t a = p; clean && a < start; a += 4) {
         const uint32_t w = mem.read(a, 4).value_or(0);
         clean = w != 0;
-        if (auto tg = relative_target(w, a); tg && !(w & 1) && *tg >= start && *tg < end) jumps_in = true;
+        if (auto tg = relative_target(w, a); tg && !(w & 1)) {
+          if (*tg >= start && *tg < end) jumps_in = true;
+          if (*tg > a && *tg < start) reach = std::max(reach, *tg);
+        }
+        // One function only: an earlier unconditional branch with no forward branch pending past it ends p there
+        // (discover_pointer_functions' end rule), and what follows is another function the bound would swallow.
+        if (a + 4 < start && is_unconditional(w) && reach <= a) clean = false;
       }
       if (clean && jumps_in) before = FunctionRange{p, start - p, false};
     }

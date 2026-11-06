@@ -872,6 +872,9 @@ namespace {
 std::pair<uint32_t, uint32_t> zeroed_span(const char* name, uint32_t addr, uint32_t n, uint64_t r3, uint64_t r4) {
   std::memset(guest_ptr(addr), 0xAB, n);
   PPCContext in{};
+  // r0 is nonzero, so a case whose rA field is 0 shows that it reads a literal 0, not r0 (0x100 + EA would zero a
+  // different block of the window).
+  in.r0.u64 = 0x100;
   in.r3.u64 = r3;
   in.r4.u64 = r4;
   run_case(case_address(name), in, guest_memory());

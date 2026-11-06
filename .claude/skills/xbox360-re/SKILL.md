@@ -65,6 +65,19 @@ the code between the `cmplwi`/`bgt` guard and the `bctr`. `work/logs/analyse.log
 dropped and unguarded sites; resolve them by hand in Ghidra (count the cases, check the table bounds)
 and record the result in `addresses.md`.
 
+## Who writes (or reads) a guest buffer
+
+- `legacyrecomp run -- --watch-guest <addr>:<len>[:rw]` (up to 16 ranges; `docs/development.md`) logs the guest
+  call chain of every new writer (and reader with `:rw`), physical alloc/free events, and an exit summary that
+  separates zero stores from data. Take the address from the GPU trace (`shader load ... at=0x...`) or the texture
+  fetch constant. The three physical views alias one memory (`0xA0000000 + phys`, `0xC0000000 + phys`,
+  `0xE0000000 + phys - 0x1000`), but a watch only traps accesses through the view it is armed on: arm one range
+  per view to catch a writer in one view and a reader in another.
+- `python3 -I tools/func_profile.py <image.bin> <addr> --mapping work/generated/ppc_func_mapping.cpp` profiles a
+  function by instruction class (copy loop vs fill vs float math) and lists its `bl` targets, without printing code.
+- Inlining: the host compiler inlines small guest callees, so a write attributed to function F may come from a
+  callee of F; check F's profile and its call targets before naming it.
+
 ## Iterating fast
 
 The dev build of XenonRecomp is a Debug build (minutes). For quick iterations build a Release copy

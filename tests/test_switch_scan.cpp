@@ -847,6 +847,26 @@ void inline_byte_switch(FakeImage& img, std::initializer_list<uint8_t> entries) 
   img.code(kBase + 0x2C, {kBlr, kBlr, kBlr, kBlr});
 }
 
+// Unguarded byte table whose offsets count from the first case, not from the table:
+//   blr | lwz r11, 0(r3); lis r12; addi r12, r12, table; lbzx r10, r12, r11; slwi r10, r10, 2;
+//   addi r10, r10, 0x30 - table; add r0, r10, r12; mtctr r0; bctr (0x24) | `pad` zero bytes from 0x28, then the
+//   table | case code from 0x30. Entry e is the case at 0x30 + 4e.
+void inline_case_based_switch(FakeImage& img, uint32_t pad, std::initializer_list<uint8_t> entries) {
+  const uint32_t table = 0x28 + pad;
+  img.code(kBase, {kBlr, lwz(11, 3, 0), lis(12, 0x8200), addi(12, 12, static_cast<int16_t>(table)),
+                   lbzx(10, 12, 11), slwi(10, 10, 2), addi(10, 10, static_cast<int16_t>(0x30 - table)),
+                   add(0, 10, 12), mtctr(0), kBctr});
+  uint32_t at = table;
+  for (uint8_t e : entries) img.bytes[at++] = e;
+  img.code(kBase + 0x30, {kBlr, kBlr, kBlr, kBlr, kBlr});
+}
+
+std::vector<uint32_t> case_labels(std::initializer_list<uint8_t> entries) {
+  std::vector<uint32_t> out;
+  for (uint8_t e : entries) out.push_back(kBase + 0x30 + 4u * e);
+  return out;
+}
+
 }  // namespace
 
 TEST_CASE("scan_switch_tables sizes an unguarded table that sits right after its bctr", "[unit]") {
@@ -905,6 +925,58 @@ TEST_CASE("scan_switch_tables refuses an inline table it cannot delimit", "[unit
     CHECK(scan.tables.empty());
     CHECK(scan.unbounded == std::vector<uint32_t>{kBase + 0x20});
   }
+  SECTION("two registers each move the load: the index is ambiguous") {
+    // lbzx r9, r12, r10 and lbzx r0, r12, r11 both step through the table, and CTR (the first case, a constant)
+    // is known whichever register is the index. Every check after the index would pass.
+    FakeImage img;
+    img.code(kBase, {kBlr, lis(12, 0x8200), addi(12, 12, 0x24), lbzx(9, 12, 10), lbzx(0, 12, 11), lis(7, 0x8200),
+                     addi(7, 7, 0x2C), mtctr(7), kBctr});
+    img.code(kBase + 0x2C, {kBlr, kBlr});
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(scan.tables.empty());
+    CHECK(scan.unbounded == std::vector<uint32_t>{kBase + 0x20});
+  }
+  SECTION("a branch target inside the window: the code above it may not run") {
+    // Another path enters at the lbzx (b from 0x3C), where r12 may hold anything: the base is unknown.
+    FakeImage img;
+    inline_byte_switch(img, {2, 3, 2, 4, 5});
+    img.word(kBase + 0x3C, b_to(kBase + 0x3C, kBase + 0x10));
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(scan.tables.empty());
+    CHECK(scan.unbounded == std::vector<uint32_t>{kBase + 0x20});
+  }
+  SECTION("non-zero bytes between the bctr and a table that starts after it") {
+    FakeImage img;
+    inline_case_based_switch(img, 2, {1, 0, 2, 1, 3, 0});
+    img.bytes[0x29] = 1;
+    auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+    CHECK(scan.tables.empty());
+    CHECK(scan.unbounded == std::vector<uint32_t>{kBase + 0x24});
+  }
+}
+
+TEST_CASE("scan_switch_tables accepts an inline table after up to 3 zero bytes", "[unit]") {
+  FakeImage img;
+  inline_case_based_switch(img, 2, {1, 0, 2, 1, 3, 0});  // table 0x2A..0x30, first case at 0x30
+  auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+  REQUIRE(scan.tables.size() == 1);
+  CHECK(scan.unbounded.empty());
+  CHECK(scan.tables[0].base == kBase + 0x24);
+  CHECK(scan.tables[0].r == 11);
+  CHECK(scan.tables[0].labels == case_labels({1, 0, 2, 1, 3, 0}));
+}
+
+TEST_CASE("table bytes that decode as a branch do not cut an inline table short", "[unit]") {
+  // branch_targets decodes every word, the table's too: the entries 0x41 0x80 0x00 0x04 at 0x28 read as
+  // "bt 0, +4", a branch to 0x2C, on an entry boundary inside the table. Taken as the end, it would keep 4 of the
+  // 8 cases and leave the rest to __builtin_unreachable.
+  FakeImage img;
+  inline_case_based_switch(img, 0, {0x41, 0x80, 0x00, 0x04, 1, 2, 3, 1});
+  auto scan = scan_switch_tables(img.bytes, kBase, kCode);
+  REQUIRE(scan.tables.size() == 1);
+  CHECK(scan.unbounded.empty());
+  CHECK(scan.tables[0].base == kBase + 0x24);
+  CHECK(scan.tables[0].labels == case_labels({0x41, 0x80, 0x00, 0x04, 1, 2, 3, 1}));
 }
 
 // XenonRecomp's own analysis of a bl-target function follows a forward `b` (a tail jump) into the next function: when
@@ -920,6 +992,13 @@ TEST_CASE("fit_switch_functions bounds the function that tail-jumps into a leaf 
   CHECK(fit.tables.size() == 1);
   CHECK(fit.dropped_functions.empty());
 
+  SECTION("P ends before the range: what lies between is another function, so P is not bounded") {
+    // P = li; blr. Q = li; b 0x050 follows with no padding: [P, 0x050) is two functions, not one.
+    f.img.code(kBase + 0x40, {addi(3, 0, 0), kBlr, addi(3, 0, 1), (18u << 26) | 4u});
+    auto two = fit_switch_functions(f.img.bytes, kBase, kCode, f.pdata, f.tables());
+    CHECK(two.functions == std::vector<FunctionRange>{{kBase + 0x50, 0x1A0, false}});
+    CHECK(two.tables.size() == 1);
+  }
   SECTION("no forward branch into the leaf: nothing extra") {
     f.img.word(kBase + 0x48, kNop);
     auto plain = fit_switch_functions(f.img.bytes, kBase, kCode, f.pdata, f.tables());

@@ -315,3 +315,42 @@ Formato: o quê, por quê, custo se estiver errada.
   VS) e calcula o quarto canto com os atributos já transformados, como o Xenia; os outros itens são lacunas do plano.
 - Custo se errado: um dispositivo sem `geometryShader` não desenha retângulos (o lavapipe e as GPUs de desktop têm);
   se o jogo depender de `PA_SC_AA_MASK` ou dos filtros por instrução, a imagem difere até que sejam feitos.
+
+### M14. Espelhamento das vistas físicas com memfd (Tarefa 22)
+- O quê: a reserva de 4 GiB do convidado (`GuestMemory::reserve`) mapeia um único armazenamento físico de 512 MiB (um
+  `memfd`) nas três vistas, como no console: o endereço físico `p` fica em `0xA0000000 + p`, `0xC0000000 + p` e
+  `0xE0000000 + p - 0x1000` (a vista `0xE0` começa no físico `0x1000`, como no Xenia). Zerar páginas inteiras de uma
+  vista abre um buraco no `memfd` (`fallocate` com `PUNCH_HOLE`), que vale para todas as vistas e funciona com
+  qualquer proteção. O `PhysicalHeap` continua entregando cada alocação numa vista só; só a memória por trás passou a
+  ser compartilhada.
+- Por quê: a spec do M2 deixou o espelhamento de fora e previu o `memfd` como contingência "quando acontecer"; a spec
+  do M3 repete isso. Aconteceu: o jogo preenche a textura carregada pela vista `0xE0` e o código que a converte
+  (`0x826529A0`) lê a mesma memória pela vista `0xC0` (vigia `--watch-guest ...:rw`: 24 576 e 64 630 leituras na vista
+  `0xC0`, nenhuma na `0xE0`). Sem espelhamento essas leituras viam zeros, e as texturas de fonte saíam zeradas.
+- Custo se errado: a memória física passa a ser compartilhada entre processos filhos depois de um `fork` (os testes
+  que fazem `fork` não escrevem nas vistas físicas); `MmQueryAllocationSize`/`MmQueryAddressProtect` por uma vista que
+  não é a da alocação continuam respondendo 0, como antes.
+
+### M15. `param_shade` não liga `Flat` (Tarefa 22)
+- O quê: `key_modifiers` deixa de copiar `SQ_INTERPOLATOR_CNTL.param_shade` (bits 0..15) para a máscara flat da chave
+  do PS. Os bits 16..31 dos modificadores ficam sempre 0, e nenhuma entrada do PS é decorada `Flat`, como no Xenia. O
+  tradutor continua aceitando `TranslateOptions::flat_mask`, só que nada mais o liga.
+- Por quê: o plano (Tarefa 15.4) tratava `param_shade` como máscara de sombreamento flat, por conta própria (o Xenia
+  nunca marca `Flat`). Na ISO, o jogo liga o bit 0 nos desenhos do logo e dos botões (VS `E91536F60A69ABF3` + PS
+  `C3B8C62B63E1BB9E`), e o interpolador 0 desses desenhos é a coordenada de textura do quad. Com `Flat`, cada
+  triângulo amostrava a textura num único ponto (a coordenada do vértice provocante; o quadro tinha 4 cores). O
+  tradutor do VS estava certo: um teste sintético com a mesma forma de instruções confere os valores no lavapipe.
+- Custo se errado: se `param_shade` for de fato a máscara flat junto com algum outro bit de estado (o modo de
+  sombreamento do D3D), um jogo que pede sombreamento flat recebe interpolação suave até que esse bit seja achado.
+
+### M16. Mapeamento duplicado de funções: a primeira continua valendo, agora com aviso (Tarefa 22)
+- O quê: o plano mandava trocar o contorno `762ba3d` (um thunk de importação fica com a sua entrada da tabela de
+  chamadas indiretas quando uma função descoberta cai no mesmo endereço) pela correção da causa. A causa foi
+  corrigida (`8871b56`: o `analyse` passa os thunks como funções conhecidas à descoberta de funções só por
+  ponteiro), mas a regra "a primeira vale" ficou: `install_function_table` descarta o mapeamento repetido, devolve
+  os endereços e o jogo imprime `[runtime] warning: N duplicate function mappings dropped` (`8c6b883`). Os thunks
+  de ordinal sem nome não viram símbolo no XenonUtils, então continuam fora da lista de thunks conhecidos.
+- Por quê: a regra é a resposta certa para um mapeamento repetido (o XenonRecomp lista os thunks antes das funções
+  recompiladas), e trocá-la por um erro fatal pararia o jogo por um defeito do pipeline que o aviso já expõe.
+- Custo se errado: uma duplicata nova (por exemplo, num thunk de ordinal sem nome) vira só um aviso no terminal, e
+  a chamada indireta vai para o thunk, não para a função descoberta.

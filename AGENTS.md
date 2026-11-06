@@ -57,9 +57,9 @@ Also: MIT license (changed from GPL-3.0 to MIT on 2026-10-14 by the project owne
 
 ## Docs
 
-Map: `docs/architecture.md`, `docs/pipeline.md`, `docs/gui.md`, `docs/packaging.md` (AppImage), `docs/roadmap.md`, `docs/kernel-coverage.md` (regenerated from a real build, see its header), `docs/adr/`, `docs/formats/`, `docs/reverse-engineering/`.
+Map: `docs/handoff.md` (start here: current state, what is left, the owner's rules), `docs/m3-status.md`, `docs/architecture.md`, `docs/pipeline.md`, `docs/gui.md`, `docs/packaging.md` (AppImage), `docs/roadmap.md`, `docs/kernel-coverage.md` (regenerated from a real build, see its header), `docs/adr/`, `docs/formats/`, `docs/reverse-engineering/`.
 
-Live in `docs/` (design specs and plans under `docs/superpowers/`, ADRs in `docs/adr/`, format notes in `docs/formats/`). Docs change in the same commit as the code they describe.
+Live in `docs/` (design specs, plans and SDD ledgers under `docs/superpowers/`, ADRs in `docs/adr/`, format notes in `docs/formats/`). Docs change in the same commit as the code they describe.
 
 ## Reverse-engineering workflow
 

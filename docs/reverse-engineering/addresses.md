@@ -107,8 +107,16 @@ tempo de execução. Por isso a etapa `analyse` roda também `src/pipeline/switc
   rIdx`, opcionalmente `rlwinm rT, rT, s, ...`, seguidas de `add rT, rT, rBase` → `mtctr rT` → `bctr`, com
   `rBase` sendo a própria tabela ou outro endereço montado por `lis`/`addi`; rótulo = `rBase + (entrada <<
   s)`. Mesmos critérios: limite por `cmplwi`/máscara, todo rótulo alinhado a 4 dentro da seção de código,
-  no máximo 4096 casos. Sem limite, o sítio continua na lista "sem guarda" abaixo, a menos que o próximo
-  item o resolva.
+  no máximo 4096 casos. Sem limite, o sítio continua na lista "sem guarda" abaixo, a menos que um dos próximos
+  itens o resolva.
+- Tabela logo após o `bctr` (M3, Tarefa 22): sem guarda nem máscara, uma tabela que começa em `bctr + 4` (ou
+  depois de 1 a 3 bytes nulos de alinhamento) termina onde o código recomeça: no primeiro rótulo de caso ou alvo
+  de desvio depois do `bctr`. O índice é o único registrador cujo carregamento indexado anda junto com ele
+  (ambíguo = recusado), avaliado no bloco linear sem passar para antes de um alvo de desvio. Um alvo só conta como
+  fim se algum desvio até ele vier de fora de `[bctr + 4, alvo)`: os bytes da própria tabela também são
+  decodificados como instruções, e um deles pode parecer um `b`/`bc` para dentro da tabela, o que a encurtaria. Todo
+  byte até o fim tem de ser entrada ou um dos menos de 4 bytes nulos de alinhamento; na dúvida, a tabela é recusada.
+  Caso típico: o `switch` sobre um `enum` em `0x8235B7AC`, de palavras absolutas.
 - Limite num bloco anterior (`resolve_dominated_switches`, M3): um sítio sem guarda (ou com guarda juntada) dentro de uma função do
   `.pdata` cujo bloco linear só sabe calcular o alvo com um registrador (o índice) é resolvido se uma
   análise de fluxo de dados no grafo da função provar um limite superior sem sinal para esse registrador.
@@ -136,7 +144,12 @@ rótulo, senão a próxima função do `.pdata` (descontando os 8 bytes de handl
 preenchimento também separa funções (M3): uma palavra nula logo após um desvio incondicional, sem desvio
 anterior que salte além dela, sobe o início (a última abaixo da tabela) ou encerra a faixa (a primeira após o
 último rótulo); a de baixo é ignorada se algum desvio depois dela voltar para antes dela. Sem isso a faixa engolia as funções minúsculas chamadas por ponteiro que vêm depois (ver
-`0x82A12650` abaixo). Na TU1 (M2):
+`0x82A12650` abaixo). A função de antes (M3, Tarefa 22): a análise do XenonRecomp segue um `b` para a frente
+(chamada de cauda) e, partindo do alvo de `bl` logo abaixo da faixa, engoliria o começo dela; por isso essa função
+também ganha limite explícito, `[alvo, início da faixa)`, quando termina num desvio incondicional logo antes da
+faixa, salta para dentro dela e é uma função só: nenhum desvio incondicional antes do último sem um desvio para a
+frente pendente além dele (a regra de fim de `discover_pointer_functions`). Senão o que vem entre as duas é outra
+função, chamada por ponteiro, que o limite engoliria. Na TU1 (M2):
 **38 funções folha**, gravadas em `work/analysis/functions.toml` e mescladas em `[main] functions` pela
 etapa `recompile` (entradas escritas à mão em `recomp.toml` têm prioridade); 31 das 38 começam num alvo de
 `bl`.
@@ -147,7 +160,8 @@ descartadas — se sobrepõe outra faixa derivada ou uma entrada `functions` esc
 de que engoliu outra função ou um final compartilhado). Na TU1: **0 faixas rejeitadas**. Tabelas cujos
 rótulos saem da própria função do `.pdata` também são descartadas (não "consertadas").
 
-Contagem final na TU1 (M3, Tarefa 4): 224 tabelas encontradas (217 pela varredura linear, 7 provadas pela
+Contagem na TU1 no M3, Tarefa 4 (a da Tarefa 22 vem logo abaixo): 224 tabelas encontradas (217 pela
+varredura linear, 7 provadas pela
 análise de fluxo de dados: `0x8294E434` e seis guardas juntadas por laços em `0x825DEBF4`, `0x825E6D64`,
 `0x825E8EEC`, `0x829D94A4`, `0x829EA93C` e `0x829EDD14`, cada uma com o mesmo número de casos da guarda),
 **223 mantidas**, 1 descartada (`0x8243C83C`), **41 funções folha** (eram 38: o preenchimento
@@ -157,6 +171,19 @@ rejeitadas, **3 254 funções só por ponteiro** (eram 3 253). Saída do `analys
 ```
 jump tables: 0 from XenonAnalyse + 217 from the LegacyRecomp scanner + 7 proven by the dataflow = 224 found: 223 kept (159 relative), 1 dropped, 41 leaf-function boundaries (0 rejected), 1 guarded bctr sites unresolved, 19 unguarded indexed bctr sites
 pointer-only functions: 3254
+```
+
+Contagem atual na TU1 (M3, Tarefa 22, varredura `switch-scan-18`): 229 tabelas encontradas (222 pela varredura
+linear, 7 pela análise de fluxo de dados), **228 mantidas** (159 relativas), 1 descartada, **46
+funções folha** (0 rejeitadas), 1 sítio com guarda não resolvido, 14 sítios sem guarda (eram 19: a
+regra da tabela logo após o `bctr` resolveu 5), **3 248 funções só por ponteiro** (os thunks de importação
+deixaram de ser descobertos como funções). As salvaguardas da rodada de correção da Tarefa 22 (alvos vindos dos
+bytes da tabela, janela que para em alvo de desvio, função de antes com uma função só) não mudaram nada na TU1:
+`switch_tables.toml` e `functions.toml` saem idênticos aos da `switch-scan-17`. Saída do `analyse.log`:
+
+```
+jump tables: 0 from XenonAnalyse + 222 from the LegacyRecomp scanner + 7 proven by the dataflow = 229 found: 228 kept (159 relative), 1 dropped, 46 leaf-function boundaries (0 rejected), 1 guarded bctr sites unresolved, 14 unguarded indexed bctr sites
+pointer-only functions: 3248
 ```
 
 ### Sítios do experimento do M3 (Tarefa 4)
@@ -236,3 +263,19 @@ da ferramenta sobre a imagem carregada (Tarefa 7); revisão no Ghidra não feita
 
 Com os patches, a recompilação termina sem nenhuma linha de aviso além do contador (`unrecognized
 instructions: 0`).
+
+## Texturas de fonte e carregamento de imagens (M3, Tarefa 22)
+
+Achados com a vigia de escrita (`--watch-guest`, `docs/development.md`) e `tools/func_profile.py`; só endereços e
+contagens. Nada disso vai para o `recomp.toml`.
+
+| Endereço | Papel provável | Evidência |
+|---|---|---|
+| `0x828F08D8` | carregador de imagem estilo D3DX: aloca a textura (via `0x82424F08` → `MmAllocatePhysicalMemoryEx`) e converte o formato | vigia: alocações `0xFD1B2000+0x40000` e `0xFEC6C000+0x10000`; perfil: 502 instruções, chama `0x828EB3F0` → `0x82927E08` |
+| `0x82927E08` | despacho da conversão de formato | perfil: 106 instruções, 13 chamadas diferentes (uma por formato) |
+| `0x82925168` | conversão por cópia direta | chama `memcpy` (`0x828AEBB0`); vigia: 874 escritas não nulas na textura de 128×128 |
+| `0x82925430` → `0x82929C58` | conversão por ponto flutuante | perfil de `0x82929C58`: 55 ops de ponto flutuante; vigia: 8192 escritas, todas zero, na outra textura |
+| `0x828AEBB0` | `memcpy` da CRT | 1 550 chamadas; perfil: `ld`/`std`, `dcbt`/`dcbtst` |
+| `0x826529A0` ← `0x82205DC8` | o jogo lê a textura carregada **pela vista `0xC0`** (ela foi alocada e preenchida pela `0xE0`) e depois a libera | vigia `:rw`: 24 576 e 64 630 leituras na vista `0xC0`, nenhuma na `0xE0`; `host free` das duas alocações. Motivo do espelhamento das vistas (ADR 0005 M14) |
+| `0x826522B0` ← `0x822EB800` ← `0x822EB770` | o jogo cria a textura `k_8` final nas mesmas páginas e a preenche | vigia: alocações `0xFEC74000+0x8000` e `0xFD1E7000+0xB000`, depois 8192 e 24 320 escritas, todas zero |
+| `0x82446808` → `0x82439308` | aloca a região de 2 MiB em `0xBFDF0000` (buffer de comandos do D3D) | vigia: `host zero`; o vertex shader `CB7E…` chega por `IM_LOAD_IMMEDIATE` dentro dela |

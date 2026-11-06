@@ -110,4 +110,16 @@ if(LR_PYTHON3)
     COMMAND ${LR_PYTHON3} -I ${CMAKE_CURRENT_SOURCE_DIR}/support/check_frame_stats.py
             ${CMAKE_SOURCE_DIR}/tools/frame_stats.py ${CMAKE_CURRENT_BINARY_DIR}/frame_stats)
   set_tests_properties("frame_stats on a synthetic PNG" PROPERTIES LABELS unit)
+  # tools/func_profile.py: a guest function's instruction classes, never its code (Task 22).
+  add_test(NAME "func_profile on a synthetic image"
+    COMMAND ${LR_PYTHON3} -I ${CMAKE_CURRENT_SOURCE_DIR}/support/check_func_profile.py
+            ${CMAKE_SOURCE_DIR}/tools/func_profile.py ${CMAKE_CURRENT_BINARY_DIR}/func_profile)
+  set_tests_properties("func_profile on a synthetic image" PROPERTIES LABELS unit)
+else()
+  # Never drop them silently: registered as disabled, ctest lists them under "did not run".
+  message(WARNING "python3 not found: the frame_stats and func_profile tests are disabled")
+  foreach(_lr_py_test "frame_stats on a synthetic PNG" "func_profile on a synthetic image")
+    add_test(NAME "${_lr_py_test}" COMMAND ${CMAKE_COMMAND} -E echo "python3 not found")
+    set_tests_properties("${_lr_py_test}" PROPERTIES LABELS unit DISABLED TRUE)
+  endforeach()
 endif()

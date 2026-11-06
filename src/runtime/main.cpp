@@ -7,7 +7,7 @@
 // Usage: <game> --image <xex> [--data <dir>] [--user <dir>] [--headless] [--gpu vulkan|null] [--coverage]
 //        [--strict-memory] [--trace-imports] [--trace-file <path>] [--trace-gpu] [--gpu-trace-file <path>]
 //        [--exit-after-swaps <n>] [--screenshot-after <n> <png>] [--shader-cache-dir <dir>] [--dump-shaders]
-//        [--watch-guest <addr>:<len>]...
+//        [--watch-guest <addr>:<len>[:rw]]...
 // --trace-imports logs every import call (runtime/kernel/trace.h) to --trace-file, or stderr without one; the
 // launcher always passes --trace-file, which alone does nothing. --trace-gpu logs the GPU's PM4 packets, draws,
 // swaps and per-second counters (runtime/gpu/gpu_system.h) to --gpu-trace-file, or stderr without one (capped at
@@ -27,8 +27,9 @@
 // the microcode disassembly next to each cache file (<name>.txt). Once the guest started the GPU, every exit path but
 // the fault handler prints "[gpu] shaders: keys=N vs=N ps=N translated=N disk=N failed=N new_last_100_swaps=N" on
 // stderr (lr::gpu::format_shader_summary, through lr::kernel::set_exit_report_hook).
-// --watch-guest <addr>:<len> (repeatable, up to 16; a diagnostic) logs "[watch] ..." lines on stderr naming the guest
-// functions that write guest [addr, addr + len) (runtime/write_watch.h); the writes still happen.
+// --watch-guest <addr>:<len>[:rw] (repeatable, up to 16; a diagnostic) logs "[watch] ..." lines on stderr naming the
+// guest functions that write (with :rw, also read) guest [addr, addr + len) (runtime/write_watch.h); the accesses
+// still happen, and the exit report adds a summary per range.
 // SIGTERM, SIGINT and SIGHUP (and closing the window) end the run in order with exit code 0: the GPU thread stops
 // (any frame in flight finishes or, after 100 ms slices, is abandoned), the Vulkan backend waits for the device to be
 // idle and destroys everything ("[gpu] vulkan: shut down"), then the process exits. The signals are blocked in every
@@ -113,7 +114,7 @@ int usage(const char* msg) {
                "usage: game --image <xex> [--data <dir>] [--user <dir>] [--headless] [--gpu vulkan|null] [--coverage] "
                "[--strict-memory] [--trace-imports] [--trace-file <path>] [--trace-gpu] [--gpu-trace-file <path>] "
                "[--exit-after-swaps <n>] [--screenshot-after <n> <png>] [--shader-cache-dir <dir>] "
-               "[--dump-shaders] [--watch-guest <addr>:<len>]...\n");
+               "[--dump-shaders] [--watch-guest <addr>:<len>[:rw]]...\n");
   return kExitUsage;
 }
 

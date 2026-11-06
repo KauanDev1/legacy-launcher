@@ -851,6 +851,7 @@ struct DrawPath::Impl {
       if (device.provoking_vertex_last()) {
         key.provoking_last = true;
       } else if (ps && sc::key_options(shaders.ps_key).flat_mask != 0) {
+        // Unreachable while key_modifiers never sets a flat bit (ADR 0005 M15); kept for a future flat source.
         warn_once("flat interpolants take the first vertex: the device lacks VK_EXT_provoking_vertex "
                   "(PA_SU_SC_MODE_CNTL.provoking_vtx_last)");
       }

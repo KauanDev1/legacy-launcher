@@ -1,4 +1,4 @@
-// SPDX-License-Identifier:      // An XMemCpy-style line copy (dcbz128_line_copy above): r3 = destination, r4 = source.
+// SPDX-License-Identifier: MIT
 // Synthetic PowerPC functions recompiled by XenonRecomp at build time (see CMakeLists.txt) and executed by
 // test_recomp_instructions.cpp. Shared between the fixture generator and the tests.
 #pragma once

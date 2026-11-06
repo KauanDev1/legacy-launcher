@@ -25,6 +25,7 @@
 #include "pipeline/pipeline.h"
 #include "support/elf_builder.h"
 #include "support/temp_dir.h"
+#include "support/vulkan_validation.h"
 #include "support/xex2_builder.h"
 #include "volk.h"
 
@@ -117,23 +118,7 @@ bool has_icd() {
   return n > 0;
 }
 
-bool has_validation_layer() {
-  if (volkInitialize() != VK_SUCCESS) return false;
-  uint32_t n = 0;
-  if (vkEnumerateInstanceLayerProperties(&n, nullptr) != VK_SUCCESS) return false;
-  std::vector<VkLayerProperties> layers(n);
-  if (vkEnumerateInstanceLayerProperties(&n, layers.data()) != VK_SUCCESS) return false;
-  return std::any_of(layers.begin(), layers.end(), [](const VkLayerProperties& l) {
-    return std::strcmp(l.layerName, "VK_LAYER_KHRONOS_validation") == 0;
-  });
-}
-
-// The game's output with LR_VULKAN_VALIDATION=1 carries no validation message ("[vulkan] ...", from the Device's
-// debug messenger) and, when the layer is installed, no "not installed" warning either: the layer really ran.
-void check_validation_clean(const std::string& out) {
-  CHECK(out.find("[vulkan]") == std::string::npos);
-  if (has_validation_layer()) CHECK(out.find("VK_LAYER_KHRONOS_validation is not installed") == std::string::npos);
-}
+using lr::testing::check_validation_clean;  // tests/support/vulkan_validation.h
 
 // The fake GPU guest's exit line: its vertex and pixel shader, translated in memory.
 constexpr const char* kSummaryTranslated =

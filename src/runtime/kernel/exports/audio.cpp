@@ -43,7 +43,8 @@ uint32_t XAudioGetVoiceCategoryVolume(GuestCall& c, uint32_t /*category*/, F32Pt
 
 // XMACreateContext(context*): a hardware XMA decoder context is 64 bytes in physical memory that the game fills
 // (input/output buffers, loop data) and the decoder updates. No decoder runs here (silent, M4): the context is a
-// zeroed physical block of its own (one 4 KiB page) that nothing ever reads, freed by XMAReleaseContext.
+// zeroed physical block of its own (one 4 KiB page) that nothing ever reads, freed by XMAReleaseContext. The kernel
+// records each context it hands out (Kernel::add_xma_context).
 uint32_t XMACreateContext(GuestCall& c, U32Ptr context_out) {
   if (!context_out.valid_range(4)) return STATUS_INVALID_PARAMETER;
   Kernel& k = kernel();
@@ -53,13 +54,17 @@ uint32_t XMACreateContext(GuestCall& c, U32Ptr context_out) {
     (void)k.physical().free(r.value());
     return STATUS_NO_MEMORY;
   }
+  k.add_xma_context(r.value());
   *context_out.get(c.base) = r.value();
   return STATUS_SUCCESS;
 }
 
-// XMAReleaseContext(context): frees a context XMACreateContext returned; any other value is ignored.
+// XMAReleaseContext(context): frees a context XMACreateContext returned and that is not released yet. Anything else
+// (a second release, the base of some other physical allocation, a made-up value) is ignored: as on the console,
+// the release only returns a context, it never frees general physical memory.
 uint32_t XMAReleaseContext(uint32_t context) {
-  (void)kernel().physical().free(context);
+  Kernel& k = kernel();
+  if (k.take_xma_context(context)) (void)k.physical().free(context);
   return 0;
 }
 
@@ -70,6 +75,6 @@ LR_KERNEL_STUB_FN(XAudioUnregisterRenderDriverClient);  // nothing was registere
 LR_KERNEL_STUB_FN(XAudioSubmitRenderDriverFrame);       // frames dropped, no output device
 LR_KERNEL_STUB_FN(XAudioGetVoiceCategoryVolume);        // constant 1.0f
 LR_KERNEL_STUB_FN(XMACreateContext);                    // zeroed physical block, never decoded (silent, M4)
-LR_KERNEL_STUB_FN(XMAReleaseContext);                   // frees that block
+LR_KERNEL_STUB_FN(XMAReleaseContext);                   // frees that block, once; nothing else
 
 }  // namespace lr::kernel

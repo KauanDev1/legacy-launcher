@@ -12,9 +12,10 @@
 namespace lr::runtime {
 
 // Allocator for the Xbox 360's 512 MiB of physical memory, handed out as guest addresses in one of three views
-// (0xA0000000 = 64 KiB pages, 0xC0000000 = 16 MiB pages, 0xE0000000 = 4 KiB pages). M2 does no aliasing: each
-// physical page belongs to exactly one view, chosen by the page size of the allocation. Address bookkeeping only;
-// the views' backing memory is the caller's business.
+// (0xA0000000 = 64 KiB pages, 0xC0000000 = 16 MiB pages, 0xE0000000 = 4 KiB pages). Each allocation is handed
+// out in one view, chosen by the page size of the allocation. Address bookkeeping only: the views' backing memory
+// is GuestMemory's, which maps one physical store at all three views, so the same bytes are also reachable through
+// the other two (Task 22, ADR 0005 M14).
 //
 // Semantics confirmed against Xenia (MmAllocatePhysicalMemoryEx, PhysicalHeap; no code copied):
 //  - Page size comes from the *protect* argument: MEM_LARGE_PAGES (0x20000000) -> 64 KiB, else MEM_16MB_PAGES
@@ -47,7 +48,7 @@ class PhysicalHeap {
   uint32_t used_pages() const;
   // View address of the allocation that owns physical address `phys` (the exact byte: view base of the allocation
   // + offset inside it, linear across the whole allocation); nullopt when the page is unallocated or phys is
-  // outside the 512 MiB. A page belongs to one view only, so the answer is never ambiguous. The GPU uses this.
+  // outside the 512 MiB. The answer is the allocation's own view (the other views alias the same bytes). The GPU uses this.
   std::optional<uint32_t> guest_from_physical(uint32_t phys) const;
   // Physical address one past the last byte of the allocation that owns `phys`; nullopt when the page is
   // unallocated or phys is outside the 512 MiB. Bounds GPU writes (EDRAM resolves) to one allocation.

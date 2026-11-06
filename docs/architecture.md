@@ -78,7 +78,7 @@ convidado `G` fica em `base() + G`. Regiões fixas (spec M2 §6.1; constantes em
 | `0x7F000000`–`0x7FFFFFFF` | Reservada para MMIO e write-back da GPU (M3); janela MMIO em `0x7FC80000`–`0x7FCFFFFF` |
 | `0x80000000`–`0x81FFFFFF` | Dados do kernel (`Kernel::kernel_data_alloc`, alocação sequencial, nunca liberada): cópia do cabeçalho XEX (sempre em `0x80000000`), `LDR_DATA_TABLE_ENTRY`, blocos das variáveis exportadas, páginas `PROT_NONE` de variáveis faltando |
 | `0x82000000`–`~0x8659FFFF` | Imagem do jogo (`PPC_IMAGE_BASE`, `PPC_IMAGE_SIZE = 0x032D0000`, código em `0x82200000`) e tabela de funções em `PPC_IMAGE_BASE + PPC_IMAGE_SIZE` (`2 x PPC_CODE_SIZE`, um slot de 8 bytes por instrução). Nunca entregue por um heap |
-| `0xA0000000`–`0xFFFFFFFF` | Vistas físicas: `0xA0` (64 KiB), `0xC0` (16 MiB), `0xE0` (4 KiB) |
+| `0xA0000000`–`0xFFFFFFFF` | Vistas físicas: `0xA0` (64 KiB), `0xC0` (16 MiB), `0xE0` (4 KiB), espelhos dos mesmos 512 MiB (ver abaixo) |
 
 Os blocos fixos do M1 em `0x7FFD0000`–`0x7FFF0000` (KTHREAD, TLS e KPCR da única thread) não existem mais: essa
 faixa é da GPU. KPCR, KTHREAD e TLS são alocados por thread no pool do kernel e as pilhas vêm do heap de pilhas
@@ -86,12 +86,19 @@ faixa é da GPU. KPCR, KTHREAD e TLS são alocados por thread no pool do kernel 
 
 Valores em big-endian (formato do convidado); o código gerado converte nos acessos.
 
+As três vistas físicas são espelhos, como no console (Tarefa 22, ADR 0005 M14): sobre o mapeamento anônimo,
+`GuestMemory::reserve` mapeia um `memfd` de 512 MiB (`MAP_SHARED | MAP_FIXED`) em `0xA0000000` e `0xC0000000` (físico
+0 no começo da vista) e em `0xE0000000` a partir do físico `0x1000` (os últimos 4 KiB da vista `0xE0` ficam
+anônimos). Uma escrita por uma vista aparece nas outras duas; `GuestMemory::zero` zera páginas inteiras de uma vista
+abrindo um buraco no `memfd`. Só reservas do espaço inteiro de 4 GiB ganham as vistas.
+
 ### Alocadores e importações de memória
 
 O `Kernel` tem quatro alocadores: `heap4k()` e `heap64k()` (`PageHeap`, só contabilidade de endereços),
 `stacks()` (`PageHeap` de páginas de 4 KiB sobre `0x70000000`–`0x7EFFFFFF`, as pilhas das threads; as importações
 de memória também o consultam, então `NtQueryVirtualMemory`/`MmQueryAddressProtect` respondem por pilhas) e
-`physical()` (`PhysicalHeap`, 512 MiB de páginas físicas, sem espelhamento entre vistas). As importações ficam em
+`physical()` (`PhysicalHeap`, 512 MiB de páginas físicas; cada alocação sai numa vista, e as outras duas espelham os
+mesmos bytes). As importações ficam em
 `src/runtime/kernel/exports/memory.cpp`, com a semântica do `xboxkrnl_memory.cc` do Xenia (só referência):
 `NtAllocateVirtualMemory`/`NtFreeVirtualMemory`/`NtProtectVirtualMemory`/`NtQueryVirtualMemory` (ponteiros de
 base e tamanho de entrada e saída em big-endian), `MmAllocatePhysicalMemoryEx` e afins, e o pool
@@ -100,7 +107,7 @@ confirmadas leitura/escrita e zeradas. `MmMapIoSpace` (M3) devolve o próprio en
 MMIO da GPU já está no seu endereço do convidado.
 
 O gancho de confirmação dos heaps virtuais zera as páginas recém-confirmadas (salvo `MEM_NOZERO`) com
-`GuestMemory::zero`, que devolve páginas inteiras ao host com `madvise(MADV_DONTNEED)` em vez de escrevê-las.
+`GuestMemory::zero`, que devolve páginas inteiras ao host com `madvise(MADV_DONTNEED)` (nas vistas físicas, um buraco no `memfd`) em vez de escrevê-las.
 Memória física também é zerada ao ser alocada.
 
 ### Janela MMIO da GPU e tradução física para convidado (M3)
@@ -509,7 +516,9 @@ estrutura, são registradas como `stub` (`LR_KERNEL_STUB` ou `LR_KERNEL_STUB_FN`
 - **M3 (áudio silencioso e UI)**: `exports/audio.cpp` — `XAudioRegisterRenderDriverClient` escreve o handle `0x41550000` e nunca chama o
   callback, `XAudioUnregisterRenderDriverClient`/`XAudioSubmitRenderDriverFrame` → 0 (quadro descartado),
   `XAudioGetVoiceCategoryVolume` escreve `1.0f`, `XMACreateContext` entrega um bloco zerado de 64 bytes em memória
-  física (uma página de 4 KiB só dele) que nenhum decodificador lê e `XMAReleaseContext` o libera (Tarefa 22: o jogo
+  física (uma página de 4 KiB só dele) que nenhum decodificador lê e `XMAReleaseContext` o libera, uma vez só: o
+  kernel guarda os contextos que entregou e ignora qualquer outro valor, como uma segunda liberação ou a base de
+  outra alocação física (Tarefa 22: o jogo
   cria contextos XMA antes da tela de título); `exports/xam_ui.cpp` — `XamShowMessageBoxUI` imprime
   `[game] message box: <título> — <texto> [<botões>]` no stderr, escreve resultado 0 (primeiro botão) e completa o overlapped
   (`ERROR_IO_PENDING`; sem overlapped, `ERROR_SUCCESS`).
@@ -1180,11 +1189,13 @@ temporário é relativo a `aL`). Todos começam em zero, menos:
 locations 0..15 (64 componentes, o mínimo garantido do Vulkan), zero quando o interpolador não é escrito, sem
 decoração de interpolação. O PS declara uma entrada na location r para cada registrador r < 16 que o programa
 referencia (todas as 16 quando algum temporário é relativo), decorada `Flat` quando o bit r de `flat_mask` está ligado
+(o runtime nunca liga nenhum, ADR 0005 M15)
 e `Centroid` quando o bit r de `centroid_mask` está. Uma entrada `Flat` recebe o valor do vértice provocante; o Vulkan
 usa o primeiro vértice por padrão, e o Xenos escolhe entre o primeiro e o último por
 `PA_SU_SC_MODE_CNTL.provoking_vtx_last`. O runtime (Tarefa 20) respeita esse bit com
 `VK_EXT_provoking_vertex` (modo `LAST_VERTEX`, quando o dispositivo tem `provokingVertexLast`); sem a extensão, as
-entradas flat ficam com o primeiro vértice e um aviso único vai para o stderr quando o jogo pede o último. O VS escreve `gl_PointSize = 1.0`; o tamanho de ponto exportado
+entradas flat ficam com o primeiro vértice e um aviso único vai para o stderr quando o jogo pede o último. Enquanto
+nenhuma entrada é `Flat` (ADR 0005 M15), esse aviso não aparece; o caminho fica para uma fonte de `Flat` futura. O VS escreve `gl_PointSize = 1.0`; o tamanho de ponto exportado
 (63) é descartado e marcado em `ShaderInfo::drops_point_size` (expansão de point sprites fica fora do M3). Saídas do
 PS: `oC0..oC3` nas locations 0..3 (só as escritas) e `FragDepth` (com `DepthReplacing`) quando escreve a
 profundidade.
@@ -1197,8 +1208,9 @@ centro do pixel (`PA_SU_VTX_CNTL`), com a inversão de Y incluída.
 
 **Chave e opções**: `ShaderKey{estágio, microcode_hash, dwords, modificadores de 64 bits}`. Modificadores do PS:
 bits 0..7 o registrador `param_gen` (`0xFF` = nenhum), bit 8 a flag de ponto, bits 16..31 a máscara flat
-(`SQ_INTERPOLATOR_CNTL.param_shade`), bits 32..47 a máscara centroid (os interpoladores amostrados no centroide, não
-no centro; derivada como abaixo). O VS não tem modificadores no M3. `TranslateOptions` tem exatamente esses campos decodificados (`key_options`). Na montagem
+(sempre 0: `SQ_INTERPOLATOR_CNTL.param_shade` não é máscara flat, ADR 0005 M15), bits 32..47 a máscara centroid (os
+interpoladores amostrados no centroide, não no centro; derivada como abaixo). O VS não tem modificadores no M3.
+`TranslateOptions` tem exatamente esses campos decodificados (`key_options`). Na montagem
 (`key_modifiers`): o registrador `param_gen` é `SQ_CONTEXT_MISC.param_gen_pos` (bits 8..15) quando
 `SQ_PROGRAM_CNTL.param_gen` (bit 18) está ligado e a posição é um interpolador (< 16), senão `0xFF`; a flag de ponto
 (o draw é uma lista de pontos, `prim_type` 1) só entra com um registrador `param_gen`, porque sem ele não muda nada e

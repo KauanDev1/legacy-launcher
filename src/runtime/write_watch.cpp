@@ -15,6 +15,8 @@
 
 #include "runtime/fault.h"
 
+extern "C" char __executable_start;  // set by the linker (GNU ld, lld)
+
 namespace lr::runtime {
 
 namespace {
@@ -30,6 +32,7 @@ constexpr greg_t kTrapFlag = 0x100;
 
 struct Site {
   uint32_t fn[kSiteDepth];
+  uint32_t read;  // 1: a read site (":rw" ranges), 0: a write site
 };
 
 // Index kMaxSitesPerRange of the per-site counters collects the writes of sites past the table.
@@ -38,9 +41,11 @@ constexpr uint32_t kOtherSite = kMaxSitesPerRange;
 struct Range {
   uint32_t addr = 0;
   uint32_t len = 0;
+  bool reads = false;
   uint32_t first_page = 0;  // guest page index
   uint32_t end_page = 0;    // one past the last page
-  std::atomic<uint64_t> count{0};
+  std::atomic<uint64_t> count{0};       // writes
+  std::atomic<uint64_t> read_count{0};  // reads (":rw" ranges)
   std::atomic<uint64_t> nonzero_stores{0};  // stores that left a nonzero byte (see check_store)
   uint32_t nsites = 0;  // under g_lock
   Site sites[kMaxSitesPerRange]{};
@@ -135,6 +140,15 @@ struct Lock {
   ~Lock() { g_lock.clear(std::memory_order_release); }
 };
 
+// The protection of a watched page: none when a ":rw" range covers it, read-only otherwise.
+int page_prot(uint32_t page_index) {
+  const size_t n = g_nranges.load(std::memory_order_acquire);
+  for (size_t i = 0; i < n; ++i)
+    if (g_ranges[i].reads && page_index >= g_ranges[i].first_page && page_index < g_ranges[i].end_page)
+      return PROT_NONE;
+  return PROT_READ;
+}
+
 bool page_watched(uint32_t page_index) {
   const size_t n = g_nranges.load(std::memory_order_acquire);
   for (size_t i = 0; i < n; ++i)
@@ -165,12 +179,13 @@ int guest_frames(uintptr_t pc, uint32_t* out, int max) {
 // Counts one write into range `r` and logs it when its call site is new (or the count reaches a power of two from
 // 1024). `what` names a host-side write (nullptr for a faulting guest store). Returns the site's counter index.
 // Async-signal-safe for what == nullptr.
-uint32_t record(size_t r, uint32_t guest, uint32_t len, uintptr_t pc, const char* what) {
+uint32_t record(size_t r, uint32_t guest, uint32_t len, uintptr_t pc, const char* what, bool read = false) {
   Range& range = g_ranges[r];
-  const uint64_t n = range.count.fetch_add(1, std::memory_order_relaxed) + 1;
+  const uint64_t n = (read ? range.read_count : range.count).fetch_add(1, std::memory_order_relaxed) + 1;
   uint32_t fns[kLogDepth] = {};
   const int depth = guest_frames(pc, fns, kLogDepth);
   Site site{};
+  site.read = read ? 1 : 0;
   for (int i = 0; i < kSiteDepth && i < depth; ++i) site.fn[i] = fns[i];
 
   Lock lock;
@@ -194,7 +209,7 @@ uint32_t record(size_t r, uint32_t guest, uint32_t len, uintptr_t pc, const char
     l.str(what);
     l.put(' ');
   } else {
-    l.str("write ");
+    l.str(read ? "read " : "write ");
   }
   l.hex(guest, 8);
   if (len != 0) {
@@ -210,8 +225,10 @@ uint32_t record(size_t r, uint32_t guest, uint32_t len, uintptr_t pc, const char
   if (!fresh && !host) {
     l.str(" (count) nonzero_stores=");
     l.dec(range.nonzero_stores.load(std::memory_order_relaxed));
-    l.str(" nonzero_bytes=");
-    l.dec(nonzero_bytes(range.addr, range.len));
+    if (!range.reads) {
+      l.str(" nonzero_bytes=");
+      l.dec(nonzero_bytes(range.addr, range.len));
+    }
     l.put('\n');
     l.flush();
     return index;
@@ -241,7 +258,8 @@ void trap_handler(int signo, siginfo_t*, void* uctx) {
   }
   for (int i = 0; i < t_nchecks; ++i) check_store(t_checks[i]);
   t_nchecks = 0;
-  for (int i = 0; i < t_npending; ++i) ::mprotect(const_cast<uint8_t*>(g_base) + t_pending[i], kPage, PROT_READ);
+  for (int i = 0; i < t_npending; ++i)
+    ::mprotect(const_cast<uint8_t*>(g_base) + t_pending[i], kPage, page_prot(t_pending[i] / kPage));
   t_npending = 0;
   static_cast<ucontext_t*>(uctx)->uc_mcontext.gregs[REG_EFL] &= ~kTrapFlag;
 }
@@ -270,15 +288,20 @@ std::optional<uint64_t> parse_number(std::string_view s) {
 
 Result<WatchRange> parse_watch_spec(std::string_view spec) {
   const auto bad = [&] {
-    return Error{ErrorCode::InvalidFormat, "--watch-guest needs <addr>:<len> (hex with 0x, or decimal), got '" +
+    return Error{ErrorCode::InvalidFormat, "--watch-guest needs <addr>:<len>[:rw] (hex with 0x, or decimal), got '" +
                                                std::string(spec) + "'", ""};
   };
+  bool reads = false;
+  if (spec.size() > 3 && spec.substr(spec.size() - 3) == ":rw") {
+    reads = true;
+    spec.remove_suffix(3);
+  }
   const size_t colon = spec.find(':');
   if (colon == std::string_view::npos) return bad();
   const auto addr = parse_number(spec.substr(0, colon));
   const auto len = parse_number(spec.substr(colon + 1));
   if (!addr || !len || *len == 0 || *addr > 0xFFFF'FFFFull || *addr + *len > 0x1'0000'0000ull) return bad();
-  return WatchRange{static_cast<uint32_t>(*addr), static_cast<uint32_t>(*len)};
+  return WatchRange{static_cast<uint32_t>(*addr), static_cast<uint32_t>(*len), reads};
 }
 
 HostCodeMap::HostCodeMap(std::vector<HostCodeEntry> entries) : entries_(std::move(entries)) {
@@ -323,10 +346,21 @@ Result<void> install_write_watch(const GuestMemory& mem, std::span<const WatchRa
     Range& r = g_ranges[i];
     r.addr = ranges[i].addr;
     r.len = ranges[i].len;
+    r.reads = ranges[i].reads;
     r.first_page = r.addr / kPage;
     r.end_page = static_cast<uint32_t>((uint64_t{r.addr} + r.len + kPage - 1) / kPage);
     r.count.store(0);
+    r.read_count.store(0);
     r.nsites = 0;
+  }
+  {
+    // The executable's load address, so a host pc outside the generated code can be named offline
+    // (addr2line -f -e <game> <pc - base>).
+    Line l;
+    l.str("[watch] exe base ");
+    l.hex(reinterpret_cast<uintptr_t>(&__executable_start));
+    l.put('\n');
+    l.flush();
   }
   g_nranges.store(ranges.size(), std::memory_order_release);
   g_armed.store(true, std::memory_order_release);
@@ -334,7 +368,7 @@ Result<void> install_write_watch(const GuestMemory& mem, std::span<const WatchRa
     const Range& r = g_ranges[i];
     const uint32_t start = r.first_page * kPage;
     const uint64_t bytes = (uint64_t{r.end_page} - r.first_page) * kPage;
-    if (::mprotect(mem.base() + start, bytes, PROT_READ) != 0)
+    if (::mprotect(mem.base() + start, bytes, page_prot(r.first_page)) != 0)
       return Error{ErrorCode::IoError, std::string("mprotect for --watch-guest failed: ") + std::strerror(errno), ""};
     Line l;
     l.str("[watch] armed range ");
@@ -355,14 +389,18 @@ bool write_watch_handle_segv(siginfo_t* info, void* ucontext) {
   const auto g = guest_address_of(g_base, g_size, info->si_addr);
   if (!g || !page_watched(*g / kPage)) return false;
   auto* uc = static_cast<ucontext_t*>(ucontext);
-  if ((uc->uc_mcontext.gregs[REG_ERR] & 2) == 0) return false;  // a read or fetch: not ours
+  const greg_t err = uc->uc_mcontext.gregs[REG_ERR];
+  const bool write = (err & 2) != 0;
+  if ((err & 0x10) != 0) return false;                                   // an instruction fetch: not ours
+  if (!write && page_prot(*g / kPage) != PROT_NONE) return false;         // a read of a write-only watch
   if (t_npending >= kMaxPending) return false;                    // cannot make progress: report it
   const auto pc = static_cast<uintptr_t>(uc->uc_mcontext.gregs[REG_RIP]);
   const size_t n = g_nranges.load(std::memory_order_acquire);
   for (size_t i = 0; i < n; ++i)
     if (*g >= g_ranges[i].addr && uint64_t{*g} < uint64_t{g_ranges[i].addr} + g_ranges[i].len) {
-      const uint32_t site = record(i, *g, 0, pc, nullptr);
-      if (t_nchecks < kMaxPending) t_checks[t_nchecks++] = {static_cast<uint32_t>(i), site, *g};
+      if (!write && !g_ranges[i].reads) continue;
+      const uint32_t site = record(i, *g, 0, pc, nullptr, !write);
+      if (write && t_nchecks < kMaxPending) t_checks[t_nchecks++] = {static_cast<uint32_t>(i), site, *g};
     }
   const uint32_t page = *g & ~(kPage - 1);
   if (::mprotect(const_cast<uint8_t*>(g_base) + page, kPage, PROT_READ | PROT_WRITE) != 0) return false;
@@ -420,6 +458,17 @@ void write_watch_note_host_write(uint32_t addr, uint32_t len, const char* what) 
     if (addr < uint64_t{g_ranges[i].addr} + g_ranges[i].len && end > g_ranges[i].addr) (void)record(i, addr, len, 0, what);
 }
 
+// nonzero_bytes of a whole range outside a signal handler: a ":rw" range's pages are made readable for the scan
+// (a concurrent read by another thread meanwhile goes unlogged), then get their watch protection back.
+static uint64_t readable_nonzero_bytes(const Range& range) {
+  if (!range.reads) return nonzero_bytes(range.addr, range.len);
+  uint8_t* const base = const_cast<uint8_t*>(g_base);
+  for (uint32_t p = range.first_page; p < range.end_page; ++p) ::mprotect(base + uint64_t{p} * kPage, kPage, PROT_READ);
+  const uint64_t n = nonzero_bytes(range.addr, range.len);
+  for (uint32_t p = range.first_page; p < range.end_page; ++p) ::mprotect(base + uint64_t{p} * kPage, kPage, page_prot(p));
+  return n;
+}
+
 void write_watch_report() {
   const size_t n = g_nranges.load(std::memory_order_acquire);
   for (size_t r = 0; r < n; ++r) {
@@ -434,10 +483,14 @@ void write_watch_report() {
     l.hex(range.len);
     l.str(" writes=");
     l.dec(range.count.load());
+    if (range.reads) {
+      l.str(" reads=");
+      l.dec(range.read_count.load());
+    }
     l.str(" nonzero_stores=");
     l.dec(range.nonzero_stores.load());
     l.str(" nonzero_bytes=");
-    l.dec(nonzero_bytes(range.addr, range.len));
+    l.dec(readable_nonzero_bytes(range));
     l.put('\n');
     l.flush();
     for (uint32_t s = 0; s <= range.nsites; ++s) {
@@ -447,7 +500,7 @@ void write_watch_report() {
       m.str("[watch]   site ");
       if (index == kOtherSite) m.str("other");
       else m.dec(index);
-      m.str(" writes=");
+      m.str(index != kOtherSite && range.sites[index].read ? " reads=" : " writes=");
       m.dec(range.site_count[index].load());
       m.str(" nonzero_stores=");
       m.dec(range.site_nonzero[index].load());
