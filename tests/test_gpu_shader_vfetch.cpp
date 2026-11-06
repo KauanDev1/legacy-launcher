@@ -786,6 +786,104 @@ TEST_CASE("kill ops discard the pixel: a fetch after the kill still runs", "[uni
   }
 }
 
+// --- a textured-quad transform (Task 22, problem c) ---------------------------------------------------------------
+
+namespace {
+
+// A component-relative ALU source swizzle from the four absolute components it reads.
+uint32_t swz(uint32_t x, uint32_t y, uint32_t z, uint32_t w) {
+  return ((x - 0) & 3) | (((y - 1) & 3) << 2) | (((z - 2) & 3) << 4) | (((w - 3) & 3) << 6);
+}
+
+xe::Alu dp2add(uint32_t dest, uint32_t mask, xe::AluSrc a, xe::AluSrc b, xe::AluSrc addend) {
+  xe::Alu alu = vop(xe::kVectorDot2Add, dest, a, b);
+  alu.vector_mask = mask;
+  alu.src3 = addend;
+  return alu;
+}
+
+}  // namespace
+
+TEST_CASE("a quad transform: vfetch into the middle components, dot2add, add_const and one-component exports",
+          "[unit][vulkan]") {
+  ShaderHarness h = make_harness();
+  // The instruction shape of a 2D sprite vertex shader (synthetic encoding and values):
+  //   vfetch r0._xy_ (k_32_32_FLOAT, index r0.x, 8in32): the vertex (vx, vy) lands in r0.y, r0.z, keeping r0.x;
+  //   r2.y = dp2add(r0.zy, c18.yx, c18.w)                  P3 = vx * c18.x + vy * c18.y + c18.w
+  //   r0.w = dp2add(r0.zy, c16.yx, c200.x)
+  //   r0.x = dp2add(r0.zy, c17.yx, c200.x)                 (overwrites the fetch index)
+  //   r2.z = r0.w + c16.w  co-issued with  r2.x = add_const_0(c17.w, r0.x)   P0 = r2.z, P1 = r2.x
+  //   oPos.x/.y/.z/.w = dp3(r2.yxz, c12..c15.wyx), one component each
+  //   r0.x = dp2add(r0.zy, c30.yx, c30.w); r0.y = dp2add(r0.zy, c31.yx, c31.w)   (r0.y read and written)
+  //   o0.xy = r0.xy + c29.xy
+  // Vertex i is (10 i + 3, 7 - i); the constants put it on pixel i with depth 0.05 * P1.
+  constexpr uint32_t kWidth = 4;
+  const auto r0 = [](uint32_t s) { return r(0, s); };
+  xe::VFetch fetch = vf(0, 7, k_32_32_FLOAT, 2);
+  fetch.dst_swizzle = sh::kFetchSwizzleKeep | (0 << 3) | (1 << 6) | (sh::kFetchSwizzleKeep << 9);
+  fetch.is_signed = true;
+  fetch.normalized = false;
+
+  xe::Alu world = vop(xe::kVectorAdd, 2, r0(swz(3, 3, 3, 3)), c(16, swz(3, 3, 3, 3)));
+  world.vector_mask = 0b0100;
+  world.scalar_op = xe::kScalarAddConst0;
+  world.scalar_dest = 2;
+  world.scalar_mask = 0b0001;
+  world.src3 = c(17, 0);  // the constant's w, the temporary r0's x (index bits and select bit 0, even opcode)
+  const auto pos = [&](uint32_t k) {
+    xe::Alu alu = vop(xe::kVectorDot3, sh::kExportVsPosition, r(2, swz(1, 0, 2, 2)), c(12 + k, swz(3, 1, 0, 0)), true);
+    alu.vector_mask = 1u << k;
+    return alu;
+  };
+  xe::Alu uv = add(0, r0(swz(0, 1, 1, 1)), c(29, swz(0, 1, 1, 1)), true);
+  uv.vector_mask = 0b0011;
+  const uint32_t zy = swz(2, 1, 1, 1), yx = swz(1, 0, 0, 0), ww = swz(3, 3, 3, 3), xx = swz(0, 0, 0, 0);
+  const std::vector<Cf> vs = {
+      exec({fetch}),
+      exec({dp2add(2, 0b0010, r0(zy), c(18, yx), c(18, ww)), dp2add(0, 0b1000, r0(zy), c(16, yx), c(200, xx)),
+            dp2add(0, 0b0001, r0(zy), c(17, yx), c(200, xx)), world, pos(0), pos(1)}),
+      exec({pos(2), pos(3)}),
+      exec_end({dp2add(0, 0b0001, r0(zy), c(30, yx), c(30, ww)), dp2add(0, 0b0010, r0(zy), c(31, yx), c(31, ww)), uv}),
+  };
+  const auto vs_t = translate_ok(ShaderStage::Vertex, assemble(vs));
+  const auto ps_t = translate_ok(ShaderStage::Pixel, assemble({exec_end({mov(0, r(0), true)})}));
+
+  HarnessInputs in;
+  in.width = kWidth;
+  in.vertex_count = kWidth;
+  in.topology = lr::testing::HarnessTopology::PointList;
+  in.depth_target = true;
+  std::vector<uint32_t> data;
+  for (uint32_t i = 0; i < kWidth; ++i) {
+    data.push_back(f2u(10.0f * static_cast<float>(i) + 3));
+    data.push_back(f2u(7.0f - static_cast<float>(i)));
+  }
+  in.fetch_slots = {fetch_slot(7, data, k8in32)};
+  in.vs_constants.resize(201);
+  // P0 = 0.5 vx + 0.25 + 1 = 5 i + 2.75, P1 = 2 vy + 0.25 - 1 = 13.25 - 2 i, P3 = 1.
+  in.vs_constants[16] = {0.5f, 0, 0, 1};
+  in.vs_constants[17] = {0, 2, 0, -1};
+  in.vs_constants[18] = {0, 0, 0, 1};
+  in.vs_constants[200] = {0.25f, 0, 0, 0};
+  // x = 0.1 P0 - 1.025 (the centre of pixel i of 4), y = 0, z = 0.05 P1, w = P3.
+  in.vs_constants[12] = {0.1f, 0, 0, -1.025f};
+  in.vs_constants[13] = {0, 0, 0, 0};
+  in.vs_constants[14] = {0, 0.05f, 0, 0};
+  in.vs_constants[15] = {0, 0, 0, 1};
+  in.vs_constants[29] = {0.5f, -3, 0, 0};
+  in.vs_constants[30] = {0.125f, 0.5f, 0, 0.0625f};
+  in.vs_constants[31] = {-0.25f, 1, 0, 2};
+  auto res = h.draw(vs_t.spirv, ps_t.spirv, in);
+  if (!res) FAIL("draw: " << res.error().message);
+  for (uint32_t i = 0; i < kWidth; ++i) {
+    INFO("vertex " << i);
+    const float vx = 10.0f * static_cast<float>(i) + 3, vy = 7.0f - static_cast<float>(i);
+    check_pixel(res.value().color[0][i],
+                {0.125f * vx + 0.5f * vy + 0.0625f + 0.5f, -0.25f * vx + vy + 2 - 3, 0, 0}, kTol);
+    CHECK(matches(res.value().depth[i], 0.05f * (2 * vy + 0.25f - 1), kTol));
+  }
+}
+
 // --- errors -------------------------------------------------------------------------------------------------------
 
 TEST_CASE("unknown vertex format fails naming it", "[unit][gpu]") {

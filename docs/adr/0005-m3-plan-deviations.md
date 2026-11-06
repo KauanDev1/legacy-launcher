@@ -330,3 +330,15 @@ Formato: o quê, por quê, custo se estiver errada.
 - Custo se errado: a memória física passa a ser compartilhada entre processos filhos depois de um `fork` (os testes
   que fazem `fork` não escrevem nas vistas físicas); `MmQueryAllocationSize`/`MmQueryAddressProtect` por uma vista que
   não é a da alocação continuam respondendo 0, como antes.
+
+### M15. `param_shade` não liga `Flat` (Tarefa 22)
+- O quê: `key_modifiers` deixa de copiar `SQ_INTERPOLATOR_CNTL.param_shade` (bits 0..15) para a máscara flat da chave
+  do PS. Os bits 16..31 dos modificadores ficam sempre 0, e nenhuma entrada do PS é decorada `Flat`, como no Xenia. O
+  tradutor continua aceitando `TranslateOptions::flat_mask`, só que nada mais o liga.
+- Por quê: o plano (Tarefa 15.4) tratava `param_shade` como máscara de sombreamento flat, por conta própria (o Xenia
+  nunca marca `Flat`). Na ISO, o jogo liga o bit 0 nos desenhos do logo e dos botões (VS `E91536F60A69ABF3` + PS
+  `C3B8C62B63E1BB9E`), e o interpolador 0 desses desenhos é a coordenada de textura do quad. Com `Flat`, cada
+  triângulo amostrava a textura num único ponto (a coordenada do vértice provocante; o quadro tinha 4 cores). O
+  tradutor do VS estava certo: um teste sintético com a mesma forma de instruções confere os valores no lavapipe.
+- Custo se errado: se `param_shade` for de fato a máscara flat junto com algum outro bit de estado (o modo de
+  sombreamento do D3D), um jogo que pede sombreamento flat recebe interpolação suave até que esse bit seja achado.

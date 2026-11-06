@@ -36,7 +36,8 @@ uint64_t key_modifiers(ShaderStage stage, const RegisterFile& regs, const DrawIn
   uint32_t centre = interp >> 16;  // centroids and centres: the per-interpolator pattern
   if (msaa_samples == 0 || sample_control == 1) centre = 0xFFFF;  // 1x MSAA, or centres only
   else if (sample_control == 0) centre = 0;                        // centroids only
-  mod |= uint64_t{interp & inputs} << kModFlatShift;
+  // param_shade (bits 0-15) is not a flat-shade mask: the game sets it for the texture coordinates of textured quads
+  // (ADR 0005 M15). Like Xenia, nothing is flat; the flat bits of the key stay 0.
   mod |= uint64_t{~centre & inputs} << kModCentroidShift;
   return mod;
 }

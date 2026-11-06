@@ -3,7 +3,7 @@
 Documento vivo: o que o M3 já entregou, onde está agora, as decisões tomadas pelo caminho e o que ficou em aberto.
 O plano é `docs/superpowers/plans/2026-10-19-legacyrecomp-m3.md` (com a emenda do plano B depois da Tarefa 15), o
 spec é `docs/superpowers/specs/2026-10-19-legacyrecomp-m3-design.md` e os desvios ficam em
-`docs/adr/0005-m3-plan-deviations.md` (M1 a M14). Este arquivo junta o contexto que estava espalhado nos relatórios
+`docs/adr/0005-m3-plan-deviations.md` (M1 a M15). Este arquivo junta o contexto que estava espalhado nos relatórios
 de cada tarefa.
 
 Branch: `feat/m3` (não publicada). Todas as tarefas passaram por revisão independente antes de serem dadas como
@@ -22,7 +22,7 @@ mean_luminance=0.6697 edge_fraction=0.0000`). Os limites da Tarefa 22 são ≥ 6
 |---|---|---|
 | a | As duas texturas de fonte (`k_8`, 190×170 e 128×128) ficam zeradas na memória do convidado; nenhuma cópia de EDRAM nem shader com memexport escreve nelas | **resolvido** (`563485e`): faltava o espelhamento entre as vistas físicas (ADR 0005 M14). Na ISO, as texturas agora têm dados (2019 e 2773 bytes não nulos na janela vigiada, antes 0) |
 | b | O vertex shader `CB7E755E3A72E353` (as duas faixas de triângulos) chega quase todo zerado | **resolvido** pela mesma correção (`563485e`): o `CB7E…` some e o jogo carrega no lugar o `BF9066893FA79ADD` (também 45 dwords, agora com `vfetch`, `tfetch` e exportação de posição; contagens da desmontagem, sem lê-la) |
-| c | O vertex shader `E91536F60A69ABF3` (logo e botões) gera coordenadas de textura erradas com entradas corretas (dados de vértice e constantes c10/c11 conferidos) | próximo passo |
+| c | O vertex shader `E91536F60A69ABF3` (logo e botões) parecia gerar coordenadas de textura erradas com entradas corretas (dados de vértice e constantes c10/c11 conferidos) | **resolvido**: o VS está certo (um teste sintético com a mesma forma de instruções confere no lavapipe); a coordenada chegava `Flat` ao PS `C3B8C62B63E1BB9E`, porque o runtime lia `SQ_INTERPOLATOR_CNTL.param_shade` como máscara flat e o jogo liga o bit 0 nesses desenhos. Agora nada é `Flat`, como no Xenia (ADR 0005 M15) |
 
 O que já foi descartado:
 - a hipótese de `dcbz`/`dcbz128` zerando a linha errada (a semântica do Xenon está fixada por teste, `67f20e8`);
@@ -130,7 +130,6 @@ Para a Tarefa 22, se aparecerem:
 - ordem S/T do cubo, formatos de render target não suportados (`k_16_16`, `k_16_16_16_16`, 7e3) e texturas com
   sinal;
 - registradores de recorte ou de índice máximo zerados: os desenhos somem, agora com aviso;
-- `Flat` a partir de `param_shade`, que é escolha nossa (o Xenia nunca marca `Flat`);
 - ordem das metades da cor de limpeza de 64 bpp;
 - consultas de oclusão (`EVENT_WRITE_ZPD`), registrador de status MMIO, ritmo do vblank sem janela;
 - 7 ordinais da XAM pedidos por `XexGetProcedureAddress` falham (0x305, 0x30B, 0x48C, 0xAFF, 0xB00, 0xB0B, 0xB10),

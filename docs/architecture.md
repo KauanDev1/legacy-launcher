@@ -1187,6 +1187,7 @@ temporário é relativo a `aL`). Todos começam em zero, menos:
 locations 0..15 (64 componentes, o mínimo garantido do Vulkan), zero quando o interpolador não é escrito, sem
 decoração de interpolação. O PS declara uma entrada na location r para cada registrador r < 16 que o programa
 referencia (todas as 16 quando algum temporário é relativo), decorada `Flat` quando o bit r de `flat_mask` está ligado
+(o runtime nunca liga nenhum, ADR 0005 M15)
 e `Centroid` quando o bit r de `centroid_mask` está. Uma entrada `Flat` recebe o valor do vértice provocante; o Vulkan
 usa o primeiro vértice por padrão, e o Xenos escolhe entre o primeiro e o último por
 `PA_SU_SC_MODE_CNTL.provoking_vtx_last`. O runtime (Tarefa 20) respeita esse bit com
@@ -1204,8 +1205,9 @@ centro do pixel (`PA_SU_VTX_CNTL`), com a inversão de Y incluída.
 
 **Chave e opções**: `ShaderKey{estágio, microcode_hash, dwords, modificadores de 64 bits}`. Modificadores do PS:
 bits 0..7 o registrador `param_gen` (`0xFF` = nenhum), bit 8 a flag de ponto, bits 16..31 a máscara flat
-(`SQ_INTERPOLATOR_CNTL.param_shade`), bits 32..47 a máscara centroid (os interpoladores amostrados no centroide, não
-no centro; derivada como abaixo). O VS não tem modificadores no M3. `TranslateOptions` tem exatamente esses campos decodificados (`key_options`). Na montagem
+(sempre 0: `SQ_INTERPOLATOR_CNTL.param_shade` não é máscara flat, ADR 0005 M15), bits 32..47 a máscara centroid (os
+interpoladores amostrados no centroide, não no centro; derivada como abaixo). O VS não tem modificadores no M3.
+`TranslateOptions` tem exatamente esses campos decodificados (`key_options`). Na montagem
 (`key_modifiers`): o registrador `param_gen` é `SQ_CONTEXT_MISC.param_gen_pos` (bits 8..15) quando
 `SQ_PROGRAM_CNTL.param_gen` (bit 18) está ligado e a posição é um interpolador (< 16), senão `0xFF`; a flag de ponto
 (o draw é uma lista de pontos, `prim_type` 1) só entra com um registrador `param_gen`, porque sem ele não muda nada e

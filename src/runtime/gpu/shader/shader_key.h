@@ -32,7 +32,7 @@ uint64_t microcode_hash(const uint8_t* guest_microcode_be, uint32_t dwords);
 // Pixel-shader modifier layout (the vertex shader has none in M3: always 0).
 inline constexpr uint64_t kModParamGenMask = 0xFF;       // bits 0-7: the param_gen register, or 0xFF for none
 inline constexpr uint64_t kModPointBit = 1ull << 8;      // bit 8: point-list draw (only with a param_gen register)
-inline constexpr uint32_t kModFlatShift = 16;            // bits 16-31: flat-shade mask (SQ_INTERPOLATOR_CNTL 0-15)
+inline constexpr uint32_t kModFlatShift = 16;            // bits 16-31: flat-shade mask (key_modifiers leaves it 0)
 inline constexpr uint32_t kModCentroidShift = 32;        // bits 32-47: centroid mask (see key_modifiers)
 inline constexpr uint32_t kPrimPointList = 1;            // VGT_DRAW_INITIATOR.prim_type of a point list
 
@@ -42,7 +42,8 @@ inline constexpr uint32_t kPrimPointList = 1;            // VGT_DRAW_INITIATOR.p
 //  - param_gen register: SQ_CONTEXT_MISC.param_gen_pos (bits 8-15) when SQ_PROGRAM_CNTL.param_gen (bit 18) is set
 //    and the position names an interpolator (< 16), else 0xFF. The point bit (a point-list draw) is set only with a
 //    param_gen register: it changes nothing otherwise and would only split keys;
-//  - flat: SQ_INTERPOLATOR_CNTL.param_shade (bits 0-15);
+//  - flat: always 0. SQ_INTERPOLATOR_CNTL.param_shade (bits 0-15) is not a flat mask: the game sets it for the
+//    texture coordinates of textured quads (ADR 0005 M15), and Xenia never shades flat;
 //  - centroid: the interpolators NOT sampled at the pixel centre. A sampling-pattern bit set means "centre"; the
 //    pattern is all centres with 1x MSAA (RB_SURFACE_INFO.msaa_samples, bits 16-17, = 0) or with
 //    SQ_CONTEXT_MISC.sc_sample_cntl (bits 2-3) = 1 (centres only), none with sc_sample_cntl = 0 (centroids only), and

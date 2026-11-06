@@ -270,7 +270,7 @@ TEST_CASE("same microcode and modifiers give the same key", "[unit][gpu]") {
   CHECK(a == b);
   CHECK(sh::cache_file_name(a) == sh::cache_file_name(b));
   char want[96];
-  std::snprintf(want, sizeof want, "v%u-ps-%016llx-6-00000000000200ff.spv", sh::kTranslatorVersion,
+  std::snprintf(want, sizeof want, "v%u-ps-%016llx-6-00000000000000ff.spv", sh::kTranslatorVersion,
                 static_cast<unsigned long long>(a.microcode_hash));
   CHECK(sh::cache_file_name(a) == want);
   // The stage is part of the key and of the name.
@@ -346,12 +346,15 @@ TEST_CASE("param_gen and the point flag change the pixel shader key", "[unit][gp
         sh::cache_file_name(key_of(ShaderStage::Pixel, ps, pts)));
 }
 
-TEST_CASE("interpolator flat and centroid masks change the pixel shader key", "[unit][gpu]") {
+TEST_CASE("param_shade makes nothing flat; the centroid mask changes the pixel shader key", "[unit][gpu]") {
   lr::gpu::RegisterFile regs;
   const lr::gpu::DrawInfo draw{4, 3, 0, 0, false, 0};
-  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0x0003);  // param_shade: r0, r1 flat
-  const uint64_t flat = sh::key_modifiers(ShaderStage::Pixel, regs, draw);
-  CHECK(flat == (0xFF | (0x0003ull << 16)));
+  // param_shade (bits 0-15) is not a flat mask (ADR 0005 M15): the game sets bit 0 on its textured quads, whose
+  // interpolator 0 is the texture coordinate. Like Xenia, nothing is flat.
+  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0x0003);
+  const uint64_t shaded = sh::key_modifiers(ShaderStage::Pixel, regs, draw);
+  CHECK(shaded == 0xFF);
+  CHECK(sh::key_options({ShaderStage::Pixel, 1, 6, shaded}).flat_mask == 0);
   // Centroids with 4x MSAA, sc_sample_cntl "centroids and centres", the pattern's centre bits r1, r3..r15: r0 and
   // r2 are sampled at the centroid.
   regs.write(lr::gpu::RB_SURFACE_INFO, 2u << 16);
@@ -359,9 +362,9 @@ TEST_CASE("interpolator flat and centroid masks change the pixel shader key", "[
   regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0xFFFA0000);
   const uint64_t centroid = sh::key_modifiers(ShaderStage::Pixel, regs, draw);
   CHECK(centroid == (0xFF | (0x0005ull << 32)));
-  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0x0000FFFF);  // everything flat, every interpolator at the centroid
-  CHECK(sh::key_modifiers(ShaderStage::Pixel, regs, draw) == (0xFF | (0xFFFFull << 16) | (0xFFFFull << 32)));
-  CHECK(flat != centroid);
+  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0x0000FFFF);  // every param_shade bit, every interpolator at the centroid
+  CHECK(sh::key_modifiers(ShaderStage::Pixel, regs, draw) == (0xFF | (0xFFFFull << 32)));
+  CHECK(shaded != centroid);
   CHECK(sh::key_modifiers(ShaderStage::Vertex, regs, draw) == 0);  // VS outputs carry no interpolation decorations
 }
 
@@ -385,7 +388,7 @@ TEST_CASE("centroid sampling follows Xenia's sampling-pattern rule", "[unit][gpu
 }
 
 TEST_CASE("unread interpolator mask bits do not change the pixel shader key", "[unit][gpu]") {
-  // pixel_shader() references r0 only: flat/centroid bits for r1..r15 must not create new keys.
+  // pixel_shader() references r0 only: centroid bits for r1..r15 must not create new keys.
   ShaderCache cache;
   const std::vector<uint32_t> ps = pixel_shader();
   const sh::ShaderKey base = load(cache, ShaderStage::Pixel, ps);
@@ -396,12 +399,12 @@ TEST_CASE("unread interpolator mask bits do not change the pixel shader key", "[
   const lr::gpu::DrawInfo draw{4, 3, 0, 0, false, 0};
   regs.write(lr::gpu::RB_SURFACE_INFO, 2u << 16);
   regs.write(lr::gpu::SQ_CONTEXT_MISC, 2u << 2);
-  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0xFFFF0000);  // nothing flat, every interpolator at the centre
+  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0xFFFF0000);  // every interpolator at the centre
   const uint64_t plain = sh::key_modifiers(ShaderStage::Pixel, regs, draw, inputs);
-  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0x0001FFFE);  // r1..r15 flat and at the centroid: unread
+  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0x0001FFFE);  // r1..r15 at the centroid: unread
   CHECK(sh::key_modifiers(ShaderStage::Pixel, regs, draw, inputs) == plain);
-  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0xFFFE0001);  // r0 flat and at the centroid: read
-  CHECK(sh::key_modifiers(ShaderStage::Pixel, regs, draw, inputs) == (0xFF | (1ull << 16) | (1ull << 32)));
+  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0xFFFE0001);  // r0 at the centroid: read (param_shade adds nothing)
+  CHECK(sh::key_modifiers(ShaderStage::Pixel, regs, draw, inputs) == (0xFF | (1ull << 32)));
   // The param_gen register is generated, never interpolated: its bits are dropped too.
   regs.write(lr::gpu::SQ_PROGRAM_CNTL, 1u << 18);
   regs.write(lr::gpu::SQ_CONTEXT_MISC, (2u << 2) | (0u << 8));
@@ -416,11 +419,14 @@ TEST_CASE("GpuSystem keys pixel shaders on the interpolators they read", "[unit]
   Pm4Builder b;
   im_load_immediate(b, ShaderStage::Vertex, vertex_shader());
   im_load_immediate(b, ShaderStage::Pixel, pixel_shader());
-  b.type0(lr::gpu::SQ_INTERPOLATOR_CNTL, {0x0000FFFE});  // r1..r15 flat: unread
+  // 4x MSAA with sc_sample_cntl "centroids and centres": the sampling pattern picks the centroid interpolators.
+  b.type0(lr::gpu::RB_SURFACE_INFO, {2u << 16});
+  b.type0(lr::gpu::SQ_CONTEXT_MISC, {2u << 2});
+  b.type0(lr::gpu::SQ_INTERPOLATOR_CNTL, {0x00010000});  // r1..r15 at the centroid: unread
   draw_triangle(b);
-  b.type0(lr::gpu::SQ_INTERPOLATOR_CNTL, {0x00000000});
+  b.type0(lr::gpu::SQ_INTERPOLATOR_CNTL, {0xFFFF0001});  // param_shade r0: no new key (nothing is flat)
   draw_triangle(b);
-  b.type0(lr::gpu::SQ_INTERPOLATOR_CNTL, {0x00000001});  // r0 flat: read, a new key
+  b.type0(lr::gpu::SQ_INTERPOLATOR_CNTL, {0xFFFE0000});  // r0 at the centroid: read, a new key
   draw_triangle(b);
   g.run(b);
   g.gpu->stop();
@@ -428,7 +434,7 @@ TEST_CASE("GpuSystem keys pixel shaders on the interpolators they read", "[unit]
   const ShaderLoadStats stats = g.gpu->shader_stats();
   REQUIRE(stats.keys.size() == 3);
   CHECK(stats.keys[1].key.modifiers == 0xFF);
-  CHECK(stats.keys[2].key.modifiers == (0xFF | (1ull << 16)));
+  CHECK(stats.keys[2].key.modifiers == (0xFF | (1ull << 32)));
 }
 
 TEST_CASE("key options decode the modifiers", "[unit][gpu]") {
@@ -454,13 +460,13 @@ TEST_CASE("key options decode the modifiers", "[unit][gpu]") {
   regs.write(lr::gpu::SQ_PROGRAM_CNTL, 1u << 18);
   regs.write(lr::gpu::SQ_CONTEXT_MISC, (7u << 8) | (2u << 2));  // param_gen r7, centroids and centres
   regs.write(lr::gpu::RB_SURFACE_INFO, 2u << 16);                // 4x MSAA
-  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0x00F0000F);         // r0..r3 flat; r4..r7 at the centre
+  regs.write(lr::gpu::SQ_INTERPOLATOR_CNTL, 0x00F0000F);         // param_shade r0..r3 (ignored); r4..r7 centre
   const sh::TranslateOptions rt = sh::key_options(
       {ShaderStage::Pixel, 1, 6,
        sh::key_modifiers(ShaderStage::Pixel, regs, lr::gpu::DrawInfo{sh::kPrimPointList, 1, 0, 0, false, 0})});
   CHECK(rt.ps_param_gen == 7);
   CHECK(rt.ps_point);
-  CHECK(rt.flat_mask == 0x000F);
+  CHECK(rt.flat_mask == 0);
   CHECK(rt.centroid_mask == 0xFF0F);  // every interpolator but r4..r7 (r7, the param_gen one, is dropped anyway)
   // A flat mask is a different module (the PS reads r0: interpolator 0 becomes Flat).
   CHECK(translate_direct(ShaderStage::Pixel, pixel_shader(), sh::key_options({ShaderStage::Pixel, 1, 6, 0xFF})) !=
