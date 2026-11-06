@@ -217,7 +217,7 @@ uint32_t NtQueryVirtualMemory(GuestCall& c, uint32_t addr, GuestPtr<X_MEMORY_BAS
 
 // MmAllocatePhysicalMemoryEx(flags, size, protect, min_physical, max_physical, alignment) -> guest address in the
 // view chosen by the page-size bits of `protect`, or 0. The block is zeroed (reused physical pages would
-// otherwise keep old data; fresh ones are untouched by the madvise-based zeroing).
+// otherwise keep old data; GuestMemory::zero punches whole physical pages out of the shared memfd).
 uint32_t MmAllocatePhysicalMemoryEx(uint32_t /*flags*/, uint32_t size, uint32_t protect, uint32_t min_addr,
                                     uint32_t max_addr, uint32_t alignment) {
   Kernel& k = kernel();

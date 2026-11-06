@@ -21,17 +21,21 @@
 // a real fault (exit 4).
 //
 // A logged write names the guest functions on the host call stack (innermost first): the host code addresses are
-// mapped back to recompiled guest functions through the function table (set_host_code_map), so the log holds guest
-// addresses only, never data. One line per new call site (the innermost three guest functions) per range, at most
-// kMaxSitesPerRange of them, plus a count line at every power of two from 1024.
+// mapped back to recompiled guest functions through the function table (the HostCodeMap given to
+// install_write_watch), so the log holds guest addresses only, never data. One line per new call site (the
+// innermost three guest functions) per range, at most kMaxSitesPerRange of them, plus a count line at every power of
+// two from 1024.
 //
-// Host-side bulk writes that would not fault go through write_watch_note_host_write: GuestMemory::zero (its
-// madvise path never faults) and the kernel's file reads (a read(2) into a read-only page fails with EFAULT, so
-// the reader bounces through a host buffer instead when write_watch_overlaps says so).
+// Host-side bulk writes that would not fault go through write_watch_note_host_write: GuestMemory::zero (its hole
+// punch and madvise paths never fault) and the kernel's file reads (a read(2) into a read-only page fails with
+// EFAULT, so the reader bounces through a host buffer instead when write_watch_overlaps says so).
 //
 // Limits (a diagnostic, not a guard): while one thread single-steps its write the page is writable for every
 // thread, so a concurrent write by another thread may go uncounted; GuestMemory::protect on a watched page
-// (strict-memory heap commits) lifts the watch from that page. Process-global, x86-64 Linux only.
+// (strict-memory heap commits) lifts the watch from that page. Both the watch and GuestMemory::protect act on the
+// host pages of one view only: the three physical views alias one memory (0xA0000000 + p, 0xC0000000 + p and
+// 0xE0000000 + p - 0x1000), so to see every access to physical page p, arm one range per view. Process-global, x86-64
+// Linux only.
 namespace lr::runtime {
 
 struct WatchRange {
@@ -45,7 +49,8 @@ struct WatchRange {
 Result<WatchRange> parse_watch_spec(std::string_view spec);
 
 // Recompiled host code -> guest function. Entries are (host entry, guest entry); host code between one entry and
-// the next belongs to the first. Addresses past the last entry + 1 MiB, or before the first, are not guest code.
+// the next belongs to the first. Addresses kLastTail (0x1000) or more past the last entry, or before the first, are
+// not guest code.
 struct HostCodeEntry {
   uintptr_t host = 0;
   uint32_t guest = 0;

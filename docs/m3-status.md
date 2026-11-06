@@ -3,7 +3,7 @@
 Documento vivo: o que o M3 já entregou, onde está agora, as decisões tomadas pelo caminho e o que ficou em aberto.
 O plano é `docs/superpowers/plans/2026-10-19-legacyrecomp-m3.md` (com a emenda do plano B depois da Tarefa 15), o
 spec é `docs/superpowers/specs/2026-10-19-legacyrecomp-m3-design.md` e os desvios ficam em
-`docs/adr/0005-m3-plan-deviations.md` (M1 a M13). Este arquivo junta o contexto que estava espalhado nos relatórios
+`docs/adr/0005-m3-plan-deviations.md` (M1 a M14). Este arquivo junta o contexto que estava espalhado nos relatórios
 de cada tarefa.
 
 Branch: `feat/m3` (não publicada). Todas as tarefas passaram por revisão independente antes de serem dadas como

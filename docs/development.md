@@ -97,7 +97,10 @@ escrita). Depois do passo único, cada escrita é conferida: se deixou algum byt
 partir do endereço da falha) conta como `nonzero_stores`, então um escritor que só grava zeros aparece sem olhar os
 dados. Na saída, o relatório imprime `[watch] summary range N ... writes=N nonzero_stores=N nonzero_bytes=N` e uma
 linha por sítio. A linha `[watch] exe base 0x...` dá o endereço de carga do executável: um `pc=` fora do código gerado se nomeia depois com `addr2line -f -e legacyrecomp-game <pc - base>`. Só endereços e contagens, nunca dados. Qualquer outra falha continua sendo a saída 4. É diagnóstico: enquanto uma
-thread executa o passo único, outra thread pode escrever na página sem ser contada. O trace da GPU
+thread executa o passo único, outra thread pode escrever na página sem ser contada. A vigia (e também o
+`GuestMemory::protect`) só cobre a vista em que foi armada: as três vistas físicas são a mesma memória
+(`0xA0000000 + p`, `0xC0000000 + p` e `0xE0000000 + p - 0x1000`), então, para ver todo acesso à página física `p`,
+arme uma faixa em cada vista. O trace da GPU
 (`--trace-gpu`) dá o endereço convidado de cada microcódigo de shader (`shader load ... at=0x...`), que serve de
 faixa para a vigia.
 
