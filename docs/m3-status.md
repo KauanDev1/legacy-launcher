@@ -4,12 +4,19 @@ Documento vivo: o que o M3 já entregou, onde está agora, as decisões tomadas 
 O plano é `docs/superpowers/plans/2026-10-19-legacyrecomp-m3.md` (com a emenda do plano B depois da Tarefa 15), o
 spec é `docs/superpowers/specs/2026-10-19-legacyrecomp-m3-design.md` e os desvios ficam em
 `docs/adr/0005-m3-plan-deviations.md` (M1 a M16). Este arquivo junta o contexto que estava espalhado nos relatórios
-de cada tarefa.
+de cada tarefa. Para retomar o trabalho (Linux nativo, o que falta, regras do dono), comece por `docs/handoff.md`.
 
-Branch: `feat/m3` (não publicada). Todas as tarefas passaram por revisão independente antes de serem dadas como
+Branch: `feat/m3`, publicada até `e004840` (o PR #1 a juntou em `main`, `e94d5e6`); os commits depois dela são
+locais até o dono autorizar o push. Todas as tarefas passaram por revisão independente antes de serem dadas como
 concluídas.
 
 ## Onde estamos (2026-11-06)
+
+A **Tarefa 22 está concluída**, com revisão limpa (`75d8ee9`..`6245bd6`; 763 testes de unidade, 1 SKIP antigo). A
+**Tarefa 23 (WSLg) foi cancelada** pelo dono e passa a ser a conferência visual com janela no Linux nativo. Falta:
+essa conferência, três detalhes de documentação da última revisão, a Tarefa 24 (AppImage, licenças, documentação),
+a revisão final da branch, o push e o PR. A lista com arquivos e critérios está em `docs/handoff.md`, "O que falta
+para fechar o M3".
 
 O jogo real roda sem janela até 600 quadros e **chega à tela de título** pelos critérios objetivos da Tarefa 22
 (≥ 64 cores, luminância média entre 0,05 e 0,95, ≥ 2% de bordas, nenhuma mensagem da camada de validação). Os 10
@@ -23,7 +30,8 @@ shaders que ele carrega (5 VS, 5 PS) traduzem todos. Números de `frame_stats` n
 
 Os números variam um pouco de rodada para rodada (a tela de título é animada). Antes do espelhamento das vistas
 físicas (`563485e`) o quadro tinha 1 cor. O teste de integração `real ISO: the game reaches its title screen` confere
-esses limites e exige que a camada de validação tenha rodado (sem ela, o teste é pulado). A rodada de correção 1
+esses limites e exige que a camada de validação tenha rodado (sem ela, o teste é pulado); na última rodada, com uma
+raiz já instalada, ele passou em 390 s (a anterior, 182 s). A rodada de correção 1
 da revisão corrigiu o `XMAReleaseContext` (só libera contextos que entregou), as tabelas logo após o `bctr`
 (bytes da tabela lidos como desvio não a encurtam mais; na TU1 nada mudou) e pequenos itens de documentação e
 teste. A Tarefa 22 (chegar à tela de título) investigou três causas; a e b tinham a mesma raiz:
@@ -101,18 +109,23 @@ A causa comum que o controlador supôs existia, mas não era o `dcbz`: era a fal
 | 15.11 | [ISO] Portão do tradutor: 8 chaves, 0 falhas, 100% de acertos no cache na segunda rodada | `b81d6ca`, `26476f4` |
 | 16–20 | Shaders internos (GLSL), apresentador, EDRAM, texturas e amostradores, caminho de desenho | `b8ff0c3`..`498725c` |
 | 21 | Jogo falso desenha um quadrado com textura de ponta a ponta | `7fb89df` |
-| 22 | [ISO] Até a tela de título | concluída (`75d8ee9`..`d2f0584` e o teste de integração); rodada de correção 1 da revisão: `4568791`..(esta) |
-| 23 | Conferência visual pelo WSLg (escolha do dono) | pendente |
+| 22 | [ISO] Até a tela de título | concluída, revisão limpa: `75d8ee9`..`b977fbf` e a rodada de correção 1, `4568791`..`6245bd6` |
+| 23 | Conferência visual pelo WSLg (escolha do dono) | **cancelada** pelo dono (2026-11-06); redefinida como conferência com janela no Linux nativo (`docs/handoff.md`) |
 | 24 | AppImage, licenças, documentação, fechamento do M3 | pendente |
 
 ## Decisões do dono
 
 - A ISO na raiz do repositório é dump do disco do dono, e o uso dela pelo contêiner foi autorizado (2026-10-18).
-- A conferência visual em janela de verdade será pelo WSLg (Tarefa 23).
+- ~~A conferência visual em janela de verdade será pelo WSLg (Tarefa 23).~~ Cancelada em 2026-11-06: o dono
+  recusou a distro do WSL que o agente instalou (o disco estava quase cheio), e tudo foi removido. O
+  desenvolvimento passa para uma máquina Linux nativa, onde a conferência é rodar o jogo numa janela.
 - O trabalho dos agentes roda em esforço alto (2026-10-24).
 - Exceção pontual (2026-10-25): a desmontagem do vertex shader `E91536F60A69ABF3`, e só dele, pode ser lida para
-  depuração. Ela nunca é commitada. A regra geral continua valendo: dados do jogo nunca entram no contexto nem no
-  repositório.
+  depuração. Ela nunca é commitada. **Já foi usada e está encerrada**; outra exceção precisa do dono de novo. A regra
+  geral continua valendo: dados do jogo nunca entram no contexto nem no repositório.
+- Documentação viva com todo o contexto (2026-10-28); uma branch só, publicada só pela conta KauanDev1, sempre
+  perguntando antes do push (2026-10-28).
+- Nada de instalar software do sistema, distros ou downloads grandes sem perguntar (2026-11-06).
 
 ## Decisões técnicas do caminho (resumo; os detalhes estão na ADR 0005)
 
@@ -135,7 +148,7 @@ A causa comum que o controlador supôs existia, mas não era o `dcbz`: era a fal
 
 ## Itens em aberto
 
-Para a Tarefa 22, se aparecerem:
+Herdados pela Tarefa 22 que não apareceram até a tela de título (tratar se aparecerem):
 - shader com memexport (15 contêineres de pixel shader no XEX usam). Se o jogo carregar um, é decisão de plano;
 - ordem S/T do cubo, formatos de render target não suportados (`k_16_16`, `k_16_16_16_16`, 7e3) e texturas com
   sinal;
@@ -149,14 +162,21 @@ Para a Tarefa 22, se aparecerem:
   conferência visual da Tarefa 23, procurar geometria que deveria ser de sombreamento flat e sai suave (talvez
   algum bit global de sombreamento flat valha junto com ele).
 
-Para a Tarefa 23: janela, swapchain, redimensionamento e apresentação nunca rodaram, porque o contêiner não tem tela.
+Estacionados depois da revisão da Tarefa 22 (detalhes em `docs/handoff.md`): as corridas da vigia de memória
+(proteção refeita no meio do passo único; relatório sob o spin lock com `:rw`), `MmQuery*` por uma vista que não é a
+da alocação respondendo 0, o `func_profile.py` contando `dcbz128` como `dcbz`, o teste instável `a pending APC does
+not leak into a thread that reuses the KTHREAD address` (falhou uma vez com a máquina carregada) e o caminho de raiz
+nova do teste da tela de título, que nunca rodou (cerca de 30 min de instalação).
+
+Para a conferência visual (Tarefa 23 redefinida): janela, swapchain, redimensionamento e apresentação nunca rodaram,
+porque o contêiner não tem tela. Comandos e o que conferir: `docs/handoff.md`.
 
 Para a Tarefa 24:
 - a biblioteca `liblr_vulkan.a` e o `legacyrecomp-vkprobe` empacotados nunca foram compilados com o zig/glibc 2.31;
 - a flag de teste `--gpu test-stall` deve ficar fora da ajuda do usuário.
 
 Para o M4: as respostas provisórias de hardware (armazenamento, controle, Kinect, voz, rede, privilégios) e o
-`XamContentCreateEnumerator` ignorando `device_id`.
+`XamContentCreateEnumerator` ignorando `device_id`. Tudo o que se sabe do M4 e do M5 está em `docs/handoff.md`.
 
 ## Observações de processo
 
@@ -164,4 +184,7 @@ Para o M4: as respostas provisórias de hardware (armazenamento, controle, Kinec
   commitada assim que os testes passam, antes de qualquer rodada longa com a ISO.
 - O limite mensal de gastos da organização interrompeu a Tarefa 22 por dois dias (2026-10-25 a 2026-10-27).
 - Os diagnósticos que derivam do jogo ficam fora do repositório, no volume de dados do Docker
-  (`/data/scratch/sc-diag-*`, `/data/scratch/probe-cache-15.11`). Podem ser apagados quando convier.
+  (`/data/scratch/sc-diag-*`, `/data/scratch/probe-cache-15.11`). Podem ser apagados quando convier; ficaram no
+  Windows e não precisam ir para a máquina Linux.
+- Até 2026-11-06 tudo foi compilado e testado no contêiner Docker de um Windows. Na máquina Linux, a compilação
+  nativa do `AGENTS.md` é o padrão, e o contêiner é a alternativa.
