@@ -141,7 +141,10 @@ Para a Tarefa 22, se aparecerem:
 - consultas de oclusão (`EVENT_WRITE_ZPD`), registrador de status MMIO, ritmo do vblank sem janela;
 - 7 ordinais da XAM pedidos por `XexGetProcedureAddress` falham (0x305, 0x30B, 0x48C, 0xAFF, 0xB00, 0xB0B, 0xB10),
   sem efeito visível até agora;
-- thunks de ordinal sem nome ainda não ficam fora da descoberta de funções.
+- thunks de ordinal sem nome ainda não ficam fora da descoberta de funções;
+- o significado de `SQ_INTERPOLATOR_CNTL.param_shade` não está confirmado: hoje nada é `Flat` (ADR 0005 M15). Na
+  conferência visual da Tarefa 23, procurar geometria que deveria ser de sombreamento flat e sai suave (talvez
+  algum bit global de sombreamento flat valha junto com ele).
 
 Para a Tarefa 23: janela, swapchain, redimensionamento e apresentação nunca rodaram, porque o contêiner não tem tela.
 

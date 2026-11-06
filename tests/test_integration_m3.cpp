@@ -19,6 +19,7 @@
 #include "pipeline/process.h"
 #include "support/game_launch.h"
 #include "support/temp_dir.h"
+#include "support/vulkan_validation.h"
 
 using namespace lr;
 using namespace lr::pipeline;
@@ -153,6 +154,9 @@ TEST_CASE("real ISO: the game reaches its title screen", "[integration]") {
   if (!iso) SKIP("LEGACYRECOMP_ISO not set");
   const auto python = find_program("python3");
   if (!python) FAIL("python3 is needed for tools/frame_stats.py");
+  // The criterion includes "no validation message": without the layer that would hold vacuously.
+  if (!lr::testing::has_validation_layer())
+    SKIP("VK_LAYER_KHRONOS_validation is not installed (vulkan-validation-layers): validation cannot run");
 
   const char* root_env = std::getenv("LEGACYRECOMP_TEST_ROOT");
   const bool temp_root = !(root_env && *root_env);
@@ -175,7 +179,9 @@ TEST_CASE("real ISO: the game reaches its title screen", "[integration]") {
   bool timed_out = false;
   ::setenv("LR_VULKAN_VALIDATION", "1", 1);
   {
-    lr::testing::Watchdog watchdog(std::chrono::seconds(3300));
+    // ~4x the slowest measured run (130-300 s); short enough that the watchdog, not the ctest timeout (3600 s,
+    // which a fresh root's ~1300 s install also counts against), stops a hung game and the diagnostics print.
+    lr::testing::Watchdog watchdog(std::chrono::seconds(1200));
     const std::vector<std::string> args = {"--headless", "--gpu", "vulkan", "--screenshot-after", "600", shot.string()};
     code = lr::testing::launch_captured(opts, args, log);
     timed_out = watchdog.fired();
@@ -192,7 +198,7 @@ TEST_CASE("real ISO: the game reaches its title screen", "[integration]") {
   CHECK_FALSE(timed_out);
   CHECK(code.value() == 0);
   CHECK(out.find("[gpu] screenshot after 600 swaps") != std::string::npos);
-  CHECK(out.find("[vulkan]") == std::string::npos);  // no validation message
+  lr::testing::check_validation_clean(out, /*require_layer=*/true);  // validation ran and said nothing
   CHECK(out.find("[game] message box:") == std::string::npos);
   REQUIRE(fs::exists(shot));
 

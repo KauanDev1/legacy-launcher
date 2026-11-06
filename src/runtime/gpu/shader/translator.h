@@ -35,7 +35,7 @@ inline constexpr uint32_t kCfBackwardBranchCap = 1u << 24;
 struct TranslateOptions {
   uint32_t ps_param_gen = kNoParamGen;  // register that receives the param_gen value, or kNoParamGen
   bool ps_point = false;                // the draw is a point list (param_gen's point flag and point coordinate)
-  uint16_t flat_mask = 0;               // bit r: interpolator r is flat-shaded (SQ_INTERPOLATOR_CNTL.param_shade)
+  uint16_t flat_mask = 0;               // bit r: interpolator r is flat-shaded (the runtime leaves it 0, M15)
   uint16_t centroid_mask = 0;           // bit r: interpolator r is sampled at the centroid (sampling_pattern)
 };
 

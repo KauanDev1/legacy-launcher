@@ -141,6 +141,8 @@ Result<Device> Device::create(const DeviceOptions& options) {
       if (has_instance_ext(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
         exts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         debug_utils = true;
+      } else {
+        log::warn("Vulkan validation layer on, but VK_EXT_debug_utils is missing: its messages are not reported");
       }
     } else {
       log::warn("Vulkan validation requested but VK_LAYER_KHRONOS_validation is not installed");

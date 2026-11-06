@@ -1194,7 +1194,8 @@ e `Centroid` quando o bit r de `centroid_mask` está. Uma entrada `Flat` recebe 
 usa o primeiro vértice por padrão, e o Xenos escolhe entre o primeiro e o último por
 `PA_SU_SC_MODE_CNTL.provoking_vtx_last`. O runtime (Tarefa 20) respeita esse bit com
 `VK_EXT_provoking_vertex` (modo `LAST_VERTEX`, quando o dispositivo tem `provokingVertexLast`); sem a extensão, as
-entradas flat ficam com o primeiro vértice e um aviso único vai para o stderr quando o jogo pede o último. O VS escreve `gl_PointSize = 1.0`; o tamanho de ponto exportado
+entradas flat ficam com o primeiro vértice e um aviso único vai para o stderr quando o jogo pede o último. Enquanto
+nenhuma entrada é `Flat` (ADR 0005 M15), esse aviso não aparece; o caminho fica para uma fonte de `Flat` futura. O VS escreve `gl_PointSize = 1.0`; o tamanho de ponto exportado
 (63) é descartado e marcado em `ShaderInfo::drops_point_size` (expansão de point sprites fica fora do M3). Saídas do
 PS: `oC0..oC3` nas locations 0..3 (só as escritas) e `FragDepth` (com `DepthReplacing`) quando escreve a
 profundidade.

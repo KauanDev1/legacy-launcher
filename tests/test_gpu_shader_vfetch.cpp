@@ -787,6 +787,9 @@ TEST_CASE("kill ops discard the pixel: a fetch after the kill still runs", "[uni
 }
 
 // --- a textured-quad transform (Task 22, problem c) ---------------------------------------------------------------
+// A characterization test, not the regression guard for (c): it clears the VS translator and passes before and after
+// ADR 0005 M15. The bug was the PS key (param_shade read as a flat mask); the key tests in test_gpu_shader_cache.cpp
+// guard that.
 
 namespace {
 
