@@ -110,6 +110,40 @@ TEST_CASE("XMA contexts are zeroed physical blocks that are never decoded", "[un
   CHECK(static_cast<uint32_t>(f.call("XMACreateContext", 0u)) == STATUS_INVALID_PARAMETER);
 }
 
+// XMAReleaseContext only returns contexts XMACreateContext handed out: it never frees other physical memory.
+TEST_CASE("XMAReleaseContext frees each context once and nothing else", "[unit][kernel][audio]") {
+  KernelFixture f;
+  const uint32_t out = f.alloc(4);
+  constexpr uint32_t kRW = 0x04;  // PAGE_READWRITE: 4 KiB pages, like a context
+
+  SECTION("a second release does not free the memory that reused the page") {
+    REQUIRE(f.call("XMACreateContext", out) == 0);
+    const uint32_t a = rd(f, out);
+    CHECK(f.call("XMAReleaseContext", a) == 0);
+    REQUIRE(f.call("MmQueryAllocationSize", a) == 0u);
+    const uint32_t m =
+        static_cast<uint32_t>(f.call("MmAllocatePhysicalMemoryEx", 0u, 0x1000u, kRW, 0u, 0xFFFFFFFFu, 0u));
+    REQUIRE(m != 0u);
+    CHECK(m == a);  // the top-down search hands the freed page out again
+    CHECK(f.call("XMAReleaseContext", a) == 0);  // stale
+    CHECK(f.call("MmQueryAllocationSize", m) == 0x1000u);
+  }
+
+  SECTION("the base of another physical allocation is not a context") {
+    const uint32_t m =
+        static_cast<uint32_t>(f.call("MmAllocatePhysicalMemoryEx", 0u, 0x1000u, kRW, 0u, 0xFFFFFFFFu, 0u));
+    REQUIRE(m != 0u);
+    CHECK(f.call("XMAReleaseContext", m) == 0);
+    CHECK(f.call("MmQueryAllocationSize", m) == 0x1000u);
+    // A real context next to it is still released.
+    REQUIRE(f.call("XMACreateContext", out) == 0);
+    const uint32_t a = rd(f, out);
+    CHECK(f.call("XMAReleaseContext", a) == 0);
+    CHECK(f.call("MmQueryAllocationSize", a) == 0u);
+    CHECK(f.call("MmQueryAllocationSize", m) == 0x1000u);
+  }
+}
+
 TEST_CASE("XamShowMessageBoxUI reports to the terminal and presses the first button", "[unit][kernel][xam]") {
   KernelFixture f;
   const uint32_t title = wstr(f, u"Title"), text = wstr(f, u"Caf\u00E9 failed");
