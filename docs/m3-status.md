@@ -9,14 +9,21 @@ de cada tarefa.
 Branch: `feat/m3` (não publicada). Todas as tarefas passaram por revisão independente antes de serem dadas como
 concluídas.
 
-## Onde estamos (2026-11-04)
+## Onde estamos (2026-11-06)
 
-O jogo real roda sem janela até 600 quadros. Os 11 shaders que ele carrega traduzem todos, e a camada de validação
-do Vulkan não acusa erro. **A imagem final ainda está longe da tela de título**: com o espelhamento das vistas físicas
-(`563485e`), o quadro passou de 1 cor para 4 (`frame_stats` em N=300: `colors=4 mean_luminance=0.5913
-edge_fraction=0.0073`; em N=600: `colors=4 mean_luminance=0.5913 edge_fraction=0.0070`; antes, `colors=1
-mean_luminance=0.6697 edge_fraction=0.0000`). Os limites da Tarefa 22 são ≥ 64 cores e ≥ 2% de bordas. A Tarefa 22
-(chegar à tela de título) investigou três causas; a e b tinham a mesma raiz:
+O jogo real roda sem janela até 600 quadros e **chega à tela de título** pelos critérios objetivos da Tarefa 22
+(≥ 64 cores, luminância média entre 0,05 e 0,95, ≥ 2% de bordas, nenhuma mensagem da camada de validação). Os 10
+shaders que ele carrega (5 VS, 5 PS) traduzem todos. Números de `frame_stats` no lavapipe:
+
+| Quadro | Antes (`fe68dd6`) | Agora (`d2f0584`) |
+|---|---|---|
+| N=300 | `colors=4 mean_luminance=0.5913 edge_fraction=0.0073` | `colors=73762 mean_luminance=0.3889 edge_fraction=0.0488` |
+| N=600 | `colors=4 mean_luminance=0.5913 edge_fraction=0.0070` | `colors=60108 mean_luminance=0.3691 edge_fraction=0.0490` |
+| N=600 com validação | — | `colors=70111 mean_luminance=0.3896 edge_fraction=0.0477`, 0 mensagens `[vulkan]` |
+
+Os números variam um pouco de rodada para rodada (a tela de título é animada). Antes do espelhamento das vistas
+físicas (`563485e`) o quadro tinha 1 cor. O teste de integração `real ISO: the game reaches its title screen` confere
+esses limites. A Tarefa 22 (chegar à tela de título) investigou três causas; a e b tinham a mesma raiz:
 
 | | Problema | Situação |
 |---|---|---|
@@ -91,7 +98,7 @@ A causa comum que o controlador supôs existia, mas não era o `dcbz`: era a fal
 | 15.11 | [ISO] Portão do tradutor: 8 chaves, 0 falhas, 100% de acertos no cache na segunda rodada | `b81d6ca`, `26476f4` |
 | 16–20 | Shaders internos (GLSL), apresentador, EDRAM, texturas e amostradores, caminho de desenho | `b8ff0c3`..`498725c` |
 | 21 | Jogo falso desenha um quadrado com textura de ponta a ponta | `7fb89df` |
-| 22 | [ISO] Até a tela de título | em andamento (`75d8ee9`..) |
+| 22 | [ISO] Até a tela de título | concluída (`75d8ee9`..`d2f0584` e o teste de integração) |
 | 23 | Conferência visual pelo WSLg (escolha do dono) | pendente |
 | 24 | AppImage, licenças, documentação, fechamento do M3 | pendente |
 
