@@ -3,7 +3,7 @@
 Documento vivo: o que o M3 já entregou, onde está agora, as decisões tomadas pelo caminho e o que ficou em aberto.
 O plano é `docs/superpowers/plans/2026-10-19-legacyrecomp-m3.md` (com a emenda do plano B depois da Tarefa 15), o
 spec é `docs/superpowers/specs/2026-10-19-legacyrecomp-m3-design.md` e os desvios ficam em
-`docs/adr/0005-m3-plan-deviations.md` (M1 a M15). Este arquivo junta o contexto que estava espalhado nos relatórios
+`docs/adr/0005-m3-plan-deviations.md` (M1 a M16). Este arquivo junta o contexto que estava espalhado nos relatórios
 de cada tarefa.
 
 Branch: `feat/m3` (não publicada). Todas as tarefas passaram por revisão independente antes de serem dadas como
@@ -23,7 +23,10 @@ shaders que ele carrega (5 VS, 5 PS) traduzem todos. Números de `frame_stats` n
 
 Os números variam um pouco de rodada para rodada (a tela de título é animada). Antes do espelhamento das vistas
 físicas (`563485e`) o quadro tinha 1 cor. O teste de integração `real ISO: the game reaches its title screen` confere
-esses limites. A Tarefa 22 (chegar à tela de título) investigou três causas; a e b tinham a mesma raiz:
+esses limites e exige que a camada de validação tenha rodado (sem ela, o teste é pulado). A rodada de correção 1
+da revisão corrigiu o `XMAReleaseContext` (só libera contextos que entregou), as tabelas logo após o `bctr`
+(bytes da tabela lidos como desvio não a encurtam mais; na TU1 nada mudou) e pequenos itens de documentação e
+teste. A Tarefa 22 (chegar à tela de título) investigou três causas; a e b tinham a mesma raiz:
 
 | | Problema | Situação |
 |---|---|---|
@@ -98,7 +101,7 @@ A causa comum que o controlador supôs existia, mas não era o `dcbz`: era a fal
 | 15.11 | [ISO] Portão do tradutor: 8 chaves, 0 falhas, 100% de acertos no cache na segunda rodada | `b81d6ca`, `26476f4` |
 | 16–20 | Shaders internos (GLSL), apresentador, EDRAM, texturas e amostradores, caminho de desenho | `b8ff0c3`..`498725c` |
 | 21 | Jogo falso desenha um quadrado com textura de ponta a ponta | `7fb89df` |
-| 22 | [ISO] Até a tela de título | concluída (`75d8ee9`..`d2f0584` e o teste de integração) |
+| 22 | [ISO] Até a tela de título | concluída (`75d8ee9`..`d2f0584` e o teste de integração); rodada de correção 1 da revisão: `4568791`..(esta) |
 | 23 | Conferência visual pelo WSLg (escolha do dono) | pendente |
 | 24 | AppImage, licenças, documentação, fechamento do M3 | pendente |
 

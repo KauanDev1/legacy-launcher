@@ -93,11 +93,10 @@ bool switch_like(const Reader& mem, uint32_t at, uint32_t start) {
 std::vector<FunctionRange> discover_pointer_functions(std::span<const uint8_t> image, uint32_t base,
                                                       const std::vector<CodeRange>& code,
                                                       const std::vector<FunctionRange>& known_in,
-                                                      std::span<const uint32_t> import_thunks) {
+                                                      std::span<const FunctionRange> import_thunks) {
   const Reader mem(image, base);
-  constexpr uint32_t kThunkSize = 16;
   std::vector<FunctionRange> known = known_in;
-  for (uint32_t t : import_thunks) known.push_back({t, kThunkSize, false});
+  known.insert(known.end(), import_thunks.begin(), import_thunks.end());
 
   // Known ranges, each owning its handler words, sorted by their effective start.
   struct Span {

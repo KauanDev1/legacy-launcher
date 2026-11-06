@@ -342,3 +342,15 @@ Formato: o quê, por quê, custo se estiver errada.
   tradutor do VS estava certo: um teste sintético com a mesma forma de instruções confere os valores no lavapipe.
 - Custo se errado: se `param_shade` for de fato a máscara flat junto com algum outro bit de estado (o modo de
   sombreamento do D3D), um jogo que pede sombreamento flat recebe interpolação suave até que esse bit seja achado.
+
+### M16. Mapeamento duplicado de funções: a primeira continua valendo, agora com aviso (Tarefa 22)
+- O quê: o plano mandava trocar o contorno `762ba3d` (um thunk de importação fica com a sua entrada da tabela de
+  chamadas indiretas quando uma função descoberta cai no mesmo endereço) pela correção da causa. A causa foi
+  corrigida (`8871b56`: o `analyse` passa os thunks como funções conhecidas à descoberta de funções só por
+  ponteiro), mas a regra "a primeira vale" ficou: `install_function_table` descarta o mapeamento repetido, devolve
+  os endereços e o jogo imprime `[runtime] warning: N duplicate function mappings dropped` (`8c6b883`). Os thunks
+  de ordinal sem nome não viram símbolo no XenonUtils, então continuam fora da lista de thunks conhecidos.
+- Por quê: a regra é a resposta certa para um mapeamento repetido (o XenonRecomp lista os thunks antes das funções
+  recompiladas), e trocá-la por um erro fatal pararia o jogo por um defeito do pipeline que o aviso já expõe.
+- Custo se errado: uma duplicata nova (por exemplo, num thunk de ordinal sem nome) vira só um aviso no terminal, e
+  a chamada indireta vai para o thunk, não para a função descoberta.

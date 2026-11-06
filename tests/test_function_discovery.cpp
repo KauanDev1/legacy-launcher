@@ -158,7 +158,7 @@ TEST_CASE("import thunks are never emitted as pointer-only functions", "[unit]")
   // Without the thunk list the thunks come out as functions (the bug this guards against).
   CHECK(discover_pointer_functions(img.bytes, kBase, kCode, known).size() == 3);
 
-  const std::vector<uint32_t> thunks = {kBase + 0x10, kBase + 0x20};
+  const std::vector<FunctionRange> thunks = {{kBase + 0x10, 16, false}, {kBase + 0x20, 16, false}};
   auto fns = discover_pointer_functions(img.bytes, kBase, kCode, known, thunks);
   CHECK(fns == std::vector<FunctionRange>{{kBase + 0x30, 8, false}});
 }

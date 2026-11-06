@@ -215,10 +215,13 @@ class AnalyseStage : public Stage {
     std::vector<FunctionRange> known = pdata;
     known.insert(known.end(), fit.functions.begin(), fit.functions.end());
     known.insert(known.end(), manual.begin(), manual.end());
-    // XenonUtils names exactly the import thunks as symbols (Symbol_Function, one per resolved import).
-    std::vector<uint32_t> thunks;
+    // The import thunks: at analyse time the only Symbol_Function symbols are the ones XenonUtils' xex.cpp inserts,
+    // one per resolved import, with the thunk's size. recompiler.cpp adds the helper and sub_ function symbols only
+    // later, during its own analysis: this filter is not valid after that.
+    std::vector<FunctionRange> thunks;
     for (const auto& sym : image.symbols)
-      if (sym.type == Symbol_Function) thunks.push_back(static_cast<uint32_t>(sym.address));
+      if (sym.type == Symbol_Function)
+        thunks.push_back({static_cast<uint32_t>(sym.address), static_cast<uint32_t>(sym.size), false});
     auto pointer_only = discover_pointer_functions(std::span<const uint8_t>(image.data.get(), image.size),
                                                    static_cast<uint32_t>(image.base), code, known, thunks);
     std::erase_if(pointer_only, [&](const FunctionRange& f) {
